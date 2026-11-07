@@ -195,6 +195,17 @@ fn inside_extent(offset: (f32, f32), max: (f32, f32)) -> (f32, f32) {
     )
 }
 
+/// A scroll offset restored from a previous process that the content could not take yet
+/// (milestone 768): where the region is to rest, and where it was last put on the way.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) struct RestoringScroll {
+    /// The restored offset.
+    goal: (f32, f32),
+    /// The offset last given to the region on the way to it. Anything else found there
+    /// means something else moved the region, and the goal is let go.
+    placed: (f32, f32),
+}
+
 /// A widget's animation progresses (`0.0..=1.0`).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Anim {
@@ -678,6 +689,12 @@ pub struct Runtime {
     pub scroll: ScrollState,
     /// **Target** scroll offsets (what the spring drives towards), per region.
     pub scroll_target: ScrollState,
+    /// Scroll offsets **restored** from a previous process that the content could not take
+    /// yet (milestone 768): where each region is to rest once its content is long enough.
+    /// The region is drawn as far along as its content goes meanwhile. A region leaves the
+    /// map once it reaches the offset, once something else moves it (a finger, a fling, a
+    /// programmatic scroll), or once the user acts at all ([`Runtime::forget_restored_scroll`]).
+    pub(crate) scroll_restoring: HashMap<WidgetId, RestoringScroll>,
     /// SingleChildScrollView velocity (for the spring), per region.
     pub scroll_velocity: ScrollState,
     /// The **ballistic** motion still running after a fling, per region — the
@@ -885,6 +902,15 @@ impl Runtime {
             match restored {
                 Pending::Scroll(id, offset) => {
                     self.scroll.insert(id, offset);
+                    // Held until the content can take it: what a page shows often arrives
+                    // a frame or more after the first one (milestone 768).
+                    self.scroll_restoring.insert(
+                        id,
+                        RestoringScroll {
+                            goal: offset,
+                            placed: offset,
+                        },
+                    );
                 }
                 Pending::Edit(id, edit) => {
                     self.edits.insert(id, edit);
@@ -2265,7 +2291,10 @@ impl Runtime {
     pub fn scroll_offset_within(&self, id: WidgetId, max: (f32, f32)) -> Option<(f32, f32)> {
         let offset = self.scroll.get(&id).copied()?;
         Some(if self.scroll_at_rest(id) {
-            inside_extent(offset, max)
+            // A restored offset still waiting for its content is drawn as far along as the
+            // content now goes: the frame whose content grew is already where it was left.
+            let wanted = self.restoring_scroll(id).unwrap_or(offset);
+            inside_extent(wanted, max)
         } else {
             offset
         })
@@ -2286,6 +2315,29 @@ impl Runtime {
     pub fn keep_scroll_in_range(&mut self, regions: &[Scrollable]) -> bool {
         let mut corrected = false;
         for area in regions {
+            // A restored offset the content could not take yet (milestone 768) is kept as
+            // the goal, the region resting as near it as the content allows, until it is
+            // reached or something else moves the region.
+            if self.scroll_restoring.contains_key(&area.id) {
+                match self.restoring_scroll(area.id) {
+                    Some(goal) if self.scroll_at_rest(area.id) => {
+                        let reached = inside_extent(goal, (area.max_x, area.max_y));
+                        if reached == goal {
+                            self.scroll_restoring.remove(&area.id);
+                        } else if let Some(restoring) = self.scroll_restoring.get_mut(&area.id) {
+                            restoring.placed = reached;
+                        }
+                        if self.scroll.get(&area.id) != Some(&reached) {
+                            self.scroll.insert(area.id, reached);
+                            corrected = true;
+                        }
+                        continue;
+                    }
+                    _ => {
+                        self.scroll_restoring.remove(&area.id);
+                    }
+                }
+            }
             let Some(offset) = self.scroll.get(&area.id).copied() else {
                 continue;
             };
@@ -2475,6 +2527,21 @@ impl Runtime {
         current: crate::undo::EditSnapshot,
     ) -> Option<crate::undo::EditSnapshot> {
         self.undo.get_mut(&id)?.redo(current)
+    }
+
+    /// The user acted — a press, a key, a wheel: the scroll offsets restored from a previous
+    /// process and still waiting for their content are let go (milestone 768). Each region
+    /// stays where it is drawn; content that arrives later no longer moves the page under a
+    /// reader who has started using it. The shell calls it on every press and key.
+    pub fn forget_restored_scroll(&mut self) {
+        self.scroll_restoring.clear();
+    }
+
+    /// The restored offset region `id` is still on its way to, if any: `None` once the
+    /// region is no longer where the way to it last put it — something else moved it.
+    pub(crate) fn restoring_scroll(&self, id: WidgetId) -> Option<(f32, f32)> {
+        let restoring = self.scroll_restoring.get(&id)?;
+        (self.scroll.get(&id) == Some(&restoring.placed)).then_some(restoring.goal)
     }
 
     /// A finger takes hold of the region `id`. A scroll offset has one owner at a time, so
@@ -3812,6 +3879,91 @@ mod tests {
         let other = region(id.child(1), 0.0);
         assert!(!rt.keep_scroll_in_range(&[other]));
         assert!(!rt.scroll.contains_key(&other.id));
+    }
+
+    /// Milestone 768. A restored offset the content cannot take yet is drawn as far as the
+    /// content goes and kept as the goal: the frame the content grows in is already there,
+    /// and restoration keeps the goal, not the clamped offset, meanwhile.
+    #[test]
+    fn a_restored_offset_waits_for_its_content() {
+        let id = WidgetId::ROOT;
+        let mut rt = Runtime::default();
+        rt.restoration.enable("app");
+        let mut handed = crate::RestorationBucket::new();
+        handed.insert(&["app".to_string(), "list".to_string()], "0,300");
+        assert!(rt.restoration.restore(&handed.encode()));
+        rt.restoration.register_scroll(vec!["list".to_string()], id);
+        assert!(rt.apply_restored());
+        // The first frames: no content yet.
+        assert_eq!(rt.scroll_offset_within(id, (0.0, 0.0)), Some((0.0, 0.0)));
+        rt.keep_scroll_in_range(&[region(id, 0.0)]);
+        assert_eq!(rt.scroll.get(&id), Some(&(0.0, 0.0)), "drawn at the top");
+        assert_eq!(rt.restoring_scroll(id), Some((0.0, 300.0)));
+        assert_eq!(
+            rt.restoration.bucket(&rt).get(&["list".to_string()]),
+            Some("0,300"),
+            "a process ended now keeps the goal"
+        );
+        // Some content, not enough.
+        rt.keep_scroll_in_range(&[region(id, 120.0)]);
+        assert_eq!(rt.scroll.get(&id), Some(&(0.0, 120.0)));
+        // Enough: the walk already draws it there, and the goal is reached.
+        assert_eq!(
+            rt.scroll_offset_within(id, (0.0, 500.0)),
+            Some((0.0, 300.0))
+        );
+        rt.keep_scroll_in_range(&[region(id, 500.0)]);
+        assert_eq!(rt.scroll.get(&id), Some(&(0.0, 300.0)));
+        assert!(rt.scroll_restoring.is_empty(), "reached, let go");
+        // Shrinking afterwards clamps as ever.
+        rt.keep_scroll_in_range(&[region(id, 100.0)]);
+        assert_eq!(rt.scroll.get(&id), Some(&(0.0, 100.0)));
+    }
+
+    /// Milestone 768. A restored offset still waiting is let go when the user acts, or when
+    /// something else takes the region.
+    #[test]
+    fn a_restored_offset_is_let_go_when_the_region_is_used() {
+        let id = WidgetId::ROOT;
+        let restored = |rt: &mut Runtime| {
+            rt.scroll.insert(id, (0.0, 300.0));
+            rt.scroll_restoring.insert(
+                id,
+                RestoringScroll {
+                    goal: (0.0, 300.0),
+                    placed: (0.0, 300.0),
+                },
+            );
+        };
+        let mut rt = Runtime::default();
+        restored(&mut rt);
+        rt.keep_scroll_in_range(&[region(id, 0.0)]);
+        rt.forget_restored_scroll();
+        rt.keep_scroll_in_range(&[region(id, 500.0)]);
+        assert_eq!(
+            rt.scroll.get(&id),
+            Some(&(0.0, 0.0)),
+            "the user acted first"
+        );
+
+        let mut rt = Runtime::default();
+        restored(&mut rt);
+        rt.hold_scroll(id);
+        rt.keep_scroll_in_range(&[region(id, 0.0)]);
+        assert!(rt.scroll_restoring.is_empty(), "a finger took the region");
+
+        // Whatever else moves it — a correction, a jump to an item — lets it go too.
+        let mut rt = Runtime::default();
+        restored(&mut rt);
+        rt.keep_scroll_in_range(&[region(id, 0.0)]);
+        rt.scroll.insert(id, (0.0, 10.0));
+        assert_eq!(rt.restoring_scroll(id), None);
+        rt.keep_scroll_in_range(&[region(id, 500.0)]);
+        assert_eq!(
+            rt.scroll.get(&id),
+            Some(&(0.0, 10.0)),
+            "left where it was moved"
+        );
     }
 
     #[test]
