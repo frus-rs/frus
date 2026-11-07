@@ -2933,6 +2933,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                self.runtime.forget_restored_scroll();
                 let (mut dx, mut dy) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => (x * SCROLL_SPEED, y * SCROLL_SPEED),
                     // Physical delta → logical.
@@ -5326,6 +5327,10 @@ impl<A: Application> App<A> {
     /// scrolling when no other gesture captures the press.
     fn pointer_down(&mut self, touch: bool) {
         self.pointer_touch = touch;
+        // The user acts: restored offsets still waiting for their content stay where they
+        // are drawn, rather than move under the finger once the content arrives (milestone
+        // 768).
+        self.runtime.forget_restored_scroll();
         self.pending_tap_focus = None;
         self.pending_field_press = None;
         // A first tap still waiting for its second is a tap after all if this press is not
@@ -8298,6 +8303,9 @@ impl<A: Application> App<A> {
     /// winit's event in a window, and with one a test made in the driver (milestone 608).
     /// `event_loop` is what Back quits through; with none, Back that would quit does nothing.
     fn key_down(&mut self, event: &KeyDown, event_loop: Option<&ActiveEventLoop>) {
+        // The user acts: restored offsets still waiting for their content stay where they
+        // are drawn (milestone 768).
+        self.runtime.forget_restored_scroll();
         // What the browser typed into the field just before this key comes first: a key it
         // hands on reaches the shell at once, and the letters before it are still waiting for
         // the end of the turn — an arrow would move a caret that has not had them yet, and be

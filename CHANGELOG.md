@@ -13,6 +13,15 @@ any release may break.
 
 ## [Unreleased]
 
+- **A restored scroll offset waits for the content it needs** (J768). Seen on an Android 10
+  phone: an application that loads its content after the first frame (the demo reads its
+  tasks on another thread) came back from the system ending its process at the top of the
+  page, because the first frames' short page clamped the restored offset to it for good. A
+  restored offset is now kept as the goal: the region is drawn as far along it as its content
+  goes and reaches it in the frame the content becomes long enough. The goal is let go as
+  soon as the user presses, types or scrolls, or anything else moves the region, so content
+  arriving later never moves a page the reader is already using; restoration keeps the goal
+  meanwhile. `Runtime::forget_restored_scroll` is what the shell calls on every press and key.
 - **Editors: hot reload on by default with every frus, every run's end said, a sensible
   default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
   for a debug run by default, so hot reload is on with frus 0.5.0 too, whose own default is
