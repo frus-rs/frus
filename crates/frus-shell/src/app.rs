@@ -1154,6 +1154,11 @@ pub struct App<A: Application> {
     announce: String,
     /// The tap-or-long-press recogniser (gesture tier 1).
     press: PressRecognizer,
+    /// When the loop's current turn began, before it read the input waiting for it, and when
+    /// the turn before it began: the second is what a long press is decided against
+    /// (milestone 769). See [`decide_hold`](Self::decide_hold).
+    turn_began: Instant,
+    previous_turn_began: Instant,
     /// The pressed target's long-press message, captured on the press.
     long_press_msg: Option<A::Message>,
     /// A **text field** pressed with a finger: a hold there selects the word under it
@@ -1465,6 +1470,8 @@ impl<A: Application> App<A> {
             last_click: None,
             last_region_click: None,
             clock_origin: Instant::now(),
+            turn_began: Instant::now(),
+            previous_turn_began: Instant::now(),
             region_known: None,
             region_autoscrolled: false,
             pending_tap: None,
@@ -2655,6 +2662,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// of them has arrived, and files still held over the window are looked for where
     /// the system can say (milestone 695).
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.decide_hold() {
+            event_loop.set_control_flow(self.idle_control_flow());
+        }
         // The activity is being destroyed (milestone 755): its `onDestroy` waits for the loop
         // to end, and winit does not pass the destruction on. The window is always gone first,
         // so the activity is only asked while there is none.
@@ -2683,14 +2693,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         event_loop.set_control_flow(self.idle_control_flow());
     }
 
-    /// The loop woke up: if the long-press deadline has been reached the recogniser
-    /// **accepts eagerly** — the message is emitted and the release to come will be
-    /// swallowed, the long press having evicted the tap.
+    /// The loop woke up. Whether a press held past the long-press deadline is a hold is
+    /// decided at the end of this turn, once the input waiting for it has been read
+    /// (`decide_hold`, milestone 769).
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-        if matches!(cause, StartCause::ResumeTimeReached { .. }) && self.press.poll(Instant::now())
-        {
-            self.hold_deadline_reached();
-        }
+        self.previous_turn_began = std::mem::replace(&mut self.turn_began, Instant::now());
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
             self.poll_pending_tap(Instant::now());
         }
@@ -4972,6 +4979,35 @@ impl<A: Application> App<A> {
         if matches!(event.kind, PointerKind::Up | PointerKind::Cancel) {
             self.sync_hover();
         }
+    }
+
+    /// At the end of a turn of the loop, after the input it read: a press still down whose
+    /// long-press deadline had passed **when the turn before this one began** is a hold, and
+    /// the recogniser accepts eagerly — the message is emitted and the release to come is
+    /// swallowed.
+    ///
+    /// The deadline is measured from when the press was read, and the release is known only
+    /// once it has been read too (milestone 769). While the loop is busy — drawing a slow
+    /// frame, as the Android emulator does for half a second and more — a finger that lifted
+    /// waits in the input, and is read late. The hold used to be decided as a turn began,
+    /// before that turn read anything: a tap whose release waited behind a slow frame was
+    /// taken for a hold, which in a text field selects the word under the finger, and the
+    /// next key replaced the word (all of a one-word field).
+    ///
+    /// Decided at the end of the turn, the release that waited for the turn is read first.
+    /// And against the *previous* turn's beginning, because the system itself holds a
+    /// release back: Android sends no more of a touch to a window that has not finished
+    /// events it was sent half a second ago, so a release reaches the application only once
+    /// a turn has read and finished what came before it — a move — and is read by the turn
+    /// after that one. A turn that began after the deadline has finished everything sent
+    /// before it, and the next turn reads whatever that let through. A hold is decided a
+    /// turn late, which on a device is a frame.
+    fn decide_hold(&mut self) -> bool {
+        if !self.press.poll(self.previous_turn_began) {
+            return false;
+        }
+        self.hold_deadline_reached();
+        true
     }
 
     /// A press held still for the long-press delay: what it was a candidate for is decided.
@@ -12588,6 +12624,16 @@ pub mod testing {
             fired
         }
 
+        /// A turn of the loop that began `late` after now — the loop having been busy, drawing
+        /// a slow frame — and read `input`, what waited for it, before it ended: the long press
+        /// decided at its end, as the loop decides it (milestone 769). Whether a hold fired.
+        pub fn turn(&mut self, late: std::time::Duration, input: impl FnOnce(&mut Self)) -> bool {
+            let began = Instant::now() + late;
+            self.shell.previous_turn_began = std::mem::replace(&mut self.shell.turn_began, began);
+            input(self);
+            self.shell.decide_hold()
+        }
+
         /// The double tap's wait, over: a first tap still waiting is sent as a tap. Whether one
         /// was waiting.
         pub fn tap_deadline(&mut self) -> bool {
@@ -17944,6 +17990,58 @@ mod field_drag_tests {
         d.release(second);
         d.run(0.1);
         assert_eq!(offset(&d), 0.0, "nothing scrolled");
+    }
+
+    /// How long a turn of the loop takes in the tests below: past the long-press delay, as
+    /// frames take on the Android emulator.
+    const SLOW_FRAME: std::time::Duration = std::time::Duration::from_millis(700);
+
+    /// **A tap whose release waited behind slow frames is a tap** (milestone 769). The
+    /// finger lifted well within the long-press delay, but the loop was drawing: the turn
+    /// after the press began past the deadline and read only a move, the system holding
+    /// the release back until that move was finished, and the turn after it read the
+    /// release — the sequence the Android 9 emulator logged. Decided as a turn began, it
+    /// was a hold: the word under the finger was selected, and the next key replaced it
+    /// (all of a one-word field).
+    #[test]
+    fn a_tap_whose_release_waited_behind_slow_frames_is_a_tap() {
+        let mut d = driver();
+        let second = at(&d, "bravo");
+        let id = d.focus_hit(second).expect("the field");
+        assert!(
+            !d.turn(std::time::Duration::ZERO, |d| d.press(second)),
+            "no hold as the finger comes down"
+        );
+        assert!(
+            !d.turn(SLOW_FRAME, |d| d.move_to(second)),
+            "the turn past the deadline read a move: the release may be held back behind it"
+        );
+        assert!(
+            !d.turn(SLOW_FRAME * 2, |d| d.release(second)),
+            "the release, read by the next turn, ended the press: no hold"
+        );
+        d.run(0.1);
+        assert_eq!(d.focused(), Some(id), "focused by the tap");
+        let (_, anchor) = d.edit_of(id).expect("a caret placed by the tap");
+        assert!(anchor.is_none(), "a caret, not a selected word");
+    }
+
+    /// And a finger still down after those turns is held: the word is selected, a turn
+    /// after the deadline.
+    #[test]
+    fn a_finger_still_down_after_slow_frames_is_a_hold() {
+        let mut d = driver();
+        let second = at(&d, "bravo");
+        let id = d.focus_hit(second).expect("the field");
+        assert!(!d.turn(std::time::Duration::ZERO, |d| d.press(second)));
+        assert!(!d.turn(SLOW_FRAME, |d| d.move_to(second)), "not yet");
+        assert!(d.turn(SLOW_FRAME * 2, |_| {}), "the hold fired");
+        d.run(0.05);
+        let (caret, anchor) = d.edit_of(id).expect("an edit");
+        assert!(
+            anchor.is_some_and(|anchor| anchor != caret),
+            "a word is selected: {caret} {anchor:?}"
+        );
     }
 
     /// **A mouse drag still selects**: a pointer is not a finger, and a desktop selects

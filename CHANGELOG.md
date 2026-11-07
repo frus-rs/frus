@@ -30,6 +30,18 @@ any release may break.
   nobody could see. When a frame laid out above the keyboard cannot show the focused field, the
   application now keeps its whole size and the page is panned to the field, as a phone pans a
   window it cannot shrink. Where the field fits, the keyboard stays an inset as before.
+- **A tap is no longer taken for a long press when frames are slow, and a GPU frus cannot
+  draw with is named** (J769). The long press is decided at the end of a turn of the event
+  loop, once the input waiting for it has been read, and against the previous turn's
+  beginning: a tap whose release waited behind a slow frame (the Android emulator draws for
+  half a second and more, and Android holds a release back behind unfinished events) was
+  taken for a hold, which in a text field selected the word, so the next key replaced it (all
+  of a one-word field). A hold is now decided one turn after its deadline. On Android, a
+  device that offers OpenGL ES 2 only and no Vulkan (the emulator's default for Android 9 and
+  older system images) fails with what it offers, what frus needs, and, on the emulator, the
+  flag to start it with, instead of "Failed to create surface for any enabled backend".
+  `frus run` and `frus emulators --launch` start emulators with `-feature
+  GLESDynamicVersion`, which gives such images OpenGL ES 3.
 
 - **The floating action button is placed from what the screen shell measured** (J766).
   `FabLocation` now has every placement: at the top (astride the app bar's bottom edge),

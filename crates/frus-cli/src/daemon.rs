@@ -169,6 +169,7 @@ pub(crate) fn launch_emulator(id: Option<String>, cold: bool) -> Result<Value, S
     report::say(&format!("Starting the {} emulator…", id.replace('_', " ")));
     let mut command = std::process::Command::new(&emulator);
     command.args(["-avd", &id]);
+    command.args(devices::EMULATOR_ARGS);
     // It outlives the daemon: started from its own folder, it holds no one else's.
     if let Some(dir) = emulator.parent() {
         command.current_dir(dir);

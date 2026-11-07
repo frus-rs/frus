@@ -28,6 +28,9 @@ mod gpu_timer;
 mod image;
 mod mesh;
 mod mipmap;
+// Why no GPU could be reached (milestone 769): said on Android, tested everywhere.
+#[cfg(any(target_os = "android", test))]
+mod no_gpu;
 mod offscreen;
 mod painter;
 mod path;
