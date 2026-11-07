@@ -51,7 +51,6 @@ any release may break.
   flag to start it with, instead of "Failed to create surface for any enabled backend".
   `frus run` and `frus emulators --launch` start emulators with `-feature
   GLESDynamicVersion`, which gives such images OpenGL ES 3.
-
 - **The floating action button is placed from what the screen shell measured** (J766).
   `FabLocation` now has every placement: at the top (astride the app bar's bottom edge),
   floating, docked, the mini form of each, and `EndContained` inside the bottom bar; and
