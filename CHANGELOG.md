@@ -8,11 +8,18 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 771 so far, each documenting the objective, the alternatives
+> record — one per step, 772 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **`frus run` is smooth: applications optimise their dependencies in debug** (J772). An
+  application made by `frus create` built the renderer, the text shaper and frus without any
+  optimisation in a debug run: a frame of a full page cost 31 ms on the CPU and every page
+  change stuttered. The template and the examples now declare
+  `[profile.dev.package."*"] opt-level = 3` (4.3 ms for the same frame); the application's own
+  crate stays unoptimised, quick to rebuild and to hot-reload. Existing applications add the
+  two lines to their `Cargo.toml`.
 - **Editors: hot reload on by default with every frus, every run's end said, a sensible
   default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
   for a debug run by default, so hot reload is on with frus 0.5.0 too, whose own default is
