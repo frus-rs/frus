@@ -438,6 +438,12 @@ frus run -d android                  # build + install + launch, with logcat in 
 The first run installs what is missing: the SDK and NDK, Java, the Rust target and cargo-apk.
 `frus emulators --create` makes an emulator when there is no phone at hand.
 
+frus draws with Vulkan or OpenGL ES 3.0 and later. An emulator running an Android 9 (or
+older) system image gives its guest OpenGL ES 2.0 and no Vulkan unless it is started with
+`-feature GLESDynamicVersion`. `frus run` and `frus emulators --launch` start emulators
+with that flag; one started another way (from Android Studio, or `emulator -avd …` by
+hand) needs it added, or the application closes at once, its log saying so.
+
 ### The first pixel: your launch background
 
 Android paints the window from the moment it opens it, which is well before your

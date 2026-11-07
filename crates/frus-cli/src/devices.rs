@@ -397,6 +397,15 @@ pub(crate) fn adb() -> Option<PathBuf> {
         .or_else(|| on_path(exe))
 }
 
+/// What every emulator frus starts is started with, beside its AVD (milestone 769).
+///
+/// `-feature GLESDynamicVersion` gives the guest the OpenGL ES version the host's GPU
+/// offers. Without it, the emulator gives a system image of Android 9 or older OpenGL ES 2.0
+/// and no Vulkan, which frus cannot draw with: the application closed as it opened. Newer
+/// images have it on already, and an emulator that does not know the feature says so and
+/// starts all the same.
+pub(crate) const EMULATOR_ARGS: [&str; 2] = ["-feature", "GLESDynamicVersion"];
+
 /// The Android `emulator` program: on the `PATH`, or in the SDK.
 pub(crate) fn emulator() -> Option<PathBuf> {
     let exe = if cfg!(windows) {

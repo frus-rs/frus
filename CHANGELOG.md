@@ -8,10 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 767 so far, each documenting the objective, the alternatives
+> record — one per step, 769 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A tap is no longer taken for a long press when frames are slow, and a GPU frus cannot
+  draw with is named** (J769). The long press is decided at the end of a turn of the event
+  loop, once the input waiting for it has been read, and against the previous turn's
+  beginning: a tap whose release waited behind a slow frame (the Android emulator draws for
+  half a second and more, and Android holds a release back behind unfinished events) was
+  taken for a hold, which in a text field selected the word, so the next key replaced it (all
+  of a one-word field). A hold is now decided one turn after its deadline. On Android, a
+  device that offers OpenGL ES 2 only and no Vulkan (the emulator's default for Android 9 and
+  older system images) fails with what it offers, what frus needs, and, on the emulator, the
+  flag to start it with, instead of "Failed to create surface for any enabled backend".
+  `frus run` and `frus emulators --launch` start emulators with `-feature
+  GLESDynamicVersion`, which gives such images OpenGL ES 3.
 
 - **The floating action button is placed from what the screen shell measured** (J766).
   `FabLocation` now has every placement: at the top (astride the app bar's bottom edge),

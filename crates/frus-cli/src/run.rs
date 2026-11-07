@@ -1341,6 +1341,7 @@ fn start_emulator(avd: &str) -> Result<String, String> {
     report::say(&format!("Starting the {avd} emulator…"));
     Command::new(&emulator)
         .args(["-avd", avd])
+        .args(devices::EMULATOR_ARGS)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

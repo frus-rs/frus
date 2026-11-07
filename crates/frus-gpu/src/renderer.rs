@@ -122,10 +122,23 @@ impl Renderer {
         // code at the first submission), the GPU is reached through OpenGL ES instead
         // (milestones 681, 686).
         #[cfg(any(target_os = "android", target_os = "linux"))]
-        if let Some(why) = vulkan_unusable(descriptor.flags).await {
+        let no_vulkan = vulkan_unusable(descriptor.flags).await;
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        if let Some(why) = no_vulkan {
             log::info!("{why}: OpenGL ES instead");
             descriptor.backends = wgpu::Backends::GL;
         }
+        // Where no GPU can be reached, the failure says why, when the device tells: an
+        // OpenGL ES 2 device, the Android emulator's default on old system images (milestone
+        // 769).
+        #[cfg(target_os = "android")]
+        let explained =
+            |err: anyhow::Error| match crate::no_gpu::explain(&crate::no_gpu::survey(no_vulkan)) {
+                Some(why) => err.context(why),
+                None => err,
+            };
+        #[cfg(not(target_os = "android"))]
+        let explained = |err: anyhow::Error| err;
         // `WGPU_BACKEND` (`vulkan`, `gl`, `dx12`, `metal`, `webgpu`, comma-separated) decides
         // over all of the above: a device whose driver frus's choice fails on can be given
         // another backend without rebuilding the application (milestone 686, #217).
@@ -167,7 +180,9 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         let instance = wgpu::Instance::new(descriptor);
 
-        let surface = instance.create_surface(target)?;
+        let surface = instance
+            .create_surface(target)
+            .map_err(|err| explained(err.into()))?;
 
         #[cfg(target_arch = "wasm32")]
         let opened = opened.map(|o| (o.adapter, o.device, o.queue));
@@ -193,7 +208,8 @@ impl Renderer {
                         force_fallback_adapter: false,
                         ..Default::default()
                     })
-                    .await?;
+                    .await
+                    .map_err(|err| explained(err.into()))?;
                 let adapter_time = started.elapsed();
                 let device_started = web_time::Instant::now();
                 let (device, queue) = request_device(&adapter).await?;
