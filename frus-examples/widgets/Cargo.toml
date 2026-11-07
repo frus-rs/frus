@@ -72,6 +72,11 @@ name = "android.permission.ACCESS_COARSE_LOCATION"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.POST_NOTIFICATIONS"
 
+# `frus run` builds in debug: the dependencies (the renderer, the text shaper, frus)
+# are optimised so that it stays smooth; this crate is not, so it rebuilds quickly.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 lto = "fat"
