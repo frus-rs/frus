@@ -8,11 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 769 so far, each documenting the objective, the alternatives
+> record — one per step, 771 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Editors: hot reload on by default with every frus, every run's end said, a sensible
+  default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
+  for a debug run by default, so hot reload is on with frus 0.5.0 too, whose own default is
+  off; the plugin's choices are On (`--hot`), Off (`--no-hot`) and Let frus decide, its hint
+  follows the choice, and `--no-hot` is left out for a frus that does not know it. Every run
+  now ends with a console line giving its exit code and, on a failure, the last error. Under
+  hot reload, an application that crashed (`exited with error`) made `frus run` say "has
+  stopped" and exit 0; it is now an error carrying the engine's message, and the engine's own
+  fatal `Error:` line and panic are no longer dropped as noise. Until a device is chosen, runs
+  go to a phone plugged in, else a running emulator, else this computer, never to a simulated
+  device, which both editors now list last.
 - **A tap is no longer taken for a long press when frames are slow, and a GPU frus cannot
   draw with is named** (J769). The long press is decided at the end of a turn of the event
   loop, once the input waiting for it has been read, and against the previous turn's
