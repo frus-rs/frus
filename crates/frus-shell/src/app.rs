@@ -2650,7 +2650,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
     /// The loop woke up. Whether a press held past the long-press deadline is a hold is
     /// decided at the end of this turn, once the input waiting for it has been read
-    /// ([`decide_hold`](Self::decide_hold), milestone 769).
+    /// (`decide_hold`, milestone 769).
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         self.previous_turn_began = std::mem::replace(&mut self.turn_began, Instant::now());
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
