@@ -48,6 +48,8 @@ mod android_permission;
 #[cfg(android)]
 mod android_settings;
 #[cfg(android)]
+mod android_share;
+#[cfg(android)]
 mod android_system_bars;
 mod app;
 mod application;
@@ -83,6 +85,7 @@ mod instance;
 mod interface_thread;
 mod link;
 mod logging;
+// Opening an address in the system's handler (milestone 775).
 /// Cross-platform `fetch` HTTP helper (behind the `net` feature).
 #[cfg(feature = "net")]
 pub mod net;
@@ -90,6 +93,7 @@ pub mod net;
 mod notification;
 #[cfg(all(web, feature = "notifications"))]
 mod notification_web;
+mod open_url;
 #[cfg(test)]
 mod restoration_tests;
 // Asking the person for the camera, the microphone, the location (milestone 730).
@@ -128,6 +132,8 @@ mod remote;
 #[cfg(not(web))]
 pub(crate) mod runtime;
 mod selection;
+// Sharing through the system's share sheet (milestone 775).
+mod share;
 mod simulated;
 mod subscription;
 mod theming;
@@ -163,8 +169,10 @@ pub use icon::AppIcon;
 pub use link::{link_among, location_of_link};
 #[cfg(all(any(desktop, android, web), feature = "notifications"))]
 pub use notification::{NotificationError, NotificationResponse, SystemNotification};
+pub use open_url::{open_url, OpenUrlError};
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use remote::RemoteData;
+pub use share::{share, Share, ShareError, ShareOutcome};
 pub use shortcuts::GlobalShortcut;
 pub use subscription::Subscription;
 pub use taskbar::{Taskbar, TaskbarProgress};

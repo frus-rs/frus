@@ -32,11 +32,27 @@ iOS will bring `Info.plist` and a launch configuration. This is XML and plist, n
 a programming language, but it is not Rust either, and it must be understood rather
 than copied.
 
-**Coverage, not language, is the real limit.** A developer who needs notifications,
-the camera, biometrics, share sheets, or in-app purchases today writes the JNI
-themselves. That is possible and unpleasant. (Haptic feedback and the network's state
-need none: `frus::haptics` and `frus::connectivity` cover them.) It is discussed under
+**Coverage, not language, is the real limit.** A developer who needs the camera,
+biometrics or in-app purchases today writes the JNI themselves. That is possible and unpleasant. It is discussed under
 [the real gap](#the-real-gap-coverage-not-language) below.
+
+## What frus already wraps
+
+These need no JNI, no platform code and no setup; each is one call, re-exported from `frus`:
+
+- **Opening an address**: `frus::open_url("https://…")` opens the browser, and `mailto:`,
+  `tel:` and `sms:` open the mail, dialer and messages applications (Windows, macOS, Linux,
+  Android, the web).
+- **Sharing**: `frus::share("text")`, or `frus::Share::text(..).subject(..).url(..).file(path)`
+  for more, shows the system's share sheet (Android, Windows, macOS, the web). Where a desktop
+  cannot show one, the text is copied to the clipboard and the call says so.
+- **Haptic feedback**: `frus::haptics::light()` and its siblings give the system's touch
+  feedback (Android, the web; the desktops answer `Unsupported`).
+- **Which network**: `frus::connectivity()`, and `cx.use_connectivity()` in a component, say
+  whether the device is on Wi-Fi, mobile data, a cable or nothing, and follow changes
+  (Windows, macOS, Linux, Android, the web). Connected does not mean the internet answers.
+- **Notifications** (`SystemNotification`), **permissions** (`Permission`), **file dialogs**
+  (`FileDialog`, desktop), **HTTP** (`fetch`).
 
 ---
 
@@ -144,8 +160,8 @@ bindings: more glue, still no hand-written JavaScript.
 The honest summary of everything above is that the language question is nearly
 settled and the *coverage* question is wide open.
 
-An application needing notifications, the camera, biometrics, a share sheet, a file
-picker or in-app purchases gets no help from frus today. Its author writes JNI by
+An application needing the camera, biometrics or in-app purchases gets no help from
+frus today. Its author writes JNI by
 hand — reachable, verbose, easy to get wrong, and repeated in every application
 that needs the same thing. That is the actual obstacle for someone shipping a real
 application, and it is not solved by adding another widget.
