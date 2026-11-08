@@ -396,7 +396,8 @@ fn apply(el: &HtmlElement, sem: &SemanticsProperties) {
     // rather than a made-up attribute, matching how a browser resolves a native
     // `role="textbox"` with no editable child.
     match (&sem.value, sem.role) {
-        (Some(value), Role::TextInput) => el.set_text_content(Some(value)),
+        // A masked field's text is only dots (milestone 782).
+        (Some(_), Role::TextInput) => el.set_text_content(sem.readable_value().as_deref()),
         (Some(value), Role::Slider | Role::ProgressBar) => {
             element.set_attribute("aria-valuetext", value).ok();
         }

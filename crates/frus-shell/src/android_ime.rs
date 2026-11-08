@@ -137,6 +137,8 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     crate::android_share::install(&mut env, &loader, &activity);
     // And haptics with the connectivity (milestone 777).
     crate::android_device::install(&mut env, &loader, &activity);
+    // And the screen reader's view of the window (milestone 782).
+    crate::android_accessibility::install(&mut env, &loader, &activity);
     // And state restoration (milestone 753), when the application asked for it.
     crate::restoration::install(&mut env, &loader, &activity);
 
