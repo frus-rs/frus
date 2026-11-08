@@ -265,6 +265,7 @@ mod platform {
         }
     }
 
+    #[inline(never)]
     fn show_sheet(share: &Share) -> Result<(), String> {
         let hwnd = own_window().ok_or("the application has no window")?;
         let hwnd = HWND(hwnd);
