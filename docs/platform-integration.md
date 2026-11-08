@@ -53,6 +53,10 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   (Windows, macOS, Linux, Android, the web). Connected does not mean the internet answers.
 - **Notifications** (`SystemNotification`), **permissions** (`Permission`), **file dialogs**
   (`FileDialog`, desktop), **HTTP** (`fetch`).
+- **Preferences**: `frus::prefs()` keeps small settings across restarts, and
+  `cx.use_pref(key, default)` shows one in a component (every platform).
+- **Secrets**: `frus::secure_store()` (feature `secure-store`) keeps them with the system's
+  credential store (Windows, macOS, iOS, Linux, Android; `Unsupported` on the web).
 
 ---
 

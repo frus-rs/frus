@@ -40,6 +40,16 @@ any release may break.
   does not mean the internet answers, and the docs say so. `frus build` and `frus run` now
   declare `VIBRATE` and `ACCESS_NETWORK_STATE` for Android, both granted at install with no
   question asked.
+- **Preferences and a secure store** (J776). `frus::prefs()` keeps small settings across
+  restarts: `set`, `get::<T>`, `remove`, `clear` for any serde value, synchronous. A JSON file
+  in the application's data folder on the desktop (`%APPDATA%`, `Application Support`,
+  `$XDG_DATA_HOME`) and in its `files` folder on Android, written to a temporary file and
+  renamed; `localStorage` on the web. `cx.use_pref(key, default)` shows one in a component,
+  and any change, from any thread, builds the interface again. `frus::secure_store()`
+  (feature `secure-store`) keeps secrets with the system: the Credential Manager on Windows,
+  the Keychain on macOS and iOS, the Secret Service on Linux, an AES-256-GCM key in the
+  Android Keystore on Android; `Unsupported` on the web, which has nowhere safe to keep one.
+
 - **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
   opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
   Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.

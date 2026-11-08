@@ -3320,10 +3320,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A hot-reload patch changed what the components build.
                 #[cfg(feature = "hot-reload")]
                 let arrived = crate::hot::take_patched() || arrived;
-                // The device changed networks: what reads the connectivity builds again
-                // (milestone 777).
+                // A preference changed, maybe on another thread (milestone 776), or the device
+                // changed networks (milestone 777): `|`, not `||`, so every flag is taken.
                 let arrived = frus_widgets::take_connectivity_change() || arrived;
-                if frus_widgets::take_rebuild_request() || arrived {
+                if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change()
+                    || arrived
+                {
                     self.build_dirty = true;
                 }
                 let need_build = frame_needs_build(
@@ -12940,7 +12942,10 @@ pub mod testing {
             let asked = s.app.effects();
             s.run_command(asked);
             let arrived = s.take_task_arrivals();
-            if frus_widgets::take_rebuild_request() || arrived {
+            // A preference changed, maybe on another thread (milestone 776): `|`, not `||`, so
+            // both flags are taken.
+            if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change() || arrived
+            {
                 s.build_dirty = true;
             }
             s.report_focus();

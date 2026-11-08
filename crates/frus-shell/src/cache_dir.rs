@@ -35,6 +35,36 @@ pub(crate) fn desktop(
     (!program.is_empty()).then(|| base.join("frus").join(program))
 }
 
+/// The folder kept for what `program` must not lose — its preferences (milestone 776) — on a
+/// desktop `os`, from the environment's variables `var`:
+///
+/// - Linux and the other Unixes: `$XDG_DATA_HOME/frus/<program>`, or
+///   `~/.local/share/frus/<program>`;
+/// - macOS (and iOS, inside the application's sandbox):
+///   `~/Library/Application Support/frus/<program>`;
+/// - Windows: `%APPDATA%\frus\<program>` (the roaming profile, which follows the person).
+///
+/// `None` when the variable it needs is unset or not a full path.
+#[cfg_attr(not(any(desktop, ios)), allow(dead_code))]
+pub(crate) fn desktop_data(
+    os: &str,
+    var: impl Fn(&str) -> Option<OsString>,
+    program: &OsStr,
+) -> Option<PathBuf> {
+    let full = |name: &str| {
+        var(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() || looks_absolute(path))
+    };
+    let base = match os {
+        "windows" => full("APPDATA")?,
+        "macos" | "ios" => full("HOME")?.join("Library").join("Application Support"),
+        _ => full("XDG_DATA_HOME")
+            .or_else(|| full("HOME").map(|home| home.join(".local").join("share")))?,
+    };
+    (!program.is_empty()).then(|| base.join("frus").join(program))
+}
+
 /// Whether `path` is a full path on some platform: `C:\…` is one on Windows even when the tests
 /// run elsewhere, and `/…` is one on Unix even when they run on Windows.
 fn looks_absolute(path: &Path) -> bool {
@@ -168,6 +198,55 @@ mod tests {
         );
         assert_eq!(
             desktop("linux", env(&[("HOME", "/home/me")]), OsStr::new("")),
+            None
+        );
+    }
+
+    /// The data folder: kept apart from the cache, which the system or the person may empty.
+    #[test]
+    fn data_lives_where_each_desktop_keeps_it() {
+        let linux = env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/me")]);
+        assert_eq!(
+            desktop_data("linux", linux, OsStr::new(APP)),
+            Some(PathBuf::from("/xdg").join("frus").join(APP))
+        );
+        let home = env(&[("HOME", "/home/me"), ("XDG_DATA_HOME", "rel")]);
+        assert_eq!(
+            desktop_data("linux", home, OsStr::new(APP)),
+            Some(
+                PathBuf::from("/home/me")
+                    .join(".local")
+                    .join("share")
+                    .join("frus")
+                    .join(APP)
+            )
+        );
+        let mac = env(&[("HOME", "/Users/me")]);
+        assert_eq!(
+            desktop_data("macos", mac, OsStr::new(APP)),
+            Some(
+                PathBuf::from("/Users/me")
+                    .join("Library")
+                    .join("Application Support")
+                    .join("frus")
+                    .join(APP)
+            )
+        );
+        let windows = env(&[
+            ("APPDATA", r"C:\Users\me\AppData\Roaming"),
+            ("LOCALAPPDATA", r"C:\Users\me\AppData\Local"),
+        ]);
+        assert_eq!(
+            desktop_data("windows", windows, OsStr::new(APP)),
+            Some(
+                PathBuf::from(r"C:\Users\me\AppData\Roaming")
+                    .join("frus")
+                    .join(APP)
+            )
+        );
+        assert_eq!(desktop_data("windows", env(&[]), OsStr::new(APP)), None);
+        assert_eq!(
+            desktop_data("linux", env(&[("HOME", "/h")]), OsStr::new("")),
             None
         );
     }

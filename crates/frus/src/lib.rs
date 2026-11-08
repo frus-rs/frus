@@ -63,7 +63,8 @@ pub struct GuideTesting;
     feature = "notifications",
     feature = "tray",
     feature = "taskbar",
-    feature = "global-shortcuts"
+    feature = "global-shortcuts",
+    feature = "secure-store"
 ))]
 #[doc = include_str!("../../../docs/guide/platform.md")]
 pub struct GuidePlatform;
@@ -123,6 +124,8 @@ pub use frus_shell::Tester;
 #[cfg(all(feature = "notifications", not(target_os = "ios")))]
 pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification};
 
+// Secrets kept by the system (feature `secure-store`, milestone 776): `secure_store()`. The
+// preferences, `prefs()`, come with the widgets.
 /// **Haptic feedback** (milestone 777): `frus::haptics::light()`, `medium()`, `heavy()`,
 /// `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`.
 ///
@@ -131,6 +134,8 @@ pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification
 /// ```
 pub use frus_shell::haptics;
 pub use frus_shell::HapticsError;
+#[cfg(feature = "secure-store")]
+pub use frus_shell::{secure_store, SecureStore, SecureStoreError};
 
 /// Asking the person for the camera, the microphone, the location, notifications
 /// (milestone 730).

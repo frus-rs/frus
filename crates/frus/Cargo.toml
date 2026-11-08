@@ -49,6 +49,9 @@ taskbar = ["frus-shell/taskbar"]
 # Global shortcuts: `GlobalShortcut`. The desktop (X11 on Linux); off by default.
 global-shortcuts = ["frus-shell/global-shortcuts"]
 json = ["frus-shell/json"]
+# Secrets kept by the system: `secure_store()`. Off by default; Linux builds talk to the
+# desktop's Secret Service over D-Bus (no system library needed).
+secure-store = ["frus-shell/secure-store"]
 default = ["frus-shell/default", "frus-widgets/default", "frus-text/default"]
 # Decoding embedded PNG/JPEG: `Image::memory` and `asset!`. Part of `default`;
 # dropping it leaves both reporting a missing decoder rather than panicking.
