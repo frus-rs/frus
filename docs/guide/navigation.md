@@ -81,6 +81,102 @@ fn guarded(signed_in: Rc<Cell<bool>>) -> GoRouter {
 `.refresh_listenable(&auth)` asks the redirect again whenever `auth` changes — so that signing
 out sends the person back to the sign-in screen at once.
 
+## Tabs that keep their pages
+
+A bottom bar whose tabs each keep **their own stack of screens** is a *shell* route: a frame
+around branches. Switching tabs keeps what each one had open, and what its screens hold.
+
+```rust
+use frus::{
+    text, BottomNavigationBar, BottomNavigationBarItem, GoRoute, GoRouter, Icons, Scaffold,
+    ShellBranch,
+};
+
+fn tabs() -> GoRouter {
+    GoRouter::new(vec![
+        GoRoute::shell(
+            |_, shell, body| {
+                let tabs = shell.clone();
+                Scaffold::new().body(body).bottom_navigation_bar(
+                    BottomNavigationBar::new(shell.current_index(), move |i| tabs.go_branch(i))
+                        .items(vec![
+                            BottomNavigationBarItem::new(Icons::HOME, "Feed"),
+                            BottomNavigationBarItem::new(Icons::SEARCH, "Search"),
+                        ]),
+                )
+            },
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/feed", |_, _| text("Feed"))
+                    .routes(vec![GoRoute::new("post/:id", |_, _| text("A post"))])]),
+                ShellBranch::new(vec![GoRoute::new("/search", |_, _| text("Search"))]),
+            ],
+        ),
+        // Outside the shell: a screen that covers the bar too.
+        GoRoute::new("/settings", |_, _| text("Settings")),
+    ])
+    .initial_location("/feed")
+}
+```
+
+- `push("/feed/post/7")` from the feed opens the post **under the bar**; the bar stays.
+  `push("/settings")` covers the whole window.
+- `go_branch(i)` shows tab `i` as it was left. Choosing the tab already on show goes back to
+  its first screen.
+- **Back** pops the tab's own screens first. On the first screen of another tab it shows the
+  first tab, and from there it leaves the application. `.shell_back(ShellBack::Leave)` on the
+  shell route leaves from the first screen of any tab instead. The edge swipe only ever pops a
+  screen; it never switches tabs.
+- A location — a link, the browser's address — picks the tab and builds its stack:
+  `/feed/post/7` opens the feed tab with the post on top. On the web, the address follows the
+  tab on show, and the browser's Back returns to where the previous tab was left.
+- A branch whose first route has a parameter needs a start:
+  `ShellBranch::new(..).initial_location("/users/me")`.
+
+## A screen that answers
+
+A screen pushed to *ask* something — a colour, a contact, a confirmation — hands its answer back
+when it pops:
+
+```rust
+use frus::{BuildContext, Button, Widget};
+
+fn choose(cx: &BuildContext) -> Box<dyn Widget> {
+    let router = cx.router();
+    let ask = cx.task_scope().async_callback(move || {
+        let router = router.clone();
+        async move {
+            let picked: Option<String> = router.push_for_result("/pick").await;
+            frus::log::info!("picked {picked:?}");
+        }
+    });
+    Box::new(Button::new("Pick a colour").on_press(ask))
+}
+
+// On the `/pick` screen:
+// router.pop_with(String::from("blue"));
+```
+
+The answer is `None` when the screen went any other way: Back, the edge swipe, the app bar's
+arrow, a `go` elsewhere. Without `async`, `push_then("/pick", |picked: Option<String>| ..)`
+takes a closure instead.
+
+## Watching the screens
+
+`router.observe(|change| ..)` is told of every move — a push, a pop, a swap, a `go`, a tab
+switch — with where it came from and where it went: what an analytics or a log of screens
+needs. Keep the `Subscription` it returns for as long as you listen, or set it up for the
+router's whole life with `.observer(..)` when you make the router (that one is also told of the
+first screen).
+
+```rust
+use frus::{GoRoute, GoRouter, Text};
+
+fn logged() -> GoRouter {
+    GoRouter::new(vec![GoRoute::new("/", |_, _| Text::new("Home"))])
+        .observer(|change| frus::log::info!("{:?}: {}", change.kind, change.to))
+}
+```
+
 ## The shape of a screen: `Scaffold`
 
 `Scaffold` puts the usual parts of a screen where people expect them: an app bar at the top,
@@ -232,7 +328,9 @@ shape for a sheet that rises from the bottom (`.sheet(content)`, `.body(screen)`
 ## Tabs and drawers
 
 `TabBar` with a `TabBarView`, `NavigationBar`, `NavigationRail` and `NavigationDrawer` switch
-between sections of one screen; the selected index is the state's, like any other control. The
+between sections of one screen; the selected index is the state's, like any other control. For
+tabs that each keep a stack of screens of their own, see
+[Tabs that keep their pages](#tabs-that-keep-their-pages). The
 widget gallery (`frus-examples/widgets`, under Navigation) has each one, and
 `frus-examples/navigation` is a shop of eight screens built on the router: nested routes,
 names, queries, a guard and a page that is not found.

@@ -85,6 +85,8 @@ pub struct Navigator<Msg = crate::callback::Callback> {
     children: Vec<Box<dyn Widget<Msg>>>,
     /// How many of the first children are retained: kept, and not shown.
     hidden: usize,
+    /// Whether it takes its parent's room rather than its own size.
+    fills: bool,
 }
 
 impl<Msg: 'static> Navigator<Msg> {
@@ -107,6 +109,7 @@ impl<Msg: 'static> Navigator<Msg> {
             clips: true,
             children: vec![Box::new(Keyed::new(key, screen))],
             hidden: 0,
+            fills: false,
         }
     }
 
@@ -143,6 +146,20 @@ impl<Msg: 'static> Navigator<Msg> {
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.width = width;
         self.height = height;
+        self
+    }
+
+    /// Makes the navigator **take the room its parent gives it** instead of the window's size:
+    /// a stack of pages inside a frame — the body of a scaffold with a bottom bar, say.
+    ///
+    /// ```
+    /// use frus_widgets::{Navigator, Text};
+    ///
+    /// let body: Navigator = Navigator::new(0, Text::new("Inbox")).expand();
+    /// # let _ = body;
+    /// ```
+    pub fn expand(mut self) -> Self {
+        self.fills = true;
         self
     }
 
@@ -184,6 +201,14 @@ impl<Msg: 'static> Navigator<Msg> {
 
 impl<Msg> Widget<Msg> for Navigator<Msg> {
     fn style(&self) -> Style {
+        if self.fills {
+            return Style {
+                width: Dimension::Percent(1.0),
+                height: Dimension::Percent(1.0),
+                flex_grow: 1.0,
+                ..Default::default()
+            };
+        }
         Style {
             width: Dimension::Length(self.width),
             height: Dimension::Length(self.height),

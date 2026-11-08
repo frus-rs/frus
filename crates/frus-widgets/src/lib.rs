@@ -450,7 +450,10 @@ pub use responsive::{responsive, Responsive};
 pub use restoration::{restoration_scope, RestorableValue, Restoration, RestorationBucket};
 pub use richtext::RichText;
 pub use rotatedbox::RotatedBox;
-pub use router::{GoRoute, GoRouter, GoRouterState};
+pub use router::{
+    GoRoute, GoRouter, GoRouterState, NavigationShell, PopResult, RouteChange, RouteChangeKind,
+    ShellBack, ShellBranch,
+};
 pub use rowcolumn::{Column, MainAxisSize, Row, VerticalDirection};
 pub use runtime::{
     spring_ease, spring_step, Anim, Edit, Runtime, ScrollBallistic, ScrollState, ScrollbarFade,
