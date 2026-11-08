@@ -1,31 +1,50 @@
-use frus::{
-    BuildContext, CircleAvatar, Color, FontWeight,
-    StatelessWidget, Text, Widget,
+use frus::{BuildContext, Container, FontWeight, StatelessWidget, Widget};
+
+use crate::common::{
+    colors::{green_tint_strong, grey, light_gray, primary_color, surface},
+    ui::{filled, text, FULL},
 };
 
+/// A member's 28 px avatar in a project's stack: a white ring keeps the overlap readable.
 pub(crate) struct MemberAvatar {
-    pub name: String,
-    pub color: Color,
+    pub letter: String,
+    pub you: bool,
 }
 
 impl MemberAvatar {
-    pub fn new(name: String, color: Color) -> Self {
-        Self { name, color }
+    pub(crate) fn new(letter: impl Into<String>, you: bool) -> Self {
+        Self {
+            letter: letter.into(),
+            you,
+        }
     }
 }
 
 impl StatelessWidget for MemberAvatar {
     fn build(&self, _cx: &BuildContext) -> Box<dyn Widget> {
-        let content = CircleAvatar::new()
-            .child(
-                Text::new(self.name.to_string().split_at(1).0.to_uppercase())
-                    .color(self.color)
-                    .size(10.0)
-                    .weight(FontWeight::SemiBold),
-            )
-            .radius(14.0)
-            .background_color(self.color.with_alpha(0.15));
-
-        Box::new(content)
+        let (fill, ink) = if self.you {
+            (green_tint_strong(), primary_color())
+        } else {
+            (light_gray(), grey())
+        };
+        Box::new(
+            Container::new()
+                .width(28.0)
+                .height(28.0)
+                .decoration(filled(surface(), FULL))
+                .padding(2.0)
+                .child(
+                    Container::new()
+                        .decoration(filled(fill, FULL))
+                        .alignment(frus::Alignment::CENTER)
+                        .child(text(
+                            self.letter.clone(),
+                            10.0,
+                            12.0,
+                            ink,
+                            FontWeight::Medium,
+                        )),
+                ),
+        )
     }
 }

@@ -6,7 +6,6 @@ pub(crate) struct LoginState {
     pub visibility: bool,
     /// Errors are shown only after the first submit attempt.
     pub submitted: bool,
-    pub loading: bool,
 }
 
 impl LoginState {

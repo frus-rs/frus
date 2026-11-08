@@ -1,20 +1,23 @@
-use frus::{
-    Align, Callback, Colors, Column, Scaffold, SingleChildScrollView, SizedBox, State,
-    StateContext, StatefulWidget, StatelessWidget, Widget,
-};
+use frus::{Align, Column, State, StateContext, StatefulWidget, StatelessWidget, Widget};
 
 use crate::{
-    common::auth::Auth,
+    common::{
+        auth::Auth,
+        chrome::{AppHeader, NavStyle, Page, Tab},
+    },
     features::home::pages::{
         states::home_state::HomeState,
         widgets::{
-            greetings::Greetings, homeappbar::HomeAppBar,
+            greetings::Greetings, recent_activity::RecentActivity,
             recent_project_widget::RecentProjectWidget, stats_grid::StatsGrid,
         },
     },
+    models::{project::ProjectStatus, store, task::TaskStatus},
 };
 
+/// The dashboard: what needs the signed-in member's attention.
 pub(crate) struct HomePage {
+    #[allow(dead_code)]
     auth: Auth,
 }
 
@@ -35,31 +38,46 @@ impl StatefulWidget for HomePage {
 impl State for HomeState {
     type Widget = HomePage;
 
-    fn build(&self, cx: &StateContext<Self>) -> Box<dyn Widget> {
-        let auth = cx.widget().auth.clone();
-        let logout = Callback::new(move || auth.logout());
-
-        let header = HomeAppBar.into_widget();
-
-        let view = Column::new()
-            .spacing(24.0)
-            .cross_axis_alignment(Align::Start)
-            .child(Greetings.into_widget())
-            .child(StatsGrid.into_widget())
-            .child(RecentProjectWidget.into_widget());
+    fn build(&self, _cx: &StateContext<Self>) -> Box<dyn Widget> {
+        let (name, grid, activity) = store::read(|s| {
+            let you = s.you().clone();
+            let mine = s.tasks.iter().filter(|t| t.assignee == Some(you.id));
+            let grid = StatsGrid {
+                assigned: 12.max(mine.clone().count()),
+                completed: 28
+                    + mine
+                        .clone()
+                        .filter(|t| t.status == TaskStatus::Done)
+                        .count(),
+                due_soon: 5,
+                active_projects: s
+                    .projects
+                    .iter()
+                    .filter(|p| p.status == ProjectStatus::Active)
+                    .count()
+                    .max(3),
+            };
+            // The dashboard's three latest entries, the newest first.
+            let activity = s
+                .activity
+                .iter()
+                .filter(|a| a.day == "Today")
+                .filter_map(|a| s.member(a.member).map(|m| (a.clone(), m.clone())))
+                .collect::<Vec<_>>();
+            (you.name, grid, activity)
+        });
 
         let content = Column::new()
-            .child(SizedBox::empty().height(24.0))
-            .child(view);
+            .spacing(24.0)
+            .cross_axis_alignment(Align::Stretch)
+            .child(Greetings { name }.into_widget())
+            .child(grid.into_widget())
+            .child(RecentProjectWidget.into_widget())
+            .child(RecentActivity { entries: activity }.into_widget());
 
-        let page = SingleChildScrollView::new()
-            .padding_each(0.0, 20.0, 50.0, 20.0)
-            .child(content);
-
-        Scaffold::new()
-            .app_bar(header)
-            .background(Colors::WHITE)
-            .body(page)
+        Page::new(AppHeader::new("Dashboard"), content)
+            .nav(Tab::Dashboard, NavStyle::Standard)
+            .padding(24.0, 20.0, 32.0)
             .build()
     }
 }

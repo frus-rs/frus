@@ -15,7 +15,7 @@ crate-type = ["rlib", "cdylib"]
 # **A single dependency**: the `frus` facade re-exports shell + widgets + `main!` (and
 # anyhow/log). frus is not (yet) published on crates.io, so this points at the local
 # checkout; once it is published, replace it with:  frus = "0.2"
-frus = { path = "../../../../crates/frus", default-features = false, features = ["images"]}
+frus = { path = "../../../../crates/frus", default-features = false, features = ["images", "svg"] }
 
 # Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -52,6 +52,20 @@ value = "frus_native_activity_on_create"
 [package.metadata.android.sdk]
 min_sdk_version = 24
 target_sdk_version = 34
+
+# --- While you develop ---
+#
+# `frus run` builds in debug. Left at Cargo's default, that compiles the renderer, the
+# text shaper and frus itself without any optimisation: frames cost several times their
+# budget and every page change stutters. Optimising the dependencies, and only them,
+# keeps `frus run` smooth; your own crate stays quick to rebuild and to hot-reload. The
+# dependencies take longer to build the first time, then they are cached.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Dev profile: faster compiles, without making the app unpleasant to use.
+[profile.dev]
+opt-level = 1
 
 # --- What you ship ---
 #
