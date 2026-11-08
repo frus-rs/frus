@@ -8,11 +8,24 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 777 so far, each documenting the objective, the alternatives
+> record — one per step, 778 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Motion tokens, status colours, theme extensions, animation speed and reduced motion
+  everywhere** (J778). `theme.motion` (`MotionTheme`) holds the design system's durations
+  (`short1` to `extra_long4`), easings (`standard`, `emphasized` and their decelerate and
+  accelerate forms, `legacy`) and springs (`spring_fast`, `spring_default`, `spring_slow`);
+  `Theme::with_motion` retimes an application, and `BottomNavigationBar` reads them. The colour
+  scheme gains `success`, `warning` and `info`, each with `on_`, container and on-container
+  roles, harmonised toward the seed in `from_seed`; `Alert` uses them for its kinds and
+  `SnackBar` for its success stripe and a new `warning()` kind. `Theme::with_extension` and
+  `theme.extension::<T>()` carry an application's own tokens (`ThemeExtension`), interpolated
+  during a theme fade. `frus::set_animation_speed(0.1)` slows every animation ten times for
+  debugging (0.01 to 100). The system's reduce-motion setting is now read on Windows, macOS,
+  Linux (GTK), iOS and the Web as well as Android; `MediaQuery::reduce_motion()` reports it,
+  and `Skeleton`'s shimmer and a chart's pulsing halo hold still under it.
 - **Haptic feedback and connectivity** (J777). `frus::haptics::light()`, `medium()`,
   `heavy()`, `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`: the
   system's touch feedback on Android (`View.performHapticFeedback`, the vibrator standing in,

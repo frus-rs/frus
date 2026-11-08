@@ -100,6 +100,8 @@ mod restoration_tests;
 #[cfg(target_os = "macos")]
 mod macos_permission;
 mod permission;
+// Whether the user asked for less motion, on the desktops, iOS and the Web (milestone 778).
+mod reduce_motion;
 mod reload;
 // Where each platform keeps the restoration data (milestone 753).
 mod restoration;

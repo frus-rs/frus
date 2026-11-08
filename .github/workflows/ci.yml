@@ -64,6 +64,7 @@ jobs:
         run: |
           cargo test -p frus --features "net json testing"
           cargo test -p frus-shell --features net
+          cargo test -p frus-shell --features testing --test animation_speed
 
       # The tray icon on Linux (milestone 706): its menus are made with GTK 3, which nothing
       # else here needs, so it is built on its own rather than through the demo, which leaves

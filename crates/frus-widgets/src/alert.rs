@@ -115,24 +115,27 @@ impl Alert {
         self
     }
 
-    /// Variante avertissement.
+    /// The warning variant.
     pub fn warning(mut self) -> Self {
         self.kind = AlertKind::Warning;
         self
     }
 
-    /// Variante erreur.
+    /// The error variant.
     pub fn error(mut self) -> Self {
         self.kind = AlertKind::Error;
         self
     }
 
+    /// The kind's colour: a role of the scheme for each (milestone 778), so a theme that
+    /// changes `success` or `warning` changes every alert that says so.
     fn accent(&self, theme: &Theme) -> Color {
+        let scheme = &theme.scheme;
         match self.kind {
-            AlertKind::Info => theme.primary,
-            AlertKind::Success => Color::rgb8(70, 190, 120),
-            AlertKind::Warning => Color::rgb8(230, 170, 40),
-            AlertKind::Error => Color::rgb8(210, 96, 96),
+            AlertKind::Info => scheme.info,
+            AlertKind::Success => scheme.success,
+            AlertKind::Warning => scheme.warning,
+            AlertKind::Error => scheme.error,
         }
     }
 
@@ -280,8 +283,9 @@ mod tests {
             &Theme::default(),
             &mut scene,
         );
-        let warn = Color::rgb8(230, 170, 40);
-        // The accent bar (the variant's solid color) is present.
+        // The accent bar is the scheme's `warning` role (milestone 778), not a colour of
+        // the widget's own.
+        let warn = Theme::default().scheme.warning;
         assert!(scene
             .primitives()
             .iter()
@@ -295,6 +299,22 @@ mod tests {
             .primitives()
             .iter()
             .any(|p| matches!(p, Primitive::Text { text, .. } if text == "Attention !")));
+    }
+
+    /// **Every kind is a role of the scheme** (milestone 778): a theme that changes
+    /// `success` changes the success alerts.
+    #[test]
+    fn every_kind_takes_its_role_from_the_scheme() {
+        let mut theme = Theme::default();
+        theme.scheme.success = Color::rgb8(1, 2, 3);
+        let s = &theme.scheme;
+        assert_eq!(Alert::new("x").accent(&theme), s.info);
+        assert_eq!(
+            Alert::new("x").success().accent(&theme),
+            Color::rgb8(1, 2, 3)
+        );
+        assert_eq!(Alert::new("x").warning().accent(&theme), s.warning);
+        assert_eq!(Alert::new("x").error().accent(&theme), s.error);
     }
 
     /// The message **wraps** to the offered width: narrower → taller (and never

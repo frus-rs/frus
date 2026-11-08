@@ -21,14 +21,6 @@ use crate::widget::Widget;
 /// A snack bar's corner and how far off the page it sits (`snack_bar.dart:983`, `:980`).
 pub const SNACK_BAR_RADIUS: f32 = 4.0;
 pub const SNACK_BAR_ELEVATION: f32 = 6.0;
-/// The stripe for a **success**.
-///
-/// Every other colour here is a role. This one cannot be: Material 3's scheme carries
-/// `error` and nothing that means *it worked*, so a success has no role to reach for and
-/// a framework that shipped no colour at all would be shipping no success variant. It is
-/// this crate's own, and [`SnackBarTheme::success_color`] is where an application replaces
-/// it.
-const SUCCESS_ACCENT: Color = Color::rgb(70.0 / 255.0, 190.0 / 255.0, 120.0 / 255.0);
 
 /// A bar's horizontal padding, which is **not the same for both behaviours**
 /// (`snack_bar.dart:687`): a fixed bar spans the page and holds its text further in; a
@@ -106,6 +98,8 @@ pub enum SnackBarKind {
     Info,
     /// Something went well.
     Success,
+    /// Something deserves attention, short of an error.
+    Warning,
     /// Something went wrong.
     Error,
 }
@@ -266,6 +260,12 @@ impl<Msg: Clone + 'static> SnackBar<Msg> {
     /// The success variant.
     pub fn success(mut self) -> Self {
         self.kind = SnackBarKind::Success;
+        self
+    }
+
+    /// The warning variant: the scheme's `warning` stripe.
+    pub fn warning(mut self) -> Self {
+        self.kind = SnackBarKind::Warning;
         self
     }
 
@@ -491,7 +491,8 @@ impl<Msg> SnackBar<Msg> {
 
     /// The stripe's colour: the caller's word, then the theme's, then the kind's.
     ///
-    /// Two of the three kinds now name a role. The third cannot — see [`SUCCESS_ACCENT`].
+    /// Every kind names a role of the scheme (milestone 778): `success` and `warning`
+    /// joined `error` there.
     fn accent_color(&self, theme: &Theme) -> Color {
         if let Some(color) = self.accent.or(theme.widgets.snack_bar.accent_color) {
             return color;
@@ -504,7 +505,8 @@ impl<Msg> SnackBar<Msg> {
                 .widgets
                 .snack_bar
                 .success_color
-                .unwrap_or(SUCCESS_ACCENT),
+                .unwrap_or(theme.scheme.success),
+            SnackBarKind::Warning => theme.scheme.warning,
             SnackBarKind::Error => theme.scheme.error,
         }
     }
@@ -1223,7 +1225,7 @@ mod tests {
         assert!(scene
             .primitives()
             .iter()
-            .any(|p| matches!(p, Primitive::Rect { color, .. } if *color == SUCCESS_ACCENT)));
+            .any(|p| matches!(p, Primitive::Rect { color, .. } if *color == Theme::default().scheme.success)));
         assert!(scene
             .primitives()
             .iter()
@@ -1290,7 +1292,11 @@ mod tests {
         );
         assert_eq!(
             SnackBar::<()>::new("x").success().accent_color(&theme),
-            SUCCESS_ACCENT
+            theme.scheme.success
+        );
+        assert_eq!(
+            SnackBar::<()>::new("x").warning().accent_color(&theme),
+            theme.scheme.warning
         );
 
         let told = Color::rgb8(1, 2, 3);
