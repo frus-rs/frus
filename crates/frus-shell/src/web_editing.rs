@@ -238,6 +238,34 @@ pub(crate) fn element_top(
     field_top.min(lowest).max(canvas_top)
 }
 
+/// Where the editing element goes, as `(top, height)` in the page's CSS pixels, while the page
+/// pans for the keyboard (milestone 779): over the field from `field_top`, `height` tall, when
+/// the strip the keyboard leaves (`room`, the visual viewport's height) holds it; otherwise a
+/// band as tall as the strip around the line being typed in — `line`, its top and height,
+/// when the field knows it (a multi-line field), else the middle of the field, where a
+/// single-line field draws its text.
+///
+/// The browser pans to the element, centring it in the strip. Centring the whole field when it
+/// is taller than the strip showed whatever happened to be in its middle; the line with the
+/// caret is the part of it the person needs to see.
+pub(crate) fn pan_band(
+    field_top: f64,
+    height: f64,
+    line: Option<(f64, f64)>,
+    room: f64,
+) -> (f64, f64) {
+    if height <= room || room < 1.0 {
+        return (field_top, height);
+    }
+    let middle = match line {
+        Some((top, line_height)) => top + line_height / 2.0,
+        None => field_top + height / 2.0,
+    };
+    // Kept inside the field: a band hanging past it would show what is around it instead.
+    let top = (middle - room / 2.0).clamp(field_top, field_top + height - room);
+    (top, room)
+}
+
 /// What becomes of the editing element in a frame (milestone 765).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Editing<F> {
@@ -304,6 +332,9 @@ mod web {
         pub text: &'a str,
         /// Its caret, selection and composition.
         pub edit: Edit,
+        /// The line the caret is on, as its top below the field's top and its height, in the
+        /// layout's pixels, when the field knows it (milestone 779).
+        pub caret_line: Option<(f32, f32)>,
     }
 
     type Changes = Rc<RefCell<Vec<(WidgetId, Element)>>>;
@@ -452,8 +483,9 @@ mod web {
             let bounds = self.canvas.get_bounding_client_rect();
             let height = (field.rect.height * css).max(1.0);
             let pan = self.keyboard_fit() == KeyboardFit::Pan;
+            let field_top = bounds.top() + f64::from(field.rect.y * css);
             let top = super::element_top(
-                bounds.top() + f64::from(field.rect.y * css),
+                field_top,
                 f64::from(height),
                 bounds.top(),
                 bounds.bottom(),
@@ -461,6 +493,23 @@ mod web {
                 self.touch,
                 pan,
             );
+            // Panned for a keyboard that leaves less than the field: the line being typed in
+            // is what the browser is to show (milestone 779).
+            let vv = web_sys::window().and_then(|window| window.visual_viewport());
+            let (top, height) = match (&vv, pan) {
+                (Some(vv), true) => {
+                    let (top, band) = super::pan_band(
+                        field_top,
+                        f64::from(height),
+                        field.caret_line.map(|(dy, line)| {
+                            (field_top + f64::from(dy * css), f64::from(line * css))
+                        }),
+                        vv.height(),
+                    );
+                    (top, band as f32)
+                }
+                _ => (top, height),
+            };
             let style = format!(
                 "{STYLE}left:{}px;top:{}px;width:{}px;height:{}px;",
                 bounds.left() + f64::from(field.rect.x * css),
@@ -511,7 +560,7 @@ mod web {
             // A page that pans for the keyboard shows the field being edited: the browser pans
             // to an element it focuses, but not to one that moves while it has the focus.
             if pan {
-                if let Some(vv) = web_sys::window().and_then(|window| window.visual_viewport()) {
+                if let Some(vv) = vv {
                     let seen = crate::web_page::in_sight(
                         top,
                         top + f64::from(height),
@@ -1047,6 +1096,33 @@ mod tests {
         // Resized instead, the element would be kept in the top quarter of the canvas.
         let kept = element_top(300.0, 48.0, 36.18, 339.2, 0.0, true, false);
         assert!((kept - 111.935).abs() < 1e-9);
+    }
+
+    /// Panned for a keyboard that leaves less than the field, the browser is shown the line
+    /// being typed in (milestone 779). On the phone in landscape Chrome left the page 16 CSS
+    /// pixels for a 45-pixel field.
+    #[test]
+    fn a_strip_shorter_than_the_field_shows_the_line_being_typed_in() {
+        // Room for the field: the element is over all of it.
+        assert_eq!(pan_band(120.0, 45.0, None, 38.0 + 7.0), (120.0, 45.0));
+        // A single-line field: the middle of the field, as tall as the strip.
+        assert_eq!(pan_band(120.0, 45.0, None, 16.0), (134.5, 16.0));
+        // A multi-line field: around the caret's line.
+        assert_eq!(
+            pan_band(120.0, 120.0, Some((180.0, 20.0)), 16.0),
+            (182.0, 16.0)
+        );
+        // A line near the field's edge: the band stays inside the field.
+        assert_eq!(
+            pan_band(120.0, 120.0, Some((118.0, 20.0)), 16.0),
+            (120.0, 16.0)
+        );
+        assert_eq!(
+            pan_band(120.0, 120.0, Some((236.0, 20.0)), 16.0),
+            (224.0, 16.0)
+        );
+        // No visual viewport to speak of: over the field.
+        assert_eq!(pan_band(120.0, 45.0, None, 0.0), (120.0, 45.0));
     }
 
     /// A focused field the frame had no room for keeps its element, and so the keyboard;

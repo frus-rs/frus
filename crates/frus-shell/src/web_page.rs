@@ -375,6 +375,59 @@ impl KeyboardFitter {
     }
 }
 
+/// The scrolls the keyboard set off, to be taken back when the page pans after all
+/// (milestone 779).
+///
+/// The frame that learns which way the page makes room for the keyboard is laid out above it
+/// ([`KeyboardFitter`]), and the shell brings the focused field back into that frame's view as
+/// it does for any keyboard — scrolling the field to the top of the few pixels left in
+/// landscape. When the page then pans instead, the application gets its whole size back but
+/// kept that scroll: the field was scrolled out of its own region, under the app bar, and the
+/// browser panned to a place where nothing of the field showed. With the keyboard gone the page
+/// stayed scrolled past the field. The scrolls are recorded here as they are made, and put back
+/// when the choice is a pan.
+#[derive(Debug, Default)]
+pub(crate) struct KeyboardReveal {
+    /// Each region the keyboard scrolled, and its offset before the first such scroll.
+    before: Vec<(frus_widgets::WidgetId, (f32, f32))>,
+}
+
+impl KeyboardReveal {
+    /// Records the scrolls `moves` (a region and the offset it is sent to) the keyboard set off
+    /// in `runtime`, before they are made. A region already recorded keeps its first offset.
+    pub(crate) fn record(
+        &mut self,
+        runtime: &frus_widgets::Runtime,
+        moves: &[(frus_widgets::WidgetId, (f32, f32))],
+    ) {
+        for (area, _) in moves {
+            if self.before.iter().all(|(seen, _)| seen != area) {
+                let offset = runtime.scroll.get(area).copied().unwrap_or((0.0, 0.0));
+                self.before.push((*area, offset));
+            }
+        }
+    }
+
+    /// Puts every recorded region back where it was, at once, and forgets them. Whether there
+    /// was any.
+    pub(crate) fn undo(&mut self, runtime: &mut frus_widgets::Runtime) -> bool {
+        let any = !self.before.is_empty();
+        for (area, offset) in self.before.drain(..) {
+            runtime.scroll_ballistic.remove(&area);
+            runtime.scroll_velocity.remove(&area);
+            runtime.scroll.insert(area, offset);
+            runtime.scroll_target.insert(area, offset);
+        }
+        any
+    }
+
+    /// Forgets the recorded scrolls: the keyboard went, or the application is laid out above
+    /// it for good, and they stay as made.
+    pub(crate) fn forget(&mut self) {
+        self.before.clear();
+    }
+}
+
 /// Whether an element from `top` to `bottom` is as much in sight as a visual viewport from
 /// `vv_top`, `vv_height` tall, can show of it: all of it, or, for one taller than the visual
 /// viewport, as much as fits. All in the layout viewport's CSS pixels.
@@ -422,6 +475,26 @@ pub(crate) fn keyboard_cover_of(canvas: &web_sys::HtmlCanvasElement) -> f64 {
     // The canvas's box is in the layout viewport's coordinates, and so is the visual
     // viewport's offset.
     keyboard_cover(bottom, vv.offset_top(), vv.height(), vv.scale())
+}
+
+/// What the browser may do with a touch on the canvas by itself: nothing (milestone 779).
+///
+/// winit gives the canvas no `touch-action`, and left to its default (`auto`) a phone's browser
+/// keeps its own gestures over the application: a downward drag at the top of the page can pull
+/// to refresh (reloading the application), a double tap zooms the page, and a pan the browser
+/// starts cancels the pointer (`pointercancel`) for the application. The application draws its
+/// own scrolling, zooming and gestures, so it is given every touch.
+pub(crate) const CANVAS_TOUCH_ACTION: &str = "none";
+
+/// Gives every touch on `window`'s canvas to the application ([`CANVAS_TOUCH_ACTION`]).
+#[cfg(web)]
+pub(crate) fn keep_touches(window: &winit::window::Window) {
+    use winit::platform::web::WindowExtWebSys;
+    if let Some(canvas) = window.canvas() {
+        let _ = canvas
+            .style()
+            .set_property("touch-action", CANVAS_TOUCH_ACTION);
+    }
 }
 
 /// Asks `window` for a frame whenever the visual viewport changes size — the keyboard
@@ -681,6 +754,45 @@ mod tests {
         // The focus goes: no choice left.
         assert!(!fitter.learn(portrait, None, 285.78));
         assert_eq!(fitter.fit(portrait), KeyboardFit::Resize);
+    }
+
+    /// The browser keeps no touch on the canvas for itself (milestone 779).
+    #[test]
+    fn the_browser_keeps_no_touch_for_itself() {
+        assert_eq!(CANVAS_TOUCH_ACTION, "none");
+    }
+
+    /// The scrolls a keyboard set off are put back when the page pans after all
+    /// (milestone 779). On the phone the frame laid out above a landscape keyboard scrolled
+    /// the task field to the top of the 16 pixels left; once the page panned the application
+    /// kept that scroll, the field out of sight, and kept it after the keyboard went.
+    #[test]
+    fn the_scrolls_a_keyboard_set_off_are_taken_back_for_a_pan() {
+        use frus_widgets::{Runtime, WidgetId};
+        let page = WidgetId::from_u64(1);
+        let strip = WidgetId::from_u64(2);
+        let mut runtime = Runtime::default();
+        runtime.scroll.insert(page, (0.0, 40.0));
+        let mut reveal = KeyboardReveal::default();
+        // The first frame above the keyboard: the page scrolls to 116, the strip from nothing.
+        reveal.record(&runtime, &[(page, (0.0, 116.0)), (strip, (30.0, 0.0))]);
+        runtime.scroll_target.insert(page, (0.0, 116.0));
+        runtime.scroll.insert(page, (0.0, 80.0));
+        // A second frame, the keyboard still growing: the first offset is the one kept.
+        reveal.record(&runtime, &[(page, (0.0, 130.0))]);
+        runtime.scroll_target.insert(page, (0.0, 130.0));
+        assert!(reveal.undo(&mut runtime));
+        assert_eq!(runtime.scroll.get(&page), Some(&(0.0, 40.0)));
+        assert_eq!(runtime.scroll_target.get(&page), Some(&(0.0, 40.0)));
+        assert_eq!(runtime.scroll.get(&strip), Some(&(0.0, 0.0)));
+        // Nothing left to take back.
+        assert!(!reveal.undo(&mut runtime));
+        // Under a resize the scrolls stay.
+        reveal.record(&runtime, &[(page, (0.0, 116.0))]);
+        runtime.scroll.insert(page, (0.0, 116.0));
+        reveal.forget();
+        assert!(!reveal.undo(&mut runtime));
+        assert_eq!(runtime.scroll.get(&page), Some(&(0.0, 116.0)));
     }
 
     /// The field is in sight when the visual viewport shows all of it, or all it can.

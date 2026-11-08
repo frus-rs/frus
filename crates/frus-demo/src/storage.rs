@@ -6,17 +6,28 @@
 
 use crate::prelude::*;
 
-/// Where the tasks are persisted: a file in the temporary directory, or the name of the
-/// `localStorage` entry in a browser.
-pub(crate) fn todos_path() -> PathBuf {
+/// Where the tasks are persisted: a file in the application's own data folder, or the name
+/// of the `localStorage` entry in a browser. `None` when the platform gives no folder.
+///
+/// Not the temporary folder (milestone 779): on Android that is `/data/local/tmp`, which an
+/// application cannot write, and every Save failed there.
+pub(crate) fn todos_path() -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::temp_dir().join("frus-todos.txt")
+        frus_shell::app_data_dir().map(|dir| dir.join("frus-todos.txt"))
     }
-    // `temp_dir` panics where there is no filesystem, so the name is all it is.
+    // The browser has no file system: the name is all it is.
     #[cfg(target_arch = "wasm32")]
     {
-        PathBuf::from("frus-todos")
+        Some(PathBuf::from("frus-todos"))
+    }
+}
+
+/// What the reader is told once a save is done: that it is, or why it is not.
+pub(crate) fn save_message(saved: &std::io::Result<()>) -> String {
+    match saved {
+        Ok(()) => "Saved".to_string(),
+        Err(error) => format!("Could not save: {error}"),
     }
 }
 
