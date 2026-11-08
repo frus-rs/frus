@@ -167,6 +167,15 @@ pub(crate) fn usage_strings(declared: &[Declared]) -> Vec<(&'static str, &str)> 
         .collect()
 }
 
+/// The Android permissions frus itself uses, declared for every application: the vibrator that
+/// stands in for the system's touch feedback (`frus::haptics`), and reading which network the
+/// device is on (`frus::connectivity`). Both are granted when the application is installed,
+/// without a question to the person (milestone 777).
+pub(crate) const ALWAYS: [&str; 2] = [
+    "android.permission.VIBRATE",
+    "android.permission.ACCESS_NETWORK_STATE",
+];
+
 /// The Android permissions the declarations need, each once.
 pub(crate) fn android_permissions(declared: &[Declared]) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = Vec::new();
@@ -237,7 +246,7 @@ pub(crate) fn android_additions(manifest: &str, wanted: &[&str]) -> Result<Optio
     }
     text.push_str(newline);
     text.push_str(&format!(
-        "# Written by frus from [{SECTION}]: Android refuses, without asking, a permission its \
+        "# Written by frus: Android refuses, without asking, a permission its \
          manifest does not name.{newline}"
     ));
     for (i, name) in missing.iter().enumerate() {
@@ -252,10 +261,8 @@ pub(crate) fn android_additions(manifest: &str, wanted: &[&str]) -> Result<Optio
 /// Adds to the application's `Cargo.toml` the Android permissions its declarations need, saying
 /// which. Nothing is written when none is missing.
 pub(crate) fn write_android(root: &Path, declared: &[Declared]) -> Result<(), String> {
-    let wanted = android_permissions(declared);
-    if wanted.is_empty() {
-        return Ok(());
-    }
+    let mut wanted: Vec<&str> = ALWAYS.to_vec();
+    wanted.extend(android_permissions(declared));
     let path = root.join("Cargo.toml");
     let manifest = std::fs::read_to_string(&path)
         .map_err(|e| format!("could not read {}: {e}", path.display()))?;
@@ -265,7 +272,7 @@ pub(crate) fn write_android(root: &Path, declared: &[Declared]) -> Result<(), St
     std::fs::write(&path, format!("{manifest}{addition}"))
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
     crate::report::say(&format!(
-        "Declared for Android in Cargo.toml, from [{SECTION}]: {}",
+        "Declared for Android in Cargo.toml: {}",
         wanted
             .iter()
             .filter(|name| addition.contains(*name))
@@ -527,6 +534,21 @@ mod tests {
         assert!(error.contains("RECORD_AUDIO"), "{error}");
     }
 
+    /// **An application that declares nothing still gets what frus uses**: the vibrator and
+    /// the network state (milestone 777).
+    #[test]
+    fn write_android_declares_what_frus_uses_without_being_asked() {
+        let root = std::env::temp_dir().join(format!("frus-perm-always-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
+        write_android(&root, &[]).unwrap();
+        let written = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        for name in ALWAYS {
+            assert_eq!(written.matches(name).count(), 1, "{written}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn write_android_adds_to_the_manifest_once() {
         let root = std::env::temp_dir().join(format!("frus-perm-{}", std::process::id()));
@@ -536,6 +558,12 @@ mod tests {
         write_android(&root, &declared).unwrap();
         let once = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(once.contains("ACCESS_FINE_LOCATION") && once.contains("ACCESS_COARSE_LOCATION"));
+        // What frus itself uses, declared with nothing asked for (milestone 777).
+        assert!(once.contains("android.permission.VIBRATE"), "{once}");
+        assert!(
+            once.contains("android.permission.ACCESS_NETWORK_STATE"),
+            "{once}"
+        );
         assert_eq!(once.matches("android.permission.CAMERA").count(), 1);
         write_android(&root, &declared).unwrap();
         assert_eq!(

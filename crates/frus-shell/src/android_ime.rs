@@ -133,6 +133,8 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     #[cfg(feature = "notifications")]
     crate::android_notification::install(&mut env, &loader, &activity);
     crate::android_permission::install(&mut env, &loader, &activity);
+    // And haptics with the connectivity (milestone 777).
+    crate::android_device::install(&mut env, &loader, &activity);
     // And state restoration (milestone 753), when the application asked for it.
     crate::restoration::install(&mut env, &loader, &activity);
 

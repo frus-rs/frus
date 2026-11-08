@@ -8,7 +8,7 @@
 //! nothing but the state. Only the statistics read the shared task list.
 
 use crate::prelude::*;
-use frus_widgets::{column, row};
+use frus_widgets::{column, row, Button, Wrap};
 use std::collections::HashSet;
 
 /// Labels of the dropdown menu (the Settings screen).
@@ -480,6 +480,7 @@ impl State for SettingsState {
             }))
             .crumb("Home")
             .crumb("Settings"),
+            device(theme),
             row![tabs].justify(Justify::Center),
         ]
         .padding(20.0)
@@ -521,6 +522,49 @@ impl State for SettingsState {
                 .child(SafeArea::new(screen)),
         )
     }
+}
+
+/// **The device** (milestone 777): which network it is on, rebuilt as that changes, and a button
+/// per kind of haptic feedback. A vibration cannot be seen, so each press is logged with what
+/// the platform answered.
+fn device(theme: &Theme) -> Box<dyn Widget> {
+    use std::time::Duration;
+    let network = frus_widgets::connectivity();
+    let haptic = |label: &'static str, give: fn() -> Result<(), frus_shell::HapticsError>| {
+        Button::new(label).on_press(on(move || {
+            log::info!("haptics: {label} -> {:?}", give());
+        }))
+    };
+    let mut buttons = Wrap::new().gap(8.0);
+    for (label, give) in [
+        ("Light", frus_shell::haptics::light as fn() -> _),
+        ("Medium", frus_shell::haptics::medium),
+        ("Heavy", frus_shell::haptics::heavy),
+        ("Selection", frus_shell::haptics::selection),
+        ("Success", frus_shell::haptics::success),
+        ("Warning", frus_shell::haptics::warning),
+        ("Error", frus_shell::haptics::error),
+    ] {
+        buttons = buttons.child(haptic(label, give));
+    }
+    buttons = buttons.child(Button::new("Vibrate 400 ms").on_press(on(|| {
+        log::info!(
+            "haptics: vibrate 400 ms -> {:?}",
+            frus_shell::haptics::vibrate(Duration::from_millis(400))
+        );
+    })));
+    Box::new(
+        Card::new().child(
+            column![
+                text(format!("Network: {network:?}")).size(18.0),
+                text("On a network is not on the internet.")
+                    .size(14.0)
+                    .color(theme.muted),
+                buttons,
+            ]
+            .gap(10.0),
+        ),
+    )
 }
 
 impl SettingsState {

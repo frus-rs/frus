@@ -105,6 +105,14 @@ value = "frus_native_activity_on_create"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.POST_NOTIFICATIONS"
 
+# What frus itself uses (milestone 777): the vibrator behind `frus::haptics`, and the network
+# state behind `frus::connectivity`. `frus build` adds both; this demo is built with cargo-apk.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.VIBRATE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+
 [[package.metadata.android.application.activity.intent_filter]]
 actions = ["android.intent.action.VIEW"]
 categories = ["android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"]

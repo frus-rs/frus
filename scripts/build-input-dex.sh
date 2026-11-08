@@ -4,7 +4,8 @@
 # FrusSystemBars.java, the system bars of #46; FrusClipboard.java, the clipboard of
 # #22; FrusNotifications.java, the notifications of milestone 703; FrusPermissions.java,
 # the runtime permissions of milestone 730; FrusRestoration.java, the state restoration of
-# milestone 753) into one embedded dex.
+# milestone 753; FrusHaptics.java and FrusConnectivity.java, milestone 777) into one
+# embedded dex.
 # Only re-run this when a Java file changes; the resulting dex is checked in
 # (crates/frus-shell/assets/frus_input.dex) so that `cargo apk` never needs javac.
 #

@@ -39,7 +39,7 @@ notifications = ["dep:notify-rust"]
 # development files to build (`libgtk-3-dev`), the menus being made with it.
 tray = ["dep:tray-icon"]
 # The taskbar's badge and progress: `Taskbar` (milestone 708). The desktop; off by default.
-taskbar = ["dep:windows", "dep:objc2-app-kit", "dep:zbus"]
+taskbar = ["dep:objc2-app-kit", "dep:zbus"]
 # Global shortcuts: `GlobalShortcut` (milestone 709). The desktop (X11 on Linux); off by default.
 global-shortcuts = ["dep:global-hotkey"]
 net = ["dep:ureq"]
@@ -153,8 +153,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar (feature `taskbar`): its button's progress and overlay, a COM interface the raw
-# bindings below do not carry. Already in the tree through the tray and the notifications.
-windows = { version = "0.62", optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# bindings below do not carry; and the connectivity (milestone 777): the connection profile
+# Windows uses for the internet, and its network events. Already in the tree through the tray
+# and the notifications.
+windows = { version = "0.62", features = ["Foundation", "Networking_Connectivity", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
