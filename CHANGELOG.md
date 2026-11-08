@@ -13,6 +13,14 @@ any release may break.
 
 ## [Unreleased]
 
+- **Slivers** (J780). `CustomScrollView` scrolls several pieces as one: `SliverList` (fixed
+  extent, any extent, or given children), `SliverGrid` (`count` or `extent` columns),
+  `SliverToBoxAdapter`, `SliverPadding`, `SliverFillRemaining`, `SliverPersistentHeader`
+  (pinned, floating, snap) and `SliverAppBar` (pinned / floating / snap, `expanded_height`,
+  `FlexibleSpaceBar` with a title that shrinks into the toolbar and a background that fades).
+  Lists and grids build only the items in the viewport and a 250 px cache extent around it.
+  The view scrolls with the existing machinery: physics, scrollbar, keyboard, `ScrollTo`,
+  restoration. `AppBarTheme` gains `scrolled_under_background` and `scrolled_under_elevation`.
 - **Tabs with their own stacks, screens that answer, route observers** (J781).
   `GoRoute::shell(builder, branches)` puts a frame — a scaffold with a bottom bar — around
   `ShellBranch`es that each keep their own stack of pages and their state while another is

@@ -141,6 +141,13 @@ impl ItemExtents {
         }
     }
 
+    /// `count` items end to end, measured or guessed from `fallback`, whether or not the
+    /// record has been fitted to `count` yet (milestone 780).
+    pub(crate) fn total_for(&self, count: usize, fallback: f32) -> f32 {
+        let guess = self.estimate(fallback);
+        (0..count).map(|i| self.extent_or(i, guess)).sum()
+    }
+
     /// All of them, end to end.
     pub(crate) fn total(&self, estimate: f32) -> f32 {
         (0..self.known.len())
