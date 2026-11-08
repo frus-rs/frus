@@ -151,6 +151,8 @@ impl Stage {
     /// for the first time adopts its target rather than sliding in from zero. See
     /// [`Stage::settle`].
     pub fn advance<Msg: Clone + 'static>(&mut self, root: &dyn Widget<Msg>, dt: f32) -> bool {
+        // At the debugging speed, as the shell's frame takes it (milestone 778).
+        let dt = frus_widgets::dilate_frame_time(dt);
         let (regions, refresh_areas, dismissables, interactive, sheets) = {
             let ui = self.build(root);
             (

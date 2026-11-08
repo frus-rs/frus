@@ -100,6 +100,34 @@ other, with the control points of CSS's `cubic-bezier()`.
 A short duration and an easing curve — 150 to 300 ms, `ease_out` for something arriving — is
 what feels responsive.
 
+## Timing from the theme
+
+`theme.motion` holds the design system's timing, so a widget does not pick its own numbers:
+durations from `short1` (50 ms) through `medium2` (300 ms) to `extra_long4` (one second), the
+easings `standard`, `emphasized` and their `_decelerate` (entering) and `_accelerate` (leaving)
+forms, and three springs, `spring_fast`, `spring_default` and `spring_slow`:
+
+```rust
+use frus::{component, AnimationController, Button, Column, Opacity, Text, Widget};
+
+fn reveal() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let motion = cx.theme().motion.clone();
+        let fade = cx.use_animation_controller(AnimationController::unit);
+        let start = fade.clone();
+        Box::new(
+            Column::new()
+                .child(Button::new("Show").on_press(move || {
+                    start.forward(motion.medium2, motion.emphasized_decelerate.clone())
+                }))
+                .child(Opacity::new(fade.value(), Text::new("Hello"))),
+        )
+    }))
+}
+```
+
+`Theme::with_motion(MotionTheme { .. })` retimes an application in one place.
+
 ## What frus animates for you
 
 Several movements need no code: the page transition when the router pushes or pops a screen
@@ -139,5 +167,20 @@ A `StatefulWidget` keeps one in its state with `AnimationHandle::new(controller)
 `*Transition` widgets (`FadeTransition`, `SlideTransition`, `ScaleTransition`,
 `SizeTransition`, `DecoratedBoxTransition`) draw straight from a controller's progress.
 
-People who prefer the system's reduced motion setting get it: `MediaQuery::of()` reports it,
-and frus's own transitions honour it.
+People who prefer the system's reduced motion setting get it, on Android, Windows, macOS,
+Linux (GTK's setting), iOS and the Web: `MediaQuery::reduce_motion()` reports it, frus's own
+transitions complete at once, and its decorations (a placeholder's shimmer, a chart's pulsing
+halo) hold still. A decoration of your own should ask too.
+
+## Slow motion, for debugging
+
+`frus::set_animation_speed(0.1)` makes every animation ten times slower, to look at one that is
+over too fast to see; `4.0` makes them four times faster. It reaches everything the frames
+move (transitions, controllers, springs, flings, ripples, the theme's fade), not input or
+timers. The speed is clamped to `0.01..=100`:
+
+```rust
+frus::set_animation_speed(0.1);
+// ... look at it ...
+frus::set_animation_speed(1.0);
+```

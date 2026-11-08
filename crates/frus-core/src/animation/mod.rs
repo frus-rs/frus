@@ -19,6 +19,7 @@
 mod controller;
 mod curve;
 mod simulation;
+mod speed;
 mod tween;
 mod velocity;
 
@@ -28,6 +29,10 @@ pub use simulation::{
     BouncingScrollSimulation, ClampedSimulation, ClampingScrollSimulation, FrictionSimulation,
     Simulation, SpringDescription, SpringSimulation, Tolerance, BOUNCING_DRAG, CLAMPING_FRICTION,
     MAX_SPRING_TRANSFER_VELOCITY,
+};
+pub use speed::{
+    animation_speed, dilate_frame_time, set_animation_speed, MAX_ANIMATION_SPEED,
+    MIN_ANIMATION_SPEED,
 };
 pub use tween::{Animatable, Animation, Curved, Lerp, Tween, TweenSequence};
 pub use velocity::{

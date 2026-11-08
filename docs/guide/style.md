@@ -72,6 +72,28 @@ fn notice() -> Box<dyn Widget> {
 }
 ```
 
+For a status there are three more families beside `error`: `success`, `warning` and `info`,
+each with its `on_` colour, a `_container` and an `on_..._container`. A theme made from a seed
+turns them slightly toward the seed's hue, so they belong to its palette:
+
+```rust
+use frus::{component, Container, Text, Widget};
+
+fn saved_banner() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let scheme = &cx.theme().scheme;
+        Box::new(
+            Container::new()
+                .padding(12.0)
+                .color(scheme.success_container)
+                .child(Text::new("All changes saved").color(scheme.on_success_container)),
+        )
+    }))
+}
+```
+
+`Alert` and `SnackBar` use them for their success, warning and info kinds.
+
 Write a colour by hand — `Color::hex("#6366F1")`, `Color::rgb8(99, 102, 241)`,
 `Colors::WHITE` — only where it is meant to stay the same whatever the theme.
 
@@ -157,6 +179,47 @@ fn styled() -> Box<dyn Widget> {
     )
 }
 ```
+
+## Tokens of your own
+
+A design system has values the theme has no field for: a brand gradient's colours, a card's
+corner, a spacing scale. Put them in a type of your own that implements `ThemeExtension`,
+store it with `Theme::with_extension`, and read it anywhere with `theme.extension::<T>()`.
+It follows the theme into every subtree, and with a `lerp` it fades between light and dark
+with everything else:
+
+```rust
+use frus::{Color, Theme, ThemeExtension};
+
+#[derive(Clone, Debug, PartialEq)]
+struct Brand {
+    highlight: Color,
+    card_radius: f32,
+}
+
+impl ThemeExtension for Brand {
+    fn lerp(&self, other: &Self, t: f32) -> Self {
+        Brand {
+            highlight: self.highlight.lerp(other.highlight, t),
+            card_radius: self.card_radius + (other.card_radius - self.card_radius) * t,
+        }
+    }
+}
+
+fn theme(dark: bool) -> Theme {
+    let brand = Brand {
+        highlight: if dark { Color::hex("#FDBA74") } else { Color::hex("#EA580C") },
+        card_radius: 14.0,
+    };
+    Theme::from_seed(Color::hex("#0F766E"), dark).with_extension(brand)
+}
+
+let radius = theme(false).extension::<Brand>().map(|b| b.card_radius);
+assert_eq!(radius, Some(14.0));
+```
+
+Leave `lerp` out for tokens that cannot be in between, such as a font family: they switch half
+way through the fade.
 
 ## A different theme for one part of the screen
 

@@ -1100,8 +1100,7 @@ pub struct SnackBarTheme {
     /// The stripe down a notification's leading edge, whichever kind it is. Unset, the
     /// kind decides.
     pub accent_color: Option<Color>,
-    /// The stripe for a **success**, the one kind Material 3 has no role for. Unset, a
-    /// green of this crate's own choosing.
+    /// The stripe for a **success**. Unset, the scheme's `success`.
     pub success_color: Option<Color>,
     /// The corner. Unset, the reference's 4 for a **floating** bar and **nothing at all**
     /// for a fixed one, which is flush against the edges and has nothing to round.

@@ -35,11 +35,12 @@ mod shape;
 mod text_style;
 
 pub use animation::{
-    Animatable, Animation, AnimationController, BouncingScrollSimulation, ClampedSimulation,
-    ClampingScrollSimulation, Curve, Curved, FrictionSimulation, Lerp, PolynomialFit, Simulation,
-    SpringDescription, SpringSimulation, Status, Tolerance, Tween, TweenSequence, Velocity,
-    VelocityEstimate, VelocityStrategy, VelocityTracker, BOUNCING_DRAG, BOUNCING_FLING_WEIGHTS,
-    CLAMPING_FRICTION, DESKTOP_FLING_WEIGHTS, MAX_SPRING_TRANSFER_VELOCITY,
+    animation_speed, dilate_frame_time, set_animation_speed, Animatable, Animation,
+    AnimationController, BouncingScrollSimulation, ClampedSimulation, ClampingScrollSimulation,
+    Curve, Curved, FrictionSimulation, Lerp, PolynomialFit, Simulation, SpringDescription,
+    SpringSimulation, Status, Tolerance, Tween, TweenSequence, Velocity, VelocityEstimate,
+    VelocityStrategy, VelocityTracker, BOUNCING_DRAG, BOUNCING_FLING_WEIGHTS, CLAMPING_FRICTION,
+    DESKTOP_FLING_WEIGHTS, MAX_ANIMATION_SPEED, MAX_SPRING_TRANSFER_VELOCITY, MIN_ANIMATION_SPEED,
 };
 pub use color::{surface_tint_opacity, Color};
 pub use colors::{Colors, MaterialColor};
