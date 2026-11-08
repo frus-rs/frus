@@ -8,11 +8,20 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 779 so far, each documenting the objective, the alternatives
+> record — one per step, 782 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **TalkBack reads frus windows on Android** (J782). Each widget's declared semantics now
+  reaches TalkBack through a node provider in the bundled dex: one virtual view per node, with
+  its Android class, bounds, label, value, states and actions. Swiping moves through them, a
+  double tap presses, and fields, sliders and scrolling areas answer TalkBack's set-text,
+  adjust and scroll actions. Announcements are spoken. Nothing is built while no accessibility
+  service is on. New `SemanticsProperties::obscured`: `TextField` sets it for a masked field,
+  so screen readers on every platform get a password field and one dot per character, never
+  the text (desktop handed over the real value before). Not yet: explore by touch, and
+  TalkBack's focus outline over a frus window.
 - **Four bugs found on a phone** (J779). An autocomplete with nothing typed yet, in a row beside
   other children, was a field zero pixels wide (its label, no outline, nothing to tap): a
   container holding a soft-sized child alone now takes the child's default size over, so a

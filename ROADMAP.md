@@ -128,7 +128,7 @@ What does not exist is everything around it: distribution, tooling, more platfor
 | Animation & subscriptions | ✅ | ✅ | ✅ | — | — |
 | Async effects / `fetch` | ✅ | ✅ | ✅ | — | — |
 | Clipboard | ✅ | ✅ | ✅ secure contexts | — | — |
-| Accessibility | ✅ AccessKit | ⚠️ partial | ❌ | — | — |
+| Accessibility | ✅ AccessKit | ✅ TalkBack (no explore by touch) | ❌ | — | — |
 | Lifecycle | ✅ | ✅ | ⚠️ partial | — | — |
 | Live-reload (dev) | ✅ | ⚠️ | ❌ | — | — |
 
