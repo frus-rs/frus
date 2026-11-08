@@ -87,6 +87,7 @@ mod focus;
 mod focushighlight;
 /// Form validation, pure and application-side: [`form::Rule`] and [`form::Form`].
 pub mod form;
+mod sliver;
 mod sticky;
 mod switcher;
 mod system_ui;
@@ -498,6 +499,11 @@ pub use slidershape::{
     RoundedRectRangeSliderTrackShape, RoundedRectSliderTrackShape, SliderOverlayShape, SliderPaint,
     SliderPalette, SliderShape, SliderThumb, SliderThumbShape, SliderTickMarkShape,
     SliderTrackShape, SliderValueIndicatorShape,
+};
+pub use sliver::{
+    CustomScrollView, FlexibleSpaceBar, FlexibleSpaceState, Sliver, SliverAppBar,
+    SliverFillRemaining, SliverGrid, SliverHeaderState, SliverList, SliverPadding,
+    SliverPersistentHeader, SliverToBoxAdapter, DEFAULT_CACHE_EXTENT,
 };
 pub use spacer::Spacer;
 pub use spinner::CircularProgressIndicator;

@@ -839,6 +839,9 @@ pub struct Runtime {
     /// What each list of items of any extent has measured of them (milestone 716).
     /// Interior mutability: an item is measured while the tree is walked.
     pub(crate) item_extents: RefCell<HashMap<WidgetId, crate::list::ItemExtents>>,
+    /// What each floating header of a sliver view keeps from one frame to the next
+    /// (milestone 780). Interior mutability: a header is laid out while the tree is walked.
+    pub(crate) floating_headers: RefCell<HashMap<WidgetId, crate::sliver::FloatState>>,
     /// The rows each list built on demand keeps alive out of view, by list (milestone 748).
     /// Interior mutability: a list decides while the tree is walked.
     pub(crate) kept_rows: RefCell<HashMap<WidgetId, Vec<crate::list::KeptRow>>>,

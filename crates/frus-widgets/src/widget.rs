@@ -969,6 +969,13 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// If the widget is a **scroll view made of slivers** ([`crate::CustomScrollView`]),
+    /// the view: its pieces are laid out, built lazily and painted in the walk
+    /// (milestone 780).
+    fn sliver_view(&self) -> Option<&crate::sliver::CustomScrollView<Msg>> {
+        None
+    }
+
     /// If the widget **places its children with a function** — a
     /// [`crate::CustomMultiChildLayout`] — the function and one key per child. The children
     /// are then laid out and placed in the walk, by the function, and not in this node's
@@ -2330,6 +2337,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn sticky_header(&self) -> bool {
         (**self).sticky_header()
+    }
+    fn sliver_view(&self) -> Option<&crate::sliver::CustomScrollView<Msg>> {
+        (**self).sliver_view()
     }
 
     fn custom_layout(&self) -> Option<crate::customlayout::CustomLayout<'_>> {

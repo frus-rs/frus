@@ -518,6 +518,10 @@ macro_rules! forward_transparent {
                 self.inner.page_view()
             }
 
+            fn sliver_view(&self) -> Option<&$crate::sliver::CustomScrollView<Msg>> {
+                self.inner.sliver_view()
+            }
+
             fn intrinsic(&self) -> Option<($crate::constraints::IntrinsicAxis, Option<f32>)> {
                 self.inner.intrinsic()
             }

@@ -30,6 +30,8 @@ use crate::runtime::Runtime;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
+mod slivers;
+
 /// Thickness of a scrollbar, in pixels (`scrollbar.dart:12`).
 const BAR_SIZE: f32 = 8.0;
 /// Minimum length of a thumb (`scrollbar.dart:15`). It is the tap target: a thumb has to
@@ -601,6 +603,7 @@ fn plain_subtree_len<Msg>(widget: &dyn Widget<Msg>) -> Option<usize> {
         // Only *whether*, never *what*: these two ask if the widget windows its
         // children at all, and a size it will not read is the honest argument.
         || widget.virtual_list(Size::ZERO).is_some()
+        || widget.sliver_view().is_some()
         || widget.page_view().is_some()
         || widget.overflow_box().is_some()
         || widget.constraints_transform().is_some()
@@ -2499,6 +2502,7 @@ fn build_layout_scoped<'a, Msg>(
         || widget.fitted().is_some()
         || widget.navigator().is_some()
         || widget.virtual_list(Size::ZERO).is_some()
+        || widget.sliver_view().is_some()
         || widget.page_view().is_some()
         || widget.stack()
         || widget.custom_layout().is_some()
@@ -4766,6 +4770,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     },
                 );
             }
+        } else if let Some(view) = widget.sliver_view() {
+            // A scroll view made of slivers (milestone 780): see `ui/slivers.rs`.
+            self.walk_slivers(widget, view, id, draw_rect, clip);
         } else if let Some(vlist) =
             widget.virtual_list(Size::new(draw_rect.width, draw_rect.height))
         {
@@ -5785,6 +5792,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             rects,
             index,
         );
+        self.raise_segment(&start, &mid);
+    }
+
+    /// Moves what was added between `start` and `mid` after everything added since: its
+    /// primitives over the rest, and its entries in the registries a pointer is matched
+    /// against last-first, so it takes the touches where it overlaps. Focus and semantics
+    /// keep the reading order. A sticky header over its section (milestone 602), a pinned
+    /// sliver header over the content scrolling under it (milestone 780).
+    fn raise_segment(&mut self, start: &BarrierBase, mid: &BarrierBase) {
         let mut primitives = self.scene.split_off(start.scene);
         after(&mut primitives, 0, mid.scene - start.scene);
         for primitive in primitives {
