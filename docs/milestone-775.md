@@ -107,12 +107,17 @@ waiting for `StorageFile.GetFileFromPathAsync`. `objc2-foundation` gains its `NS
   `C:\Windows\System32\calc.exe` with `InvalidUrl`. Run from a console with no window,
   `Share::text(..).url(..).show()` went down the fallback path (no window for the share window)
   and answered `Failed`, because a locked session's clipboard belongs to the secure desktop.
-- Android: see the final report of the milestone's PR for what was run on the phone.
+- Android: compiled and linted for `aarch64-linux-android`, and the dex rebuilt with `FrusShare`;
+  **not run on a device** (see below).
 - Clippy for Windows, Android (`aarch64-linux-android`), the web (`wasm32-unknown-unknown`) and
   macOS (`x86_64-apple-darwin`, check only).
 
 ## Not done
 
+- **Nothing was run on Android.** The test phone was not connected for the whole milestone, and
+  the APK build for a test application could not finish (WSL could not fetch or read the crates in
+  time). `open_url` with `https://` and `tel:`, and the share chooser, still need to be seen on a
+  phone. The Java side compiled against API 34, but nothing has run it.
 - **Not run on macOS, Linux or iOS.** The macOS share menu and `open` were type-checked against
   `x86_64-apple-darwin`, never run on a Mac. Linux's `xdg-open` was not run.
 - **The web was compiled, not run in a browser.**
