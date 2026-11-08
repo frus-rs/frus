@@ -46,6 +46,11 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
 - **Sharing**: `frus::share("text")`, or `frus::Share::text(..).subject(..).url(..).file(path)`
   for more, shows the system's share sheet (Android, Windows, macOS, the web). Where a desktop
   cannot show one, the text is copied to the clipboard and the call says so.
+- **Haptic feedback**: `frus::haptics::light()` and its siblings give the system's touch
+  feedback (Android, the web; the desktops answer `Unsupported`).
+- **Which network**: `frus::connectivity()`, and `cx.use_connectivity()` in a component, say
+  whether the device is on Wi-Fi, mobile data, a cable or nothing, and follow changes
+  (Windows, macOS, Linux, Android, the web). Connected does not mean the internet answers.
 - **Notifications** (`SystemNotification`), **permissions** (`Permission`), **file dialogs**
   (`FileDialog`, desktop), **HTTP** (`fetch`).
 - **Preferences**: `frus::prefs()` keeps small settings across restarts, and

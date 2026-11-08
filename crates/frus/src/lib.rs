@@ -126,6 +126,14 @@ pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification
 
 // Secrets kept by the system (feature `secure-store`, milestone 776): `secure_store()`. The
 // preferences, `prefs()`, come with the widgets.
+/// **Haptic feedback** (milestone 777): `frus::haptics::light()`, `medium()`, `heavy()`,
+/// `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`.
+///
+/// ```no_run
+/// let _ = frus::haptics::success();
+/// ```
+pub use frus_shell::haptics;
+pub use frus_shell::HapticsError;
 #[cfg(feature = "secure-store")]
 pub use frus_shell::{secure_store, SecureStore, SecureStoreError};
 

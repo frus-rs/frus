@@ -8,11 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 776 so far, each documenting the objective, the alternatives
+> record — one per step, 777 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Haptic feedback and connectivity** (J777). `frus::haptics::light()`, `medium()`,
+  `heavy()`, `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`: the
+  system's touch feedback on Android (`View.performHapticFeedback`, the vibrator standing in,
+  the person's touch-feedback setting obeyed), `navigator.vibrate` on the web, and
+  `HapticsError::Unsupported` on the desktops, which have nothing to vibrate. A long press
+  that selects text now vibrates on Android, as the system's fields do;
+  `Theme::with_feedback(false)` turns it off. `frus::connectivity()` says which network the
+  device is on (`None`, `Wifi`, `Cellular`, `Ethernet`, `Other`, `Unknown`) and every change
+  builds the interface again; a component reads it with `cx.use_connectivity()`. Android
+  watches the default network, Windows its internet connection profile, macOS
+  `NWPathMonitor`, Linux the default route, the web `navigator.onLine`. Being on a network
+  does not mean the internet answers, and the docs say so. `frus build` and `frus run` now
+  declare `VIBRATE` and `ACCESS_NETWORK_STATE` for Android, both granted at install with no
+  question asked.
 - **Preferences and a secure store** (J776). `frus::prefs()` keeps small settings across
   restarts: `set`, `get::<T>`, `remove`, `clear` for any serde value, synchronous. A JSON file
   in the application's data folder on the desktop (`%APPDATA%`, `Application Support`,

@@ -200,8 +200,9 @@ pub fn set_local_wake(wake: impl Fn() + Send + Sync + 'static) {
     }
 }
 
-/// Asks the shell for a frame, from any thread; nothing without a shell.
-pub(crate) fn wake_shell() {
+/// Asks the shell for a frame, from any thread: something the frame reads changed (the
+/// connectivity, milestone 777). Nothing happens before the shell has a window.
+pub(crate) fn request_frame() {
     let wake = WAKE.lock().ok().and_then(|slot| slot.clone());
     if let Some(wake) = wake {
         wake();

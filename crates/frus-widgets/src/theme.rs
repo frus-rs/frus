@@ -810,6 +810,12 @@ pub struct Theme {
     /// ([`Theme::with_visual_density`]). Unset, the theme's platform decides: standard on
     /// phones, compact on the desktops — see [`Theme::visual_density`] (milestone 631).
     pub visual_density: Option<crate::VisualDensity>,
+    /// **Whether gestures answer with the platform's touch feedback** — on Android, the
+    /// short vibration of a long press that selects text. `true` by default; `false`
+    /// ([`Theme::with_feedback`]) turns it off for the whole application. The person's own
+    /// system setting is obeyed either way: with touch feedback turned off there, nothing
+    /// vibrates.
+    pub enable_feedback: bool,
 }
 
 impl Theme {
@@ -844,7 +850,20 @@ impl Theme {
             cupertino_override_theme: None,
             cupertino_theme: None,
             visual_density: None,
+            enable_feedback: true,
         }
+    }
+
+    /// The same theme, with the platform's touch feedback on or off
+    /// ([`Theme::enable_feedback`]).
+    ///
+    /// ```
+    /// let quiet = frus_widgets::Theme::default().with_feedback(false);
+    /// assert!(!quiet.enable_feedback);
+    /// ```
+    pub fn with_feedback(mut self, enabled: bool) -> Self {
+        self.enable_feedback = enabled;
+        self
     }
 
     /// The same theme, following `platform`'s conventions ([`Theme::platform`]).
@@ -982,6 +1001,7 @@ impl Theme {
         out.user_interface_level = near.user_interface_level;
         out.cupertino_override_theme = near.cupertino_override_theme.clone();
         out.cupertino_theme = near.cupertino_theme.clone();
+        out.enable_feedback = near.enable_feedback;
         // A density moves smoothly, as the reference's does; a pair that both follow their
         // platform keeps following it.
         out.visual_density = match (self.visual_density, other.visual_density) {

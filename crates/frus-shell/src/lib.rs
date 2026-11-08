@@ -34,6 +34,8 @@ mod android_autofill;
 #[cfg(android)]
 mod android_clipboard;
 #[cfg(android)]
+mod android_device;
+#[cfg(android)]
 mod android_ime;
 #[cfg(all(android, feature = "secure-store"))]
 mod android_keystore;
@@ -61,11 +63,15 @@ mod bidi_caret_tests;
 mod cache_dir;
 mod caret;
 mod command;
+// Watching the device's networks (milestone 777).
+mod connectivity;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 mod file_dialog;
 mod file_drop;
 mod frame_stats;
 mod gesture;
+// Haptic feedback (milestone 777).
+pub mod haptics;
 #[cfg(any(web, test))]
 mod history;
 mod hover;
@@ -99,6 +105,8 @@ mod permission;
 mod reload;
 // Where each platform keeps the restoration data (milestone 753).
 mod restoration;
+#[cfg(web)]
+mod web_device;
 #[cfg(web)]
 mod web_permission;
 // How long the application takes to show its first frame (milestone 683, #211).
@@ -161,6 +169,7 @@ pub use application::{Application, Lifecycle, LocationStrategy};
 pub use command::Command;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 pub use file_dialog::FileDialog;
+pub use haptics::HapticsError;
 pub use icon::AppIcon;
 pub use link::{link_among, location_of_link};
 #[cfg(all(any(desktop, android, web), feature = "notifications"))]

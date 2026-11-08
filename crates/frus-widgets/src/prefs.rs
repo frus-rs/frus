@@ -346,7 +346,7 @@ impl Prefs {
         if self.global {
             CHANGED.store(true, Ordering::Release);
             crate::component::request_rebuild();
-            crate::local_task::wake_shell();
+            crate::local_task::request_frame();
         }
         Ok(())
     }
