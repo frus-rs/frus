@@ -8,10 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 771 so far, each documenting the objective, the alternatives
+> record — one per step, 775 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
+  opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
+  Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.
+  `frus::share("text")` and `frus::Share::text(..).subject(..).url(..).file(path).show()` show the
+  system's share sheet on Android, Windows, macOS and the web; on Android files are copied to the
+  shared Downloads collection so the target can read them (Android 10 and later), and a desktop
+  that cannot show its share window copies the text to the clipboard and answers
+  `ShareOutcome::CopiedToClipboard`. Linux and iOS answer `Unsupported`.
 
 - **Editors: hot reload on by default with every frus, every run's end said, a sensible
   default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
