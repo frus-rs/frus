@@ -24,7 +24,7 @@ use frus_widgets::{request_rebuild, Locale, SnackBarQueue};
 
 use crate::l10n::{lang_index, lang_is_rtl, next_lang, LANGS};
 use crate::model::{visible, Filter, Todo};
-use crate::storage::{load_todos, save_todos, todos_path};
+use crate::storage::{load_todos, save_message, save_todos, todos_path};
 use crate::theme::{theme_of, THEME_SEEDS};
 
 /// How the demo is dressed, as the reader chose it.
@@ -247,28 +247,39 @@ impl Demo {
 
     // --- Saving and loading ---
 
-    /// Writes the tasks to disk on another thread, and says so when it is done queued.
+    /// Writes the tasks to disk on another thread, and says so when it is done — or says why
+    /// it could not.
     pub(crate) fn save(self: &Rc<Self>) {
+        self.save_to(todos_path());
+    }
+
+    /// [`Self::save`] to `path`; `None` is a platform with nowhere to keep them.
+    pub(crate) fn save_to(self: &Rc<Self>, path: Option<PathBuf>) {
         let items: Vec<(bool, String)> = self
             .todos
             .borrow()
             .iter()
             .map(|t| (t.done, t.text.clone()))
             .collect();
+        let demo = self.clone();
         host::spawn(
-            move || {
-                let _ = save_todos(&todos_path(), &items);
+            move || match path {
+                Some(path) => save_todos(&path, &items),
+                None => Err(std::io::Error::other("this device keeps no files")),
             },
-            |_| {},
+            move |saved| demo.toast(&save_message(&saved)),
         );
-        self.toast("Saved");
     }
 
     /// Reads the tasks from disk on another thread and puts them in place of the list.
     pub(crate) fn load(self: &Rc<Self>) {
         let demo = self.clone();
         host::spawn(
-            || load_todos(&todos_path()),
+            || {
+                todos_path()
+                    .map(|path| load_todos(&path))
+                    .unwrap_or_default()
+            },
             move |items| demo.replace_all(items),
         );
     }

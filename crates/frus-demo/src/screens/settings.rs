@@ -432,7 +432,11 @@ impl State for SettingsState {
         .gap(6.0);
         let about = column![
             text("frus — widget showcase").size(18.0),
-            row![info, tags].align(Align::Start).gap(12.0),
+            // The field takes what the button leaves of the row: on a 360-pixel phone its
+            // 260-pixel default would run past the tab's edge.
+            row![info, Expanded::new(tags)]
+                .align(Align::Start)
+                .gap(12.0),
             shortcuts,
             stats,
             facts,

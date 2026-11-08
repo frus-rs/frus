@@ -1931,6 +1931,15 @@ pub(crate) fn build_layout<'a, Msg>(
     layout: &mut Layout<'a, BaselineData>,
 ) -> NodeId {
     let (node, fills) = build_layout_scoped(widget, id, runtime, theme, layout, true);
+    // A root that took over its lone child's default (milestone 779) has the whole room to
+    // give it: the default gives way, as it would to a parent that grants the room.
+    let own = effective_style(widget, id, runtime, theme);
+    if fills.horizontal && fills.soft_horizontal && own.width == frus_layout::Dimension::Auto {
+        layout.clear_size(node, true);
+    }
+    if fills.vertical && fills.soft_vertical && own.height == frus_layout::Dimension::Auto {
+        layout.clear_size(node, false);
+    }
     // A root that wants to fill has no parent to fill: the flex machinery below needs one
     // on each side of the question. A percentage of the room the layout is being computed
     // in is the same answer without a parent, and it degrades to hugging the content when
@@ -2540,7 +2549,7 @@ fn build_layout_scoped<'a, Msg>(
             Fills::own(widget, theme),
         )
     } else {
-        let style = effective_style(widget, id, runtime, theme);
+        let mut style = effective_style(widget, id, runtime, theme);
         let built: Vec<(NodeId, Fills)> = children
             .iter()
             .enumerate()
@@ -2566,7 +2575,10 @@ fn build_layout_scoped<'a, Msg>(
         // A container that places its children at a corner keeps them their own size
         // across its axis: the alignment is the point (milestone 766).
         let cross_granted = widget.grants_cross_fill();
-        for (node, fills) in &built {
+        // A lone child's default size, on each axis it gave way on: this box takes it over
+        // (below).
+        let mut inherited: [Option<f32>; 2] = [None, None];
+        for (index, (node, fills)) in built.iter().enumerate() {
             for horizontal in [true, false] {
                 if !fills.wants(horizontal) {
                     continue;
@@ -2585,6 +2597,12 @@ fn build_layout_scoped<'a, Msg>(
                 }
                 // A size that was only a default gives way to the room (milestone 590).
                 if fills.soft(horizontal) {
+                    if alone {
+                        let child = children[index].as_ref();
+                        let own =
+                            effective_style(child, child_id(id, index, child), runtime, theme);
+                        inherited[usize::from(!horizontal)] = soft_default(&own, horizontal);
+                    }
                     layout.clear_size(*node, horizontal);
                 }
                 layout.fill_parent(*node, horizontal, parallel);
@@ -2690,10 +2708,46 @@ fn build_layout_scoped<'a, Msg>(
             }
             fills = fills.merge(passed);
         }
+        // **The default the lone child gave up is this box's now** (milestone 779), as a
+        // portal takes its anchor's (milestone 767). The child fills this box; the box is as
+        // big as the room its own parent grants it — or, where none is granted (a row beside
+        // other children), as big as the child's default. Before, the child gave its default
+        // up to a box that had no room to give it: an autocomplete with no suggestions yet,
+        // beside a button, was a field zero pixels wide — a label and nothing to tap.
+        for horizontal in [true, false] {
+            let Some(default) = inherited[usize::from(!horizontal)] else {
+                continue;
+            };
+            let padding = &style.padding;
+            if horizontal && matches!(style.width, frus_layout::Dimension::Auto) {
+                style.width =
+                    frus_layout::Dimension::Length(default + padding.left + padding.right);
+                fills.soft_horizontal = true;
+            } else if !horizontal && matches!(style.height, frus_layout::Dimension::Auto) {
+                style.height =
+                    frus_layout::Dimension::Length(default + padding.top + padding.bottom);
+                fills.soft_vertical = true;
+            }
+        }
         (
             layout.container(style, &child_ids),
             fills.bounded_by(&style),
         )
+    }
+}
+
+/// The size `style` gives on one axis when it is only a default, with the margins around it:
+/// what a box holding it alone takes over ([`build_layout_scoped`]). `None` for a size that
+/// is not a number of pixels.
+fn soft_default(style: &frus_layout::Style, horizontal: bool) -> Option<f32> {
+    let (size, before, after) = if horizontal {
+        (style.width, style.margin.left, style.margin.right)
+    } else {
+        (style.height, style.margin.top, style.margin.bottom)
+    };
+    match size {
+        frus_layout::Dimension::Length(length) => Some(length + before + after),
+        _ => None,
     }
 }
 

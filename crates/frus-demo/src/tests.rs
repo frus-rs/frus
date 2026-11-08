@@ -1787,15 +1787,68 @@ fn the_application_runs_through_the_shell() {
         .texts()
         .iter()
         .any(|(t, _)| t == "write the milestone"));
-    // Save queues the notification; the host is asked to bring it down after a while.
+    // Save writes on another thread and queues the notification once it is done; the host is
+    // asked to bring it down after a while. The driver hands work to threads whose answers
+    // it never collects, so the write is run here, as the shell's thread would.
     let _ = frus_widgets::host::take_effects();
     demo.save();
+    run_spawned();
     driver.run(0.1);
     assert!(
         driver.texts().iter().any(|(t, _)| t == "Saved"),
         "the toast is up"
     );
     let _ = router;
+}
+
+/// **A save that fails says so** (milestone 779). On the phone the demo saved to the
+/// temporary folder, `/data/local/tmp`, which an application cannot write: the error was
+/// dropped and the snack bar said "Saved" all the same.
+#[test]
+fn a_save_that_fails_says_so() {
+    let (app, _, demo) = crate::build();
+    let mut driver = Driver::new(app, 500.0, 800.0);
+    driver.run(0.3);
+    demo.add("keep me");
+    driver.run(0.3);
+    let _ = frus_widgets::host::take_effects();
+    // A folder that is not there: the write fails, as it does where the app may not write.
+    let nowhere = std::env::temp_dir()
+        .join("frus-demo-no-such-folder-779")
+        .join("tasks.txt");
+    demo.save_to(Some(nowhere));
+    run_spawned();
+    driver.run(0.1);
+    let texts = driver.texts();
+    assert!(
+        !texts.iter().any(|(t, _)| t == "Saved"),
+        "nothing was saved: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|(t, _)| t.starts_with("Could not save")),
+        "the reader is told: {texts:?}"
+    );
+}
+
+/// Runs the work the application handed to other threads, here, and its answers.
+fn run_spawned() {
+    for effect in frus_widgets::host::take_effects() {
+        if let frus_widgets::host::Effect::Spawn(task) = effect {
+            if let Some(answer) = task() {
+                answer.call();
+            }
+        }
+    }
+}
+
+/// The tasks are kept in the application's own data folder, which every platform with files
+/// lets it write — not the temporary folder (milestone 779).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_tasks_are_kept_in_the_applications_data_folder() {
+    let path = crate::storage::todos_path().expect("a desktop keeps files");
+    assert_eq!(path.parent(), frus_shell::app_data_dir().as_deref());
+    assert!(!path.starts_with(std::env::temp_dir()), "{path:?}");
 }
 
 /// **The demonstration's own light switch is light on a phone in night mode.**
@@ -2209,4 +2262,63 @@ fn the_about_showcases_take_the_tabs_width_on_a_phone() {
         texts.iter().any(|(t, _, _)| t == "Tags"),
         "the tags field carries a label"
     );
+}
+
+/// **The tags field beside the Info button is a field on the phone** (milestone 779). With
+/// nothing typed it showed only its label, no outline and nothing to tap: the autocomplete
+/// held its field alone, the field's default width gave way to a box the row gave no room,
+/// and it was zero pixels wide — on every screen, at the phone's 360 as at 411.
+#[test]
+fn the_tags_field_beside_the_info_button_is_a_field() {
+    for width in [360.0, PHONE.0] {
+        let mut bench = Bench::new(width, PHONE.1);
+        bench.go("/settings");
+        assert!(bench.press("About"), "the About tab is there to press");
+        bench.settle_frames();
+        let (_, ui) = bench.frame();
+        let texts = words(&ui);
+        let at = |label: &str| {
+            texts
+                .iter()
+                .find(|(t, _, _)| t == label)
+                .map(|(_, x, y)| Point::new(*x, *y))
+                .unwrap_or_else(|| panic!("{label} is painted"))
+        };
+        let (info, tags) = (at("Info"), at("Tags"));
+        // The focusable box under the label: the field.
+        let field = ui
+            .traversal_order()
+            .into_iter()
+            .filter_map(|id| ui.widget_rect(id))
+            .find(|r| {
+                r.x <= tags.x && tags.x < r.x + r.width && r.y <= tags.y && tags.y < r.y + r.height
+            })
+            .unwrap_or_else(|| panic!("a field under its label at {width}"));
+        assert!(field.x > info.x, "beside the button: {field:?}");
+        assert!(
+            field.width > 150.0,
+            "a field to tap and type in, not {} px, at {width}",
+            field.width
+        );
+        // It takes the rest of the row and stops at the tab's edge (20 px from the screen's).
+        assert!(
+            field.x + field.width <= width - 20.0 + 0.5,
+            "inside the tab at {width}: {field:?}"
+        );
+        // And it says what goes in it once it has the focus; empty, its outline is drawn.
+        assert!(
+            outlined(ui.scene().primitives(), field),
+            "the field's outline is drawn at {width}"
+        );
+    }
+
+    fn outlined(primitives: &[Primitive], field: frus_widgets::Rect) -> bool {
+        primitives.iter().any(|p| match p {
+            Primitive::Rect {
+                rect, border_width, ..
+            } => *border_width > 0.0 && (rect.width - field.width).abs() < 2.0 && rect.width > 0.0,
+            Primitive::Layer { primitives, .. } => outlined(primitives, field),
+            _ => false,
+        })
+    }
 }

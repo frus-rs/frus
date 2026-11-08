@@ -1043,6 +1043,9 @@ pub struct App<A: Application> {
     /// The element the focused text field is edited through, on the web (milestone 711).
     #[cfg(web)]
     web_editor: Option<crate::web_editing::Editor>,
+    /// The scrolls the keyboard set off, taken back if the page pans for it (milestone 779).
+    #[cfg(web)]
+    keyboard_reveal: crate::web_page::KeyboardReveal,
     /// The last interface built, used for hit testing, focus and scrolling.
     ui: Option<Ui<A::Message>>,
     /// The last widget tree built, used for keyboard and editing routing.
@@ -1414,6 +1417,8 @@ impl<A: Application> App<A> {
             a11y: None,
             #[cfg(web)]
             web_editor: None,
+            #[cfg(web)]
+            keyboard_reveal: Default::default(),
             ui: None,
             tree: None,
             cursor: Point::new(0.0, 0.0),
@@ -1641,15 +1646,26 @@ impl<A: Application> App<A> {
         } else {
             self.app.density()
         };
-        let Some(editor) = self.web_editor.as_mut() else {
+        if self.web_editor.is_none() {
             return;
-        };
+        }
         // The focused field that takes typing, whether or not this frame laid it out.
         let typing = self.runtime.input.focused.filter(|&id| {
             self.tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
                 .is_some_and(wants_keyboard)
+        });
+        // Worked out first: the field below borrows the tree and the layout, and the editor
+        // after it is borrowed to change.
+        let caret_line = typing.and_then(|id| {
+            let (_, rect, _) = self
+                .ui
+                .as_ref()?
+                .semantics()
+                .iter()
+                .find(|(node, ..)| *node == id)?;
+            self.caret_line(id, rect)
         });
         let field = typing.and_then(|id| {
             let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
@@ -1669,8 +1685,12 @@ impl<A: Application> App<A> {
                 label: semantics.label.as_deref(),
                 text: widget.text_value().unwrap_or_default(),
                 edit: self.runtime.edits.get(&id).copied().unwrap_or_default(),
+                caret_line,
             })
         });
+        let Some(editor) = self.web_editor.as_mut() else {
+            return;
+        };
         // A focused field with no room this frame keeps its element, and the keyboard
         // (milestone 765).
         match crate::web_editing::editing(typing.is_some(), field) {
@@ -1682,6 +1702,24 @@ impl<A: Application> App<A> {
             }
             crate::web_editing::Editing::Gone => editor.sync(None, css),
         }
+    }
+
+    /// The line field `id`, laid out at `rect`, has its caret on: its top below the field's
+    /// top and its height, in the layout's pixels. Known for a multi-line field, whose text
+    /// scrolls in a viewport of its own; `None` for the others (milestone 779).
+    #[cfg(web)]
+    fn caret_line(&self, id: WidgetId, rect: &frus_widgets::Rect) -> Option<(f32, f32)> {
+        let viewport = self.ui.as_ref()?.scrollable_viewport(id)?;
+        let edit = self.runtime.edits.get(&id).copied().unwrap_or_default();
+        let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+        let (_, visible, caret_top, caret_height) =
+            widget.text_metrics(viewport.width, edit.position())?;
+        let scrolled = self.runtime.scroll.get(&id).map_or(0.0, |offset| offset.1);
+        // The text starts below the box's top padding, which the field does not say: the
+        // padding around the visible lines is taken as even, a few pixels at most from the
+        // field's own, which a band as tall as the strip absorbs.
+        let text_top = viewport.y + (viewport.height - visible).max(0.0) / 2.0;
+        Some((text_top + caret_top - scrolled - rect.y, caret_height))
     }
 
     /// Learns from the frame just laid out which way the page makes room for the on-screen
@@ -1713,7 +1751,17 @@ impl<A: Application> App<A> {
         let Some(editor) = self.web_editor.as_mut() else {
             return;
         };
-        if editor.learn_keyboard(focused) {
+        let mut relayout = editor.learn_keyboard(focused);
+        // A page that pans keeps the application's whole size: the scrolls this keyboard set
+        // off in a frame laid out above it are taken back, or the field stays scrolled out of
+        // its region, panned to where nothing of it shows, and the page stays scrolled after
+        // the keyboard goes (milestone 779). Under a resize they stay, as made.
+        if editor.keyboard_fit() == crate::web_page::KeyboardFit::Pan {
+            relayout |= self.keyboard_reveal.undo(&mut self.runtime);
+        } else {
+            self.keyboard_reveal.forget();
+        }
+        if relayout {
             self.build_dirty = true;
             self.request_redraw();
         }
@@ -2471,6 +2519,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             self.a11y = crate::a11y_web::A11y::new(&window);
             // And the element a text field is edited through (milestone 711).
             self.web_editor = crate::web_editing::Editor::new(&window);
+            // The browser keeps none of its own gestures over the canvas: a finger drags the
+            // application, not the page (milestone 779).
+            crate::web_page::keep_touches(&window);
             // The browser keeps reload, the developer tools and the rest of its own shortcuts
             // while the canvas has the focus, instead of winit cancelling them.
             crate::web_keys::let_the_browser_keep_its_shortcuts();
@@ -3750,6 +3801,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         _ => Vec::new(),
                     };
                     let moved = !moves.is_empty();
+                    // On the Web the page may pan for this keyboard instead, and then these
+                    // scrolls are taken back (milestone 779).
+                    #[cfg(web)]
+                    self.keyboard_reveal.record(&self.runtime, &moves);
                     for (area, offset) in moves {
                         self.runtime.scroll_ballistic.remove(&area);
                         self.runtime.scroll_velocity.remove(&area);

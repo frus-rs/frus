@@ -74,8 +74,8 @@ pub use frus_widgets::*;
 // Framework layer: the [`Application`] trait and its companions (effects, subscriptions,
 // lifecycle).
 pub use frus_shell::{
-    AppIcon, Application, Command, FrusApp, GlobalShortcut, Lifecycle, RemoteData, Subscription,
-    Taskbar, TaskbarProgress, Tray,
+    app_data_dir, AppIcon, Application, Command, FrusApp, GlobalShortcut, Lifecycle, RemoteData,
+    Subscription, Taskbar, TaskbarProgress, Tray,
 };
 
 // Utility re-exports for the thin binary and for the entry-point macro (so the application

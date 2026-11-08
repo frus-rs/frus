@@ -628,6 +628,43 @@ mod tests {
         assert!((parts[1].width - DEFAULT_WIDTH).abs() < 0.5, "{parts:?}");
     }
 
+    /// **With nothing typed yet, a row still gives the field its default** (milestone 779).
+    /// With no suggestion to hang, the autocomplete holds the field alone; the field's default
+    /// gave way to the room inside it, and the autocomplete, which the row gives no room, was
+    /// as wide as a field with no width: zero. On the phone the demo's tags field, beside a
+    /// button, showed only its label — no outline, no placeholder, nothing to tap.
+    #[test]
+    fn in_a_row_an_empty_field_falls_back_to_its_default() {
+        let ac = Autocomplete::new("", Msg::Input, Msg::Pick)
+            .field(|field| field.label("Tags").placeholder("Try \"ap\""));
+        let screen = Flex::<Msg>::column()
+            .align(frus_layout::Align::Start)
+            .child(
+                Flex::<Msg>::row()
+                    .align(frus_layout::Align::Start)
+                    .gap(12.0)
+                    .child(crate::Text::new("Info"))
+                    .child(ac),
+            );
+        let parts = parts(&screen, Size::new(411.0, 300.0));
+        assert_eq!(parts.len(), 1, "the field alone: {parts:?}");
+        assert!(
+            (parts[0].width - DEFAULT_WIDTH).abs() < 0.5,
+            "the default stands in a row: {parts:?}"
+        );
+    }
+
+    /// The same field offered room takes it, suggestions or not.
+    #[test]
+    fn an_empty_field_takes_the_width_offered() {
+        let ac = Autocomplete::new("", Msg::Input, Msg::Pick);
+        let screen = Flex::<Msg>::column()
+            .align(frus_layout::Align::Start)
+            .child(crate::ConstrainedBox::new(ac).max_width(340.0));
+        let parts = parts(&screen, Size::new(400.0, 300.0));
+        assert!((parts[0].width - 340.0).abs() < 0.5, "{parts:?}");
+    }
+
     /// A width given through the field's own dressing is the one the list follows.
     #[test]
     fn the_list_follows_a_width_given_to_the_field() {

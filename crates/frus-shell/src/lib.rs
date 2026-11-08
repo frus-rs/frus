@@ -57,6 +57,7 @@ mod bidi_caret_tests;
 mod cache_dir;
 mod caret;
 mod command;
+mod data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 mod file_dialog;
 mod file_drop;
@@ -148,6 +149,7 @@ mod tester;
 pub use app::App;
 pub use application::{Application, Lifecycle, LocationStrategy};
 pub use command::Command;
+pub use data_dir::app_data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 pub use file_dialog::FileDialog;
 pub use icon::AppIcon;
@@ -430,6 +432,8 @@ pub fn run_android<A: Application>(app: A, android_app: AndroidApp) -> anyhow::R
     // launches: the next start reads them instead of compiling them again (milestones 685 and
     // 697, #217). The folder milestone 685 used inside `files` is removed.
     if let Some(files) = android_app.internal_data_path() {
+        // Where `app_data_dir` points the application (milestone 779).
+        data_dir::set_android_files(files.clone());
         let (now, before) = (
             cache_dir::android(&files),
             cache_dir::android_before_697(&files),

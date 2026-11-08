@@ -8,11 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 771 so far, each documenting the objective, the alternatives
+> record — one per step, 779 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Four bugs found on a phone** (J779). An autocomplete with nothing typed yet, in a row beside
+  other children, was a field zero pixels wide (its label, no outline, nothing to tap): a
+  container holding a soft-sized child alone now takes the child's default size over, so a
+  parent that cannot give room leaves the default and one that can still stretches it. New
+  `frus::app_data_dir()`: the folder where an application keeps its own data (the private
+  `files` folder on Android, `%APPDATA%`, `~/Library/Application Support`, `$XDG_DATA_HOME`);
+  the demo saves its tasks there instead of the temporary folder, which an Android application
+  cannot write, and says "Could not save: …" when a save fails instead of "Saved". On the Web,
+  the canvas gets `touch-action: none`, so a phone's browser keeps none of its own gestures
+  (pull to refresh, double-tap zoom, a pan that cancels the pointer) over the application.
+  With a landscape keyboard that leaves less room than the field, the scrolls the keyboard set
+  off in the frame laid out above it are put back when the page pans instead (the field was
+  left scrolled out of sight, during and after typing), and the browser is panned to the line
+  being typed in.
 - **Editors: hot reload on by default with every frus, every run's end said, a sensible
   default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
   for a debug run by default, so hot reload is on with frus 0.5.0 too, whose own default is
