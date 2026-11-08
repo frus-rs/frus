@@ -203,6 +203,8 @@ impl Stage {
             // (milestone 731: a stage never moved them, so a shifting bottom bar was
             // photographed stuck where it started).
             | frus_widgets::tick_animations(dt)
+            // Decoration moves at its own rate in the shell, but it moves (milestone 783).
+            | frus_widgets::decorative_animations_moving()
     }
 
     /// The shell's **first** frame: every implicit animation adopts its target with

@@ -396,6 +396,12 @@ impl<Msg> Widget<Msg> for LinearProgressIndicator {
         self.value.is_none()
     }
 
+    /// Its sweep only says that something is under way: drawn at the rate for decoration
+    /// (milestone 783).
+    fn decorative(&self) -> bool {
+        true
+    }
+
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
         let animation = (status.time / INDETERMINATE_PERIOD).rem_euclid(1.0);
         paint_bar(

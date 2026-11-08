@@ -97,6 +97,34 @@ impl AnimationHandle {
         self.change(|c| c.repeat(period, reverse, curve));
     }
 
+    /// Marks it as **decoration** (milestone 783): a loop that only shows that something is
+    /// going on — a pulse, a shimmer, a breathing glow. While nothing else moves, the frames
+    /// that drive it come at the application's rate for decoration (30 a second unless the
+    /// application says otherwise) instead of the display's. Interactive movement — what
+    /// follows a finger, a scroll, a page's transition — must never be marked.
+    ///
+    /// ```
+    /// use frus_widgets::{component, AnimationController, Curve, Opacity, Text, Widget};
+    ///
+    /// let pulsing = component(|cx| {
+    ///     let pulse = cx.use_animation_controller(AnimationController::unit).decorative();
+    ///     if !pulse.is_animating() {
+    ///         pulse.repeat(1.2, true, Curve::ease_in_out());
+    ///     }
+    ///     Box::new(Opacity::new(0.4 + 0.6 * pulse.value(), Text::new("Live"))) as Box<dyn Widget>
+    /// });
+    /// # let _ = pulsing;
+    /// ```
+    pub fn decorative(self) -> Self {
+        self.controller.borrow_mut().set_decorative(true);
+        self
+    }
+
+    /// Whether it is marked as decoration; see [`decorative`](Self::decorative).
+    pub fn is_decorative(&self) -> bool {
+        self.controller.borrow().is_decorative()
+    }
+
     /// Stops where it is.
     pub fn stop(&self) {
         self.change(AnimationController::stop);
@@ -138,6 +166,15 @@ impl fmt::Debug for AnimationHandle {
 thread_local! {
     /// The controllers moving on this thread.
     static DRIVEN: RefCell<Vec<Weak<RefCell<AnimationController>>>> = const { RefCell::new(Vec::new()) };
+    /// Whether a controller marked as decoration still moved at the last tick (milestone 783).
+    static DECORATION_MOVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a controller marked as [decoration](AnimationHandle::decorative) was still moving
+/// after the last [`tick_animations`]: the next frame is owed, but at the rate for decoration.
+#[inline(never)]
+pub fn decorative_animations_moving() -> bool {
+    DECORATION_MOVING.with(std::cell::Cell::get)
 }
 
 /// Adds a controller to the ones the frames move, once.
@@ -154,23 +191,36 @@ fn drive(controller: Weak<RefCell<AnimationController>>) {
 /// Moves every controller started through an [`AnimationHandle`] on by `dt` seconds;
 /// whether one still moves, so that another frame is due. The shell calls it every frame,
 /// and a movement asks for the rebuild that shows it.
+///
+/// A controller marked as [decoration](AnimationHandle::decorative) is moved too, but does
+/// not count here: [`decorative_animations_moving`] answers for those, whose next frame may
+/// wait for the rate for decoration (milestone 783).
 #[inline(never)]
 pub fn tick_animations(dt: f32) -> bool {
     let driven = DRIVEN.with(|driven| std::mem::take(&mut *driven.borrow_mut()));
+    DECORATION_MOVING.with(|moving| moving.set(false));
     if driven.is_empty() {
         return false;
     }
     let mut still = Vec::new();
+    let mut moving = false;
+    let mut decoration = false;
     for controller in driven {
         let Some(shared) = controller.upgrade() else {
             continue;
         };
-        if shared.borrow_mut().tick(dt) {
+        let mut shared = shared.borrow_mut();
+        if shared.tick(dt) {
+            if shared.is_decorative() {
+                decoration = true;
+            } else {
+                moving = true;
+            }
             still.push(controller);
         }
     }
     request_rebuild();
-    let moving = !still.is_empty();
+    DECORATION_MOVING.with(|moving| moving.set(decoration));
     DRIVEN.with(|driven| {
         let mut driven = driven.borrow_mut();
         // A controller started during the ticks above is already back in the list.
@@ -204,6 +254,28 @@ mod tests {
         fade.repeat(1.0, true, Curve::Linear);
         drop(fade);
         assert!(!tick_animations(0.1));
+    }
+
+    #[test]
+    fn a_decorative_loop_moves_but_is_answered_for_apart() {
+        let pulse = AnimationHandle::new(AnimationController::unit()).decorative();
+        pulse.repeat(1.0, true, Curve::Linear);
+        assert!(
+            !tick_animations(0.1),
+            "decoration does not ask for every frame"
+        );
+        assert!(decorative_animations_moving(), "but it is still moving");
+        assert!((pulse.value() - 0.1).abs() < 0.01, "and it was moved");
+
+        let slide = AnimationHandle::new(AnimationController::unit());
+        slide.forward(1.0, Curve::Linear);
+        assert!(tick_animations(0.1), "an ordinary animation still does");
+        assert!(decorative_animations_moving());
+
+        pulse.stop();
+        drop(slide);
+        assert!(!tick_animations(0.1));
+        assert!(!decorative_animations_moving(), "nothing decorative left");
     }
 
     #[test]

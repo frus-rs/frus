@@ -76,7 +76,7 @@ pub use frus_widgets::*;
 // lifecycle).
 pub use frus_shell::{
     app_data_dir, AppIcon, Application, Command, FrusApp, GlobalShortcut, Lifecycle, RemoteData,
-    Subscription, Taskbar, TaskbarProgress, Tray,
+    Subscription, Taskbar, TaskbarProgress, Tray, DECORATIVE_FRAME_RATE,
 };
 
 // Utility re-exports for the thin binary and for the entry-point macro (so the application

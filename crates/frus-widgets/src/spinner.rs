@@ -316,6 +316,12 @@ impl<Msg> Widget<Msg> for CircularProgressIndicator {
         self.value.is_none()
     }
 
+    /// Its turning only says that something is under way: drawn at the rate for decoration
+    /// (milestone 783).
+    fn decorative(&self) -> bool {
+        true
+    }
+
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
         use std::f32::consts::TAU;
         let t = &theme.widgets.progress;

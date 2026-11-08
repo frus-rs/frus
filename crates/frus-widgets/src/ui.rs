@@ -811,6 +811,9 @@ pub struct Ui<Msg = crate::callback::Callback> {
     /// walked inside each.
     sheets: Vec<crate::sheet::SheetArea>,
     wants_animation: bool,
+    /// A widget animates for decoration alone: an indeterminate indicator, a placeholder's
+    /// shimmer, a pulse (milestone 783).
+    wants_decoration: bool,
     /// The accessibility tree: semantic nodes (id, bounds, annotation), in paint order. The
     /// shell maps it onto AccessKit.
     semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
@@ -886,6 +889,30 @@ impl<Msg: Clone> Ui<Msg> {
     /// with nothing pulled asked for frames whenever another test was loading an image
     /// (milestone 411).
     pub fn wants_animation(&self) -> bool {
+        self.wants_animation || self.wants_decoration
+    }
+
+    /// Whether this tree's widgets want the next frame **as soon as the display can show
+    /// it**: something other than decoration is moving (milestone 783).
+    ///
+    /// [`wants_animation`](Self::wants_animation) without the widgets whose continuous
+    /// animation is pure decoration ([`Widget::decorative`](crate::Widget::decorative)) — a
+    /// spinner turning, a placeholder shimmering. The shell draws those at the application's
+    /// lower rate for decoration when nothing else moves, rather than at the display's.
+    ///
+    /// ```
+    /// # use frus_widgets::{CircularProgressIndicator, Runtime, Size, Theme, Widget};
+    /// let spinner: Box<dyn Widget> = Box::new(CircularProgressIndicator::new());
+    /// let ui = frus_widgets::build_ui(
+    ///     spinner.as_ref(),
+    ///     Size::new(200.0, 200.0),
+    ///     &Runtime::default(),
+    ///     &Theme::light(),
+    /// );
+    /// assert!(ui.wants_animation());
+    /// assert!(!ui.wants_full_rate_animation(), "a spinner alone is decoration");
+    /// ```
+    pub fn wants_full_rate_animation(&self) -> bool {
         self.wants_animation
     }
 
@@ -2888,6 +2915,8 @@ struct Builder<'a, Msg> {
     overlays: Vec<Overlay<'a, Msg>>,
     /// A widget is asking for a continuous, time-driven animation.
     wants_animation: bool,
+    /// One whose animation is decoration alone (milestone 783).
+    wants_decoration: bool,
     available: Size,
     runtime: &'a Runtime,
     /// The theme **in force at this point of the walk** — the root's, unless a
@@ -4136,7 +4165,13 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
 
         let status = self.full_status(widget, id);
         if widget.continuous() {
-            self.wants_animation = true;
+            // Decoration alone may be drawn at a lower rate than the display's (milestone
+            // 783); anything else continuous asks for every frame.
+            if widget.decorative() {
+                self.wants_decoration = true;
+            } else {
+                self.wants_animation = true;
+            }
         }
 
         self.scene.set_clip(clip);
@@ -6882,6 +6917,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         interactives: Vec::new(),
         overlays: Vec::new(),
         wants_animation: false,
+        wants_decoration: false,
         available,
         runtime,
         theme: std::rc::Rc::new(theme.clone()),
@@ -6971,6 +7007,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         dismissables: builder.dismissables,
         sheets: builder.sheets,
         wants_animation: builder.wants_animation,
+        wants_decoration: builder.wants_decoration,
         semantics: builder.semantics,
         system_ui: builder.system_ui,
         overflows: builder.overflows.into_inner(),

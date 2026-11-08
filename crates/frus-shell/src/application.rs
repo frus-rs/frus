@@ -328,8 +328,82 @@ pub trait Application {
 
     /// The window's desired initial **logical** size; `None` for the system default. Ignored on
     /// the Web, where the page decides how big the canvas is.
+    ///
+    /// On a desktop that remembers the window ([`remember_window`](Self::remember_window)),
+    /// this is the size of the first run only: after it, the window opens as it was closed.
     fn window_size(&self) -> Option<(f32, f32)> {
         None
+    }
+
+    /// Whether the desktop window **comes back as it was left** (milestone 783): its size, its
+    /// place, and whether it was maximized. On by default; `false` opens it at
+    /// [`window_size`](Self::window_size) every time.
+    ///
+    /// It is kept in `window.json` in the application's data folder
+    /// ([`app_data_dir`](crate::app_data_dir)), read before the window is shown, and fitted to
+    /// the screens there are at the next start: a window whose screen was unplugged opens on
+    /// the main one, and one bigger than its screen shrinks to it. A window closed maximized
+    /// opens maximized, and goes back to its earlier bounds when restored; a minimized one
+    /// never opens minimized. Windows, macOS and Linux (where Wayland keeps the size and the
+    /// maximized state, and the system chooses the place); nothing elsewhere.
+    ///
+    /// ```
+    /// use frus_shell::{Application, Command};
+    /// # use frus_widgets::{text, Theme, Widget};
+    ///
+    /// struct Kiosk;
+    /// impl Application for Kiosk {
+    ///     type Message = ();
+    ///     fn update(&mut self, _: ()) -> Command<()> {
+    ///         Command::none()
+    ///     }
+    ///     fn view(&self, _: &Theme) -> Box<dyn Widget<()>> {
+    ///         Box::new(text("Same size every time"))
+    ///     }
+    ///     fn window_size(&self) -> Option<(f32, f32)> {
+    ///         Some((1024.0, 768.0))
+    ///     }
+    ///     fn remember_window(&self) -> bool {
+    ///         false
+    ///     }
+    /// }
+    /// ```
+    fn remember_window(&self) -> bool {
+        true
+    }
+
+    /// How many frames a second **decoration** is drawn at when nothing else moves
+    /// (milestone 783): [`DECORATIVE_FRAME_RATE`](crate::DECORATIVE_FRAME_RATE), 30, by
+    /// default; `None` for the display's own rate.
+    ///
+    /// Decoration is a continuous animation that only says that something is going on: the
+    /// indeterminate progress indicators, [`Skeleton`](frus_widgets::Skeleton)'s pulse, a
+    /// widget whose [`decorative`](frus_widgets::Widget::decorative) says so, a controller
+    /// marked with [`AnimationHandle::decorative`](frus_widgets::AnimationHandle::decorative).
+    /// With a spinner alone on screen, a 120 Hz display would otherwise draw 120 frames a
+    /// second for it. Whatever else moves — a scroll, a gesture, a transition — is never held
+    /// back, and the decoration moves in its frames too.
+    ///
+    /// ```
+    /// use frus_shell::{Application, Command};
+    /// # use frus_widgets::{text, Theme, Widget};
+    ///
+    /// struct Dashboard;
+    /// impl Application for Dashboard {
+    ///     type Message = ();
+    ///     fn update(&mut self, _: ()) -> Command<()> {
+    ///         Command::none()
+    ///     }
+    ///     fn view(&self, _: &Theme) -> Box<dyn Widget<()>> {
+    ///         Box::new(text("Loading…"))
+    ///     }
+    ///     fn decorative_frame_rate(&self) -> Option<f32> {
+    ///         Some(20.0)
+    ///     }
+    /// }
+    /// ```
+    fn decorative_frame_rate(&self) -> Option<f32> {
+        Some(crate::DECORATIVE_FRAME_RATE)
     }
 
     /// What this application wants to say about the **accessibility settings** *instead

@@ -50,19 +50,23 @@ impl Why {
     pub(crate) const APP: Why = Why(1);
     /// A transition the runtime keeps: a value, a colour, a size, a scroll in flight…
     pub(crate) const RUNTIME: Why = Why(2);
-    /// A widget that draws continuously: a spinner, a skeleton, a chart easing in.
+    /// A widget that draws continuously, and is not decoration.
     pub(crate) const WIDGET: Why = Why(4);
     /// An image or a task still on its way.
     pub(crate) const LOADING: Why = Why(8);
     /// The pointer moved onto something new, or the keyboard revealed a field.
     pub(crate) const POINTER: Why = Why(16);
+    /// Decoration alone, at its own rate: an indeterminate indicator, a placeholder's pulse
+    /// (milestone 783).
+    pub(crate) const DECORATION: Why = Why(32);
 
-    const NAMES: [(Why, &'static str); 5] = [
+    const NAMES: [(Why, &'static str); 6] = [
         (Why::APP, "app"),
         (Why::RUNTIME, "runtime"),
         (Why::WIDGET, "widget"),
         (Why::LOADING, "loading"),
         (Why::POINTER, "pointer"),
+        (Why::DECORATION, "decoration"),
     ];
 
     fn has(self, other: Why) -> bool {
@@ -105,6 +109,11 @@ pub(crate) struct FrameStats {
     run_start: Option<Instant>,
     last: Option<Instant>,
     intervals: Vec<f32>,
+    /// For each interval, whether the frame before it waited for decoration's rate on
+    /// purpose: such a frame is not late (milestone 783).
+    paced: Vec<bool>,
+    /// What the last frame asked of the next.
+    last_why: Why,
     costs: Vec<FrameCosts>,
     /// For each family of retained motion, how many frames of the run it was still moving in.
     moving: Vec<(&'static str, usize)>,
@@ -122,6 +131,8 @@ impl FrameStats {
             run_start: None,
             last: None,
             intervals: Vec::new(),
+            paced: Vec::new(),
+            last_why: Why::NONE,
             costs: Vec::new(),
             moving: Vec::new(),
         }
@@ -167,6 +178,7 @@ impl FrameStats {
                 report = self.flush(last);
             } else {
                 self.intervals.push(gap.as_secs_f32() * 1000.0);
+                self.paced.push(self.last_why == Why::DECORATION);
             }
         }
         if self.run_start.is_none() {
@@ -174,6 +186,7 @@ impl FrameStats {
         }
         self.costs.push(costs);
         self.last = Some(start);
+        self.last_why = costs.why;
         if self
             .run_start
             .is_some_and(|run| start.saturating_duration_since(run) >= WINDOW)
@@ -191,13 +204,19 @@ impl FrameStats {
         let run = self.run_start.take()?;
         let costs = std::mem::take(&mut self.costs);
         let intervals = std::mem::take(&mut self.intervals);
+        let paced = std::mem::take(&mut self.paced);
         let mut moving = std::mem::take(&mut self.moving);
         // A run of one or two frames says nothing about smoothness: a click's redraw.
         if intervals.len() < 2 {
             return None;
         }
         let seconds = end.saturating_duration_since(run).as_secs_f32().max(1e-3);
-        let late = intervals.iter().filter(|&&ms| ms > LATE_MS).count();
+        // Decoration alone waits for its own rate on purpose: not late (milestone 783).
+        let late = intervals
+            .iter()
+            .zip(paced.iter().chain(std::iter::repeat(&false)))
+            .filter(|&(&ms, &paced)| ms > LATE_MS && !paced)
+            .count();
         let builds: Vec<f32> = costs.iter().filter_map(|c| c.build).collect();
         let layout: Vec<f32> = costs.iter().map(|c| c.layout_paint).collect();
         let render: Vec<f32> = costs.iter().map(|c| c.render).collect();
@@ -325,6 +344,32 @@ mod tests {
         assert!(line.contains("render 3.0/3.0 ms"), "{line}");
         assert!(line.contains("interval 16.7/"), "{line}");
         assert!(line.ends_with("asked by widget 120"), "{line}");
+    }
+
+    /// **Decoration drawn at its own rate is not late** (milestone 783): 30 frames a second of
+    /// a spinner alone are what was asked for.
+    #[test]
+    fn decoration_at_its_rate_is_not_over_budget() {
+        let mut stats = FrameStats::with(true);
+        let decoration = FrameCosts {
+            why: Why::DECORATION,
+            ..costs()
+        };
+        let t0 = Instant::now();
+        let mut line = None;
+        for i in 1..=70 {
+            let at = t0 + Duration::from_secs_f32(i as f32 / 30.0);
+            if let Some(l) = stats.frame(at, decoration) {
+                line = Some(l);
+            }
+        }
+        let line = line.expect("a line after two seconds");
+        assert!(
+            line.contains("(30 fps)") || line.contains("(31 fps)"),
+            "{line}"
+        );
+        assert!(line.contains("0 over budget"), "{line}");
+        assert!(line.contains("asked by decoration"), "{line}");
     }
 
     /// **A pause ends a run**: frames on either side of it are not one motion, and the

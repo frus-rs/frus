@@ -241,6 +241,12 @@ const DOUBLE_TAP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis
 /// held over the window, where it can be read (milestone 695): the window hears nothing
 /// else of their movement. Thirty times a second keeps the highlight on the pointer.
 const FILE_DRAG_POLL: std::time::Duration = std::time::Duration::from_millis(33);
+/// How early a wake for decoration's next frame may come and still draw it (milestone 783):
+/// a timer that fires a hair before its moment would otherwise sleep again for nothing.
+const DECORATION_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
+/// The window's smallest size, in logical pixels: no absurd interface below it.
+#[cfg(not(web))]
+const MIN_WINDOW: (f32, f32) = (360.0, 280.0);
 
 /// How far apart two taps may be and still be a double tap, in logical pixels: the reference's
 /// `kDoubleTapSlop`.
@@ -1284,6 +1290,18 @@ pub struct App<A: Application> {
     last_insets: WindowInsets,
     /// The device the window stands in for, when `FRUS_DEVICE` names one (milestone 721).
     simulated: Option<crate::simulated::Simulated>,
+    /// Where the window is kept between runs, and its placement as it is moved, resized and
+    /// maximized (milestone 783). `None` when the application does not want it remembered.
+    #[cfg(desktop)]
+    window_memory: Option<(std::path::PathBuf, crate::window_memory::Tracker)>,
+    /// The window moved or changed size since its placement was last noted.
+    #[cfg(desktop)]
+    window_moved: bool,
+    /// When the next frame is due, with decoration alone moving (milestone 783).
+    decoration_due: Option<Instant>,
+    /// The time between two frames of decoration, in seconds, while it alone moves: the
+    /// frame after one is not a stall, and its whole step is taken (milestone 783).
+    decoration_period: Option<f32>,
     /// Whether the window's title bar line is shared with the content, and what the content
     /// is told about it (milestone 640).
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -1503,6 +1521,12 @@ impl<A: Application> App<A> {
             elapsed: 0.0,
             last_insets: WindowInsets::ZERO,
             simulated: None,
+            #[cfg(desktop)]
+            window_memory: None,
+            #[cfg(desktop)]
+            window_moved: false,
+            decoration_due: None,
+            decoration_period: None,
             title_bar_on: false,
             title_bar: None,
             #[cfg(all(desktop, feature = "tray"))]
@@ -2430,7 +2454,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // `min-width`, and cut off whatever a smaller screen has no room for (milestone 735).
         #[cfg(not(web))]
         {
-            attributes = attributes.with_min_inner_size(winit::dpi::LogicalSize::new(360.0, 280.0));
+            attributes = attributes
+                .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1));
         }
         // The AccessKit adapter must be created **before** the window is shown, so we
         // create it hidden and reveal it afterwards. Desktop only.
@@ -2477,6 +2502,20 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 room.width * fit,
                 room.height * fit,
             ));
+        }
+        // Where the window was left at the last run, fitted to the screens there are now
+        // (milestone 783). Before the window is made, which is made hidden: it appears there.
+        #[cfg(desktop)]
+        let remembered = self.remembered_window(event_loop);
+        #[cfg(desktop)]
+        if let Some(placement) = remembered {
+            attributes = attributes.with_inner_size(winit::dpi::LogicalSize::new(
+                placement.size.0,
+                placement.size.1,
+            ));
+            if let Some((x, y)) = placement.position {
+                attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(x, y));
+            }
         }
         // Restarted by `frus run`: where the window was, as big as it was.
         #[cfg(desktop)]
@@ -2612,6 +2651,14 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     #[cfg(desktop)]
                     {
                         self.a11y = Some(crate::a11y::A11y::new(event_loop, &window));
+                        // Followed from here on, the bounds it opens with first: a window
+                        // opened maximized keeps the ones it goes back to (milestone 783).
+                        self.follow_window(&window, remembered);
+                        // Maximized once the accessibility bridge is there: on Windows,
+                        // maximizing shows the window.
+                        if remembered.is_some_and(|placement| placement.maximized) {
+                            window.set_maximized(true);
+                        }
                         window.set_visible(true);
                         // A second process's link brings this window forward and asks it for
                         // a frame.
@@ -2696,6 +2743,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// app can persist its state before the process disappears.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.set_lifecycle(Lifecycle::Detached);
+        // The window, as it was left, for the next run (milestone 783).
+        #[cfg(desktop)]
+        self.keep_window();
     }
 
     /// The system is short of memory (Android's low-memory callback, iOS's memory
@@ -2724,7 +2774,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// of them has arrived, and files still held over the window are looked for where
     /// the system can say (milestone 695).
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Where the window is now that its events are all in (milestone 783).
+        #[cfg(desktop)]
+        self.note_window();
         if self.decide_hold() {
+            event_loop.set_control_flow(self.idle_control_flow());
+        }
+        // A frame of decoration is owed: its deadline is set by the frame just drawn, after
+        // the turn's start chose how long to wait, so the wait is chosen again (milestone 783).
+        if self.decoration_due.is_some() {
             event_loop.set_control_flow(self.idle_control_flow());
         }
         // The activity is being destroyed (milestone 755): its `onDestroy` waits for the loop
@@ -2769,6 +2827,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             && self.lifecycle == Lifecycle::Resumed
             && self.caret.next_toggle(Instant::now()).is_some()
         {
+            self.request_redraw();
+        }
+
+        // Decoration's next frame is due (milestone 783).
+        if self
+            .decoration_due
+            .is_some_and(|due| Instant::now() + DECORATION_SLACK >= due)
+        {
+            self.decoration_due = None;
             self.request_redraw();
         }
 
@@ -2868,7 +2935,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+                #[cfg(desktop)]
+                self.window_placed();
             }
+
+            // Where the window is, for the next run (milestone 783).
+            #[cfg(desktop)]
+            WindowEvent::Moved(_) => self.window_placed(),
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale = scale_factor as f32;
@@ -3240,11 +3313,18 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
                 // The elapsed dt, clamped, for every animation.
                 let now = Instant::now();
+                // A frame that waited for decoration's rate takes its whole step, so that a
+                // spinner turns at the same speed at any rate (milestone 783).
+                let longest = self
+                    .decoration_period
+                    .map_or(0.05, |period| (1.5 * period).max(0.05));
                 let dt = self
                     .last_frame
-                    .map(|prev| (now - prev).as_secs_f32().min(0.05))
+                    .map(|prev| (now - prev).as_secs_f32().min(longest))
                     .unwrap_or(0.0);
                 self.last_frame = Some(now);
+                // This frame draws the decoration too: its next one is decided at the end.
+                self.decoration_due = None;
                 // **Animated time**, at the speed the application set for debugging
                 // (milestone 778): every animation below is moved by this one step, so one
                 // multiplication slows or speeds them all. Input and timers keep the wall
@@ -3812,7 +3892,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // taking the image out of the tree, so a hook read off `Image` would go
                 // quiet at exactly the moment it is needed. Asking here also keeps `Ui`
                 // answering for its own widgets alone (milestone 411).
-                let widget_asks = ui.wants_animation();
+                let widget_asks = ui.wants_full_rate_animation();
+                // Decoration — a spinner, a placeholder's pulse — moving, which may wait
+                // (milestone 783).
+                let decoration_asks =
+                    ui.wants_animation() || frus_widgets::decorative_animations_moving();
                 let loading =
                     frus_widgets::images_in_flight() > 0 || frus_widgets::tasks_in_flight() > 0;
                 let wants_animation = widget_asks || loading;
@@ -3993,9 +4077,23 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 #[cfg(android)]
                 self.sync_autofill();
 
-                // While an animation is running, ask for another frame.
-                if animating || wants_animation {
-                    self.request_redraw();
+                // While an animation is running, ask for another frame: at once, unless
+                // decoration alone moves, which waits for its own rate (milestone 783).
+                match crate::pacing::next_frame(
+                    animating || wants_animation,
+                    decoration_asks,
+                    self.app.decorative_frame_rate(),
+                    self.last_frame.unwrap_or_else(Instant::now),
+                ) {
+                    crate::pacing::NextFrame::Now => {
+                        self.decoration_period = None;
+                        self.request_redraw();
+                    }
+                    crate::pacing::NextFrame::At(at, period) => {
+                        self.decoration_due = Some(at);
+                        self.decoration_period = Some(period);
+                    }
+                    crate::pacing::NextFrame::Idle => self.decoration_period = None,
                 }
                 if let Some(start) = frame_start {
                     use crate::frame_stats::Why;
@@ -4003,6 +4101,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         (app_animating, Why::APP),
                         (animating, Why::RUNTIME),
                         (widget_asks, Why::WIDGET),
+                        (decoration_asks, Why::DECORATION),
                         (loading, Why::LOADING),
                         (rehovered || revealed, Why::POINTER),
                     ];
@@ -4818,6 +4917,102 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Where the window was left at the last run, fitted to the screens there are now; `None`
+    /// when the application does not want it remembered, when nothing was kept, and for a
+    /// simulated device or a restart under `frus run`, which place the window themselves
+    /// (milestone 783).
+    #[cfg(desktop)]
+    fn remembered_window(
+        &self,
+        event_loop: &ActiveEventLoop,
+    ) -> Option<crate::window_memory::Placement> {
+        if !self.app.remember_window()
+            || self.simulated.is_some()
+            || crate::dev::restore_window().is_some()
+        {
+            return None;
+        }
+        let saved = crate::window_memory::load(&crate::window_memory::path()?)?;
+        let screens = crate::window_memory::screens(event_loop);
+        Some(crate::window_memory::fit(
+            &saved,
+            &screens,
+            (MIN_WINDOW.0 as f64, MIN_WINDOW.1 as f64),
+        ))
+    }
+
+    /// Starts following `window`'s placement, to keep it at the end (milestone 783): from the
+    /// bounds it was given at the last run when there were some, as it is otherwise.
+    #[cfg(desktop)]
+    fn follow_window(
+        &mut self,
+        window: &Window,
+        remembered: Option<crate::window_memory::Placement>,
+    ) {
+        if !self.app.remember_window() || self.simulated.is_some() {
+            return;
+        }
+        let Some(path) = crate::window_memory::path() else {
+            return;
+        };
+        // Measured, rather than taken from the file: the system may have moved it.
+        let placement = crate::window_memory::measure(window)
+            .map(|measured| crate::window_memory::Placement {
+                maximized: remembered.is_some_and(|r| r.maximized),
+                ..measured
+            })
+            .or(remembered);
+        if let Some(placement) = placement {
+            self.window_memory = Some((path, crate::window_memory::Tracker::new(placement)));
+        }
+    }
+
+    /// The window moved or changed size: its placement is noted once the loop has run out of
+    /// events (milestone 783). Not at once: maximizing a window on Windows moves it before winit
+    /// knows it is maximized, and the screen's bounds were taken for the window's own.
+    #[cfg(desktop)]
+    fn window_placed(&mut self) {
+        self.window_moved = true;
+    }
+
+    /// Notes the window's placement, if it moved or changed size since it was last noted.
+    #[cfg(desktop)]
+    fn note_window(&mut self) {
+        if !std::mem::take(&mut self.window_moved) {
+            return;
+        }
+        let (Some(window), Some((_, tracker))) =
+            (self.window.as_ref(), self.window_memory.as_mut())
+        else {
+            return;
+        };
+        // Full screen is a state of its own, not a placement to come back to.
+        if window.fullscreen().is_some() {
+            return;
+        }
+        tracker.note(
+            window.is_minimized().unwrap_or(false),
+            window.is_maximized(),
+            || crate::window_memory::measure(window),
+        );
+    }
+
+    /// Keeps the window's placement for the next run (milestone 783).
+    #[cfg(desktop)]
+    fn keep_window(&mut self) {
+        // The last word: what it is now, unless it is minimized.
+        self.window_moved = true;
+        self.note_window();
+        if let Some((path, tracker)) = &self.window_memory {
+            if let Err(err) = crate::window_memory::save(path, &tracker.placement()) {
+                log::warn!(
+                    "the window's place could not be kept in {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     /// Where the system's cursor is, read from the system: while it runs a drag of files
     /// the window hears no pointer movement. `None` where it cannot be read.
     fn system_cursor(&self) -> Option<Point> {
@@ -5178,7 +5373,9 @@ impl<A: Application> App<A> {
         // says when they move from one target to another (milestone 695).
         let files =
             (cfg!(windows) && self.file_drag.is_some()).then(|| Instant::now() + FILE_DRAG_POLL);
-        match [press, reload, caret, tap, files]
+        // The next frame of decoration, when nothing else moves (milestone 783).
+        let decoration = self.decoration_due;
+        match [press, reload, caret, tap, files, decoration]
             .into_iter()
             .flatten()
             .min()

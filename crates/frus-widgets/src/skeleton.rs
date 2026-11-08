@@ -75,6 +75,11 @@ impl<Msg> Widget<Msg> for Skeleton {
         !crate::MediaQuery::reduce_motion()
     }
 
+    /// A pulse that stands in for content: decoration, drawn at its own rate (milestone 783).
+    fn decorative(&self) -> bool {
+        true
+    }
+
     /// **The width offered, when it was given none** (milestone 759).
     ///
     /// A placeholder stands in for a line of content, and a line takes the width of its
