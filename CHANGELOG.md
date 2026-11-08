@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 779 so far, each documenting the objective, the alternatives
+> record — one per step, 781 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Tabs with their own stacks, screens that answer, route observers** (J781).
+  `GoRoute::shell(builder, branches)` puts a frame — a scaffold with a bottom bar — around
+  `ShellBranch`es that each keep their own stack of pages and their state while another is
+  shown (`NavigationShell::go_branch`). The system's Back pops the tab's own pages first, then
+  shows the first tab (`ShellBack::FirstBranch`, the default, or `Leave`), then leaves; the edge
+  swipe never switches tabs (`Application::can_handle_back`). A deep link or browser address
+  selects the tab and builds its stack. `router.push_for_result::<T>(..)` is a future of what the
+  page is popped with (`pop_with(value)`), `None` if it went by Back or a gesture; `push_then` is
+  the closure form. `router.observe(|change| ..)` and `.observer(..)` report every push, pop,
+  replace, go and tab switch. `Navigator::expand` takes the parent's room.
 - **Four bugs found on a phone** (J779). An autocomplete with nothing typed yet, in a row beside
   other children, was a field zero pixels wide (its label, no outline, nothing to tap): a
   container holding a soft-sized child alone now takes the child's default size over, so a

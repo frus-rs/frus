@@ -493,6 +493,14 @@ pub trait Application {
         false
     }
 
+    /// Whether the **system's** Back — Android's back button, a back key — is the
+    /// application's to answer ([`Application::go_back`]) rather than leaving it. The same as
+    /// [`Application::can_go_back`] unless the application says otherwise: a router on the
+    /// first page of a tab that is not the first shows the first tab, which no gesture does.
+    fn can_handle_back(&self) -> bool {
+        self.can_go_back()
+    }
+
     /// The back gesture is progressing (`0 → 1`), so `view` can preview it.
     fn back_gesture(&mut self, _progress: f32) {}
 

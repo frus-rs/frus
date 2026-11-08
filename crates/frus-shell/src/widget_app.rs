@@ -501,6 +501,11 @@ impl Application for FrusApp {
                 .is_some_and(|router| router.can_go_back())
     }
 
+    fn can_handle_back(&self) -> bool {
+        // A router's Back also switches to the first tab of a shell (milestone 781).
+        !frus_widgets::back_blocked() && self.router.as_ref().is_some_and(GoRouter::can_pop)
+    }
+
     fn back_gesture(&mut self, progress: f32) {
         if let Some(router) = &self.router {
             router.back_gesture(progress);
@@ -1535,5 +1540,133 @@ mod suffix_tests {
             "hidden again: {:?}",
             seen.borrow()
         );
+    }
+}
+
+/// Tabs through the whole application: the frame, the bar, the system's Back (milestone 781).
+#[cfg(test)]
+mod shell_route_tests {
+    use super::*;
+    use crate::app::testing::Driver;
+    use frus_widgets::{
+        button, component, text, BottomNavigationBar, BottomNavigationBarItem, Flex, GoRoute,
+        Icons, Scaffold, ShellBranch,
+    };
+
+    const W: f32 = 400.0;
+    const H: f32 = 700.0;
+
+    /// A bottom bar over two tabs. The first counts its taps in a hook and opens a page of its
+    /// own; the second says what it is.
+    fn app() -> (FrusApp, GoRouter) {
+        let router = GoRouter::new(vec![GoRoute::shell(
+            |_, shell, body| {
+                let tabs = shell.clone();
+                Scaffold::new().body(body).bottom_navigation_bar(
+                    BottomNavigationBar::new(shell.current_index(), move |i| tabs.go_branch(i))
+                        .items(vec![
+                            BottomNavigationBarItem::new(Icons::HOME, "Home"),
+                            BottomNavigationBarItem::new(Icons::SEARCH, "Search"),
+                        ]),
+                )
+            },
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/home", |_, _| {
+                    component(|cx| {
+                        let count = cx.use_state(|| 0);
+                        let router = cx.router();
+                        Box::new(
+                            Flex::column()
+                                .child(text(format!("home {}", count.get())))
+                                .child(button("count", move || count.update(|n| *n += 1)))
+                                .child(button("more", move || router.push("/home/details"))),
+                        ) as Box<dyn Widget>
+                    })
+                })
+                .routes(vec![GoRoute::new("details", |_, _| text("details"))])]),
+                ShellBranch::new(vec![GoRoute::new("/search", |_, _| text("search"))]),
+            ],
+        )])
+        .initial_location("/home");
+        (FrusApp::router(router.clone()), router)
+    }
+
+    fn shows(driver: &Driver<FrusApp>, label: &str) -> bool {
+        driver.texts().iter().any(|(text, _)| text == label)
+    }
+
+    #[test]
+    fn tabs_keep_their_pages_and_back_unwinds_them() {
+        let (app, router) = app();
+        let mut driver = Driver::new(app, W, H);
+        driver.frame(1.0 / 60.0);
+        assert!(shows(&driver, "home 0") && shows(&driver, "Search"));
+
+        assert!(driver.tap_text("count"));
+        driver.run(0.5);
+        assert!(shows(&driver, "home 1"));
+
+        assert!(driver.tap_text("Search"));
+        driver.run(1.0);
+        assert_eq!(router.location(), "/search");
+        assert!(shows(&driver, "search") && !shows(&driver, "home 1"));
+
+        assert!(driver.tap_text("Home"));
+        driver.run(1.0);
+        assert!(
+            shows(&driver, "home 1"),
+            "the first tab as it was left, its hook's count kept: {:?}",
+            driver.texts()
+        );
+
+        // A page of the tab opens under the frame: the bar stays.
+        assert!(driver.tap_text("more"));
+        driver.run(1.0);
+        assert_eq!(router.location(), "/home/details");
+        assert!(shows(&driver, "details") && shows(&driver, "Search"));
+        let page = driver
+            .texts()
+            .into_iter()
+            .find(|(text, _)| text == "details")
+            .unwrap()
+            .1;
+        let bar = driver
+            .texts()
+            .into_iter()
+            .find(|(text, _)| text == "Search")
+            .unwrap()
+            .1;
+        assert!(page.y + page.height <= bar.y, "the page is above the bar");
+
+        // Back: the tab's own page, then — from the other tab — the first tab, then out.
+        assert!(driver.system_back());
+        driver.run(1.0);
+        assert!(shows(&driver, "home 1"));
+        assert!(driver.tap_text("Search"));
+        driver.run(1.0);
+        assert!(
+            driver.system_back(),
+            "Back on the second tab shows the first"
+        );
+        driver.run(1.0);
+        assert_eq!(router.location(), "/home");
+        assert!(shows(&driver, "home 1"));
+        assert!(
+            !driver.system_back(),
+            "and on the first tab's first page, Back leaves"
+        );
+    }
+
+    /// The edge gesture starts only where it can take a page off: never on a tab's first page,
+    /// where the system's Back still has the first tab to show.
+    #[test]
+    fn the_gesture_and_the_system_back_answer_differently_on_a_tabs_first_page() {
+        let (app, router) = app();
+        let mut driver = Driver::new(app, W, H);
+        driver.frame(1.0 / 60.0);
+        router.go_branch(1);
+        driver.run(0.5);
+        assert!(!driver.app().can_go_back());
+        assert!(driver.app().can_handle_back());
     }
 }
