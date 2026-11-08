@@ -3297,7 +3297,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A hot-reload patch changed what the components build.
                 #[cfg(feature = "hot-reload")]
                 let arrived = crate::hot::take_patched() || arrived;
-                if frus_widgets::take_rebuild_request() || arrived {
+                // A preference changed, maybe on another thread (milestone 776): `|`, not `||`, so
+                // both flags are taken.
+                if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change()
+                    || arrived
+                {
                     self.build_dirty = true;
                 }
                 let need_build = frame_needs_build(
@@ -12899,7 +12903,10 @@ pub mod testing {
             let asked = s.app.effects();
             s.run_command(asked);
             let arrived = s.take_task_arrivals();
-            if frus_widgets::take_rebuild_request() || arrived {
+            // A preference changed, maybe on another thread (milestone 776): `|`, not `||`, so
+            // both flags are taken.
+            if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change() || arrived
+            {
                 s.build_dirty = true;
             }
             s.report_focus();

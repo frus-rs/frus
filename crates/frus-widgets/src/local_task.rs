@@ -200,6 +200,14 @@ pub fn set_local_wake(wake: impl Fn() + Send + Sync + 'static) {
     }
 }
 
+/// Asks the shell for a frame, from any thread; nothing without a shell.
+pub(crate) fn wake_shell() {
+    let wake = WAKE.lock().ok().and_then(|slot| slot.clone());
+    if let Some(wake) = wake {
+        wake();
+    }
+}
+
 fn wake(thread: ThreadId, id: u64) {
     if let Ok(mut woken) = WOKEN.lock() {
         if !woken.contains(&(thread, id)) {

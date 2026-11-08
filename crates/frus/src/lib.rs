@@ -63,7 +63,8 @@ pub struct GuideTesting;
     feature = "notifications",
     feature = "tray",
     feature = "taskbar",
-    feature = "global-shortcuts"
+    feature = "global-shortcuts",
+    feature = "secure-store"
 ))]
 #[doc = include_str!("../../../docs/guide/platform.md")]
 pub struct GuidePlatform;
@@ -122,6 +123,11 @@ pub use frus_shell::Tester;
 // `SystemNotification`.
 #[cfg(all(feature = "notifications", not(target_os = "ios")))]
 pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification};
+
+// Secrets kept by the system (feature `secure-store`, milestone 776): `secure_store()`. The
+// preferences, `prefs()`, come with the widgets.
+#[cfg(feature = "secure-store")]
+pub use frus_shell::{secure_store, SecureStore, SecureStoreError};
 
 /// Asking the person for the camera, the microphone, the location, notifications
 /// (milestone 730).

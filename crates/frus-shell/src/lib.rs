@@ -35,6 +35,8 @@ mod android_autofill;
 mod android_clipboard;
 #[cfg(android)]
 mod android_ime;
+#[cfg(all(android, feature = "secure-store"))]
+mod android_keystore;
 #[cfg(android)]
 mod android_lifecycle;
 #[cfg(android)]
@@ -99,6 +101,7 @@ mod web_permission;
 // Global shortcuts (milestone 709).
 mod shortcuts;
 mod startup;
+mod storage;
 // The taskbar's badge and progress (milestone 708).
 mod taskbar;
 // The tray icon (milestone 706): its description everywhere, the system's own on the desktop.
@@ -119,6 +122,8 @@ mod remote;
 /// effect. Native only — on the Web the browser is the runtime.
 #[cfg(not(web))]
 pub(crate) mod runtime;
+#[cfg(feature = "secure-store")]
+mod secure_store;
 mod selection;
 mod simulated;
 mod subscription;
@@ -156,7 +161,14 @@ pub use link::{link_among, location_of_link};
 pub use notification::{NotificationError, NotificationResponse, SystemNotification};
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use remote::RemoteData;
+#[cfg(feature = "secure-store")]
+pub use secure_store::{secure_store, SecureStore, SecureStoreError};
 pub use shortcuts::GlobalShortcut;
+#[cfg(android)]
+#[doc(hidden)]
+pub use storage::__android_started;
+#[doc(hidden)]
+pub use storage::__install_storage;
 pub use subscription::Subscription;
 pub use taskbar::{Taskbar, TaskbarProgress};
 #[cfg(any(test, feature = "testing"))]
@@ -264,6 +276,7 @@ macro_rules! main {
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         pub fn run() -> $crate::anyhow::Result<()> {
             $crate::__name_app(::core::module_path!());
+            $crate::__install_storage();
             $crate::run($app)
         }
 
@@ -276,6 +289,7 @@ macro_rules! main {
         #[no_mangle]
         fn android_main(android_app: $crate::AndroidApp) {
             $crate::__name_app(::core::module_path!());
+            $crate::__android_started(&android_app);
             if let ::core::result::Result::Err(err) = $crate::run_android($app, android_app) {
                 $crate::log::error!("frus (android) stopped: {:#}", err);
             }
@@ -287,6 +301,7 @@ macro_rules! main {
         #[::wasm_bindgen::prelude::wasm_bindgen(start)]
         pub fn start() {
             $crate::__name_app(::core::module_path!());
+            $crate::__install_storage();
             if let ::core::result::Result::Err(err) = $crate::run_web($app) {
                 $crate::log::error!("frus (web) stopped: {:#}", err);
             }
@@ -309,6 +324,7 @@ macro_rules! main {
 #[cfg(desktop)]
 pub fn run<A: Application>(mut app: A) -> anyhow::Result<()> {
     startup::begin();
+    storage::__install_storage();
     // Where the renderer draws through Vulkan — Linux, or any desktop given `WGPU_BACKEND=vulkan`
     // — it keeps its compiled pipelines between launches: in the user's cache folder, under the
     // program's name (milestones 685 and 697, #217). Nothing is written elsewhere.
@@ -363,6 +379,7 @@ pub fn run<A: Application>(mut app: A) -> anyhow::Result<()> {
 #[cfg(ios)]
 pub fn run<A: Application>(app: A) -> anyhow::Result<()> {
     startup::begin();
+    storage::__install_storage();
     let event_loop = winit::event_loop::EventLoop::<A::Message>::with_user_event().build()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
@@ -381,6 +398,7 @@ pub fn run<A: Application>(app: A) -> anyhow::Result<()> {
 pub fn run_web<A: Application + 'static>(app: A) -> anyhow::Result<()> {
     use winit::platform::web::EventLoopExtWebSys;
     startup::begin();
+    storage::__install_storage();
 
     // Panics → the browser console, instead of an opaque "unreachable" — and the page, which
     // would otherwise stay as it was, silent (milestone 745).
@@ -426,6 +444,9 @@ pub fn run_android<A: Application>(app: A, android_app: AndroidApp) -> anyhow::R
         return Ok(());
     }
     startup::begin();
+    // The application's folder, and its preferences, for an application started without
+    // `main!` (which records them before the application is made).
+    storage::__android_started(&android_app);
     // The renderer's compiled pipelines, kept in the application's cache folder between
     // launches: the next start reads them instead of compiling them again (milestones 685 and
     // 697, #217). The folder milestone 685 used inside `files` is removed.

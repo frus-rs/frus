@@ -152,6 +152,7 @@ mod placeholder;
 mod popover;
 mod portal;
 mod positioned;
+mod prefs;
 mod progressbar;
 mod radio;
 mod rating;
@@ -417,6 +418,12 @@ pub use placeholder::{Placeholder, PLACEHOLDER_COLOR, PLACEHOLDER_FALLBACK, PLAC
 pub use popover::MenuAnchor;
 pub use portal::{OverlayPortal, Placement};
 pub use positioned::{Positioned, Positioning};
+#[doc(hidden)]
+pub use prefs::{
+    __install_prefs_storage, __prefs_storage_installed, __take_prefs_change, __use_memory_prefs,
+    PrefsChange, PrefsMap, PrefsStorage,
+};
+pub use prefs::{prefs, Prefs, PrefsError, UsePref};
 pub use progressbar::LinearProgressIndicator;
 pub use radio::{Radio, RadioGroup};
 pub use rating::Rating;
@@ -461,6 +468,9 @@ pub use segmented::{
 };
 pub use selectiontoolbar::{EditAction, ToolbarContext, ToolbarItem};
 pub use semantics::{Description, Semantics};
+/// The JSON the preferences are kept as, for the platform layer's storages.
+#[doc(hidden)]
+pub use serde_json as __serde_json;
 pub use sheet::{
     sheet_takes_release, split_sheet_drag, DraggableScrollableSheet, SheetArea, SheetSpec,
     SheetState, SheetTo, SnapSimulation, SHEET_SNAP_MIN_SPEED,

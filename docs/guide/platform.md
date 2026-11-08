@@ -9,7 +9,7 @@ Most are optional features, so an application that does not use them does not ca
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "taskbar", "global-shortcuts"] }
+frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "taskbar", "global-shortcuts", "secure-store"] }
 ```
 
 | Service | Feature | Desktop | Android | Web |
@@ -23,6 +23,8 @@ frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "
 | [The application's icon](#the-applications-icon) | — | ✓ | ✓ | ✓ |
 | [One instance at a time](#one-instance-at-a-time) | — | ✓ | — | — |
 | [Permissions](#permissions) | — | ✓ | ✓ | ✓ |
+| [Preferences](#preferences) | — | ✓ | ✓ | ✓ |
+| [Secrets](#secrets) | `secure-store` | ✓ | ✓ | — |
 
 ## Picking a file
 
@@ -300,3 +302,71 @@ a bundle.
 `FrusApp::single_instance("com.example.notes")` makes a second launch hand the link it was
 opened with to the instance already running, instead of opening a second window. With [links](navigation.md) it is how `myapp://notes/42`
 opens a note in the application already open.
+
+## Preferences
+
+Small settings that should outlive the process — the theme the person chose, whether the
+onboarding was seen, the tab that was open — go in `prefs()`. It is synchronous, needs no
+feature, and keeps any value serde can write:
+
+```rust
+use frus::prefs;
+# frus::__use_memory_prefs();
+
+prefs().set("onboarding_done", true).unwrap();
+let done = prefs().get::<bool>("onboarding_done").unwrap_or(false);
+prefs().remove("onboarding_done").unwrap();
+# let _ = done;
+```
+
+A component that shows a preference reads it with `cx.use_pref(key, default)`, and is built
+again whenever it changes, wherever the change was made:
+
+```rust
+use frus::{component, Switch, Widget};
+
+fn dark_mode() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let dark = cx.use_pref("dark_mode", false);
+        let toggle = dark.clone();
+        Box::new(Switch::new(dark.get()).on_toggle(move |on| {
+            let _ = toggle.set(on);
+        }))
+    }))
+}
+```
+
+They are kept in a JSON file in the application's data folder on the desktop
+(`%APPDATA%\frus\<program>`, `~/Library/Application Support/frus/<program>`,
+`~/.local/share/frus/<program>`), in the application's own folder on Android, and in the
+page's `localStorage` on the web. A file is written whole to a temporary file and renamed over
+the old one, so a crash never leaves half of it. In a test driven by `Tester` they live in
+memory.
+
+Preferences are not [restoration](navigation.md): restoration brings back what was on screen
+after the system ended the process, and is forgotten when the person closes the application. A
+preference stays until it is removed. Neither is for secrets.
+
+## Secrets
+
+Tokens and passwords go in `secure_store()` (feature `secure-store`), which the system keeps
+encrypted and gives to this application only:
+
+```rust,no_run
+let store = frus::secure_store();
+store.set("token", "eyJhbGciOi…").unwrap();
+let token: Option<String> = store.get("token").unwrap();
+store.delete("token").unwrap();
+# let _ = token;
+```
+
+| Platform | Kept in |
+| --- | --- |
+| Windows | The Credential Manager (`cmdkey /list` shows `frus.<program>/<key>`). At most 2560 bytes a value. |
+| macOS, iOS | The Keychain. |
+| Linux | The desktop's Secret Service (GNOME Keyring, KWallet); a locked keyring shows its own prompt. |
+| Android | An AES-256 key in the Android Keystore encrypts each value; the ciphertext is in the application's folder. |
+| Web | Nothing: `SecureStoreError::Unsupported`. Any script of the page could read what a page keeps; keep secrets on the server. |
+
+Every call answers a `Result`, and blocks while the system answers: read a token in `init`, and
+write one from an `async` handler.

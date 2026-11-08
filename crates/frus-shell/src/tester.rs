@@ -54,6 +54,8 @@ impl<A: Application> Tester<A> {
 
     /// The application on a `width` by `height` surface, drawn until it is still.
     pub fn sized(app: A, width: f32, height: f32) -> Self {
+        // A test's preferences live in memory: nothing it sets reaches the device.
+        frus_widgets::__use_memory_prefs();
         let mut tester = Self {
             driver: Driver::new(app, width, height),
         };

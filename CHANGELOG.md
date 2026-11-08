@@ -8,10 +8,20 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 772 so far, each documenting the objective, the alternatives
+> record — one per step, 776 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Preferences and a secure store** (J776). `frus::prefs()` keeps small settings across
+  restarts: `set`, `get::<T>`, `remove`, `clear` for any serde value, synchronous. A JSON file
+  in the application's data folder on the desktop (`%APPDATA%`, `Application Support`,
+  `$XDG_DATA_HOME`) and in its `files` folder on Android, written to a temporary file and
+  renamed; `localStorage` on the web. `cx.use_pref(key, default)` shows one in a component,
+  and any change, from any thread, builds the interface again. `frus::secure_store()`
+  (feature `secure-store`) keeps secrets with the system: the Credential Manager on Windows,
+  the Keychain on macOS and iOS, the Secret Service on Linux, an AES-256-GCM key in the
+  Android Keystore on Android; `Unsupported` on the web, which has nowhere safe to keep one.
 
 - **A restored scroll offset waits for the content it needs** (J768). Seen on an Android 10
   phone: an application that loads its content after the first frame (the demo reads its

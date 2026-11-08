@@ -34,7 +34,9 @@ than copied.
 
 **Coverage, not language, is the real limit.** A developer who needs notifications,
 the camera, biometrics, share sheets, or in-app purchases today writes the JNI
-themselves. That is possible and unpleasant. It is discussed under
+themselves. That is possible and unpleasant. (Notifications, permissions, preferences and
+secure storage of secrets are now frus APIs: `SystemNotification`, `Permission`, `prefs()`,
+`secure_store()`.) It is discussed under
 [the real gap](#the-real-gap-coverage-not-language) below.
 
 ---
