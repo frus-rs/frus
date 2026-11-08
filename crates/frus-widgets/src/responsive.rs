@@ -381,6 +381,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.page_view())
     }
 
+    fn sliver_view(&self) -> Option<&crate::sliver::CustomScrollView<Msg>> {
+        self.inner.as_ref().and_then(|w| w.sliver_view())
+    }
+
     fn intrinsic(&self) -> Option<(crate::constraints::IntrinsicAxis, Option<f32>)> {
         self.inner.as_ref().and_then(|w| w.intrinsic())
     }

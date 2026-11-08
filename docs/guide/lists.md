@@ -189,6 +189,50 @@ fn catalogue() -> Box<dyn Widget> {
 }
 ```
 
+## A collapsing app bar over a grid and a list
+
+`CustomScrollView` scrolls several pieces, called slivers, as one: an app bar that collapses,
+a grid, a list. The lists and grids in it are lazy: only the rows in view, and 250 pixels
+around it (`.cache_extent(..)`), are built.
+
+```rust
+use frus::{
+    Container, CustomScrollView, FlexibleSpaceBar, ListTile, SliverAppBar, SliverGrid,
+    SliverList, SliverPadding, Text, Widget,
+};
+
+fn places() -> Box<dyn Widget> {
+    Box::new(
+        CustomScrollView::new()
+            .sliver(
+                SliverAppBar::new()
+                    .pinned(true)
+                    .expanded_height(220.0)
+                    .flexible_space(FlexibleSpaceBar::new().title(Text::new("Lisbon"))),
+            )
+            .sliver(
+                SliverPadding::new(SliverGrid::extent(160.0, 24, |_| Container::new()).gap(8.0))
+                    .padding(12.0),
+            )
+            .sliver(SliverList::new(10_000, 56.0, |i| {
+                ListTile::new().title(format!("Street {i}"))
+            })),
+    )
+}
+```
+
+- `SliverAppBar`: `.pinned(true)` keeps the toolbar once collapsed; `.floating(true)` brings it
+  back as soon as the reader scrolls up, and `.snap(true)` finishes that once the scroll stops.
+  `FlexibleSpaceBar` gives the expanded bar a title that shrinks into the toolbar and a
+  background that fades out. The colours come from the app bar theme (`background`,
+  `scrolled_under_background`, `scrolled_under_elevation`), and every one has a builder method.
+- `SliverList::new(count, extent, build)`, `SliverList::builder(count, build)` for rows of any
+  height, `SliverList::children(..)` for a few given widgets.
+- `SliverGrid::count(columns, count, build)` and `SliverGrid::extent(max_width, count, build)`.
+- `SliverToBoxAdapter::new(widget)` for a single widget, `SliverPadding` for room around a
+  piece, `SliverFillRemaining` for what is left of the viewport, and `SliverPersistentHeader`
+  for a header of your own that collapses between two extents.
+
 ## Moving a list from code
 
 A list wrapped in `keyed(key, list)` can be scrolled from anywhere with `host::scroll_to`: to

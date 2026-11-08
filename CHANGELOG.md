@@ -8,11 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 779 so far, each documenting the objective, the alternatives
+> record — one per step, 780 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Slivers** (J780). `CustomScrollView` scrolls several pieces as one: `SliverList` (fixed
+  extent, any extent, or given children), `SliverGrid` (`count` or `extent` columns),
+  `SliverToBoxAdapter`, `SliverPadding`, `SliverFillRemaining`, `SliverPersistentHeader`
+  (pinned, floating, snap) and `SliverAppBar` (pinned / floating / snap, `expanded_height`,
+  `FlexibleSpaceBar` with a title that shrinks into the toolbar and a background that fades).
+  Lists and grids build only the items in the viewport and a 250 px cache extent around it.
+  The view scrolls with the existing machinery: physics, scrollbar, keyboard, `ScrollTo`,
+  restoration. `AppBarTheme` gains `scrolled_under_background` and `scrolled_under_elevation`.
 - **Four bugs found on a phone** (J779). An autocomplete with nothing typed yet, in a row beside
   other children, was a field zero pixels wide (its label, no outline, nothing to tap): a
   container holding a soft-sized child alone now takes the child's default size over, so a

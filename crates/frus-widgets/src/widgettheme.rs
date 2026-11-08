@@ -539,6 +539,12 @@ pub struct AppBarTheme {
     /// It was an `Option<BorderRadius>` under this name until milestone 455: the last
     /// theme field left carrying the reference's *word* with a corner radius behind it.
     pub shape: Option<ShapeBorder>,
+    /// The surface of a [`SliverAppBar`](crate::SliverAppBar) once content scrolls under
+    /// it. Unset, the scheme's `surface_container`.
+    pub scrolled_under_background: Option<Color>,
+    /// The elevation of a [`SliverAppBar`](crate::SliverAppBar) once content scrolls under
+    /// it. Unset, 3.
+    pub scrolled_under_elevation: Option<f32>,
 }
 
 /// Defaults for [`TextField`](crate::TextField).
