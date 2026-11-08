@@ -158,6 +158,11 @@ impl State for SnackBarDemoState {
                     .variant(Variant::Tonal)
                     .on_press(show("Profile saved", SnackBarKind::Success, false)),
             )
+            .child(
+                Button::new("Warning")
+                    .variant(Variant::Outlined)
+                    .on_press(show("Storage almost full", SnackBarKind::Warning, false)),
+            )
             .child(Button::new("Error").variant(Variant::Danger).on_press(show(
                 "Could not connect",
                 SnackBarKind::Error,
@@ -191,6 +196,7 @@ impl State for SnackBarDemoState {
                 .close_icon(close.clone());
             bar = match toast.kind {
                 SnackBarKind::Success => bar.success(),
+                SnackBarKind::Warning => bar.warning(),
                 SnackBarKind::Error => bar.error(),
                 SnackBarKind::Info => bar,
             };
