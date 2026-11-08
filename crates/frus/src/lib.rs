@@ -127,6 +127,10 @@ pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification
 /// (milestone 730).
 pub use frus_shell::{open_permission_settings, Permission, PermissionStatus};
 
+/// Opening an address in the system's handler — the browser, the mail application, the
+/// dialer — and sharing through the system's share sheet (milestone 775).
+pub use frus_shell::{open_url, share, OpenUrlError, Share, ShareError, ShareOutcome};
+
 // Cross-platform HTTP (feature `net`): the `frus::fetch(url).await` shorthand and the
 // `frus::Request` builder (method / headers / body / timeout) — see [`frus::net`].
 #[cfg(feature = "net")]
