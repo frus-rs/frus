@@ -170,6 +170,12 @@ impl<Msg: Clone> Widget<Msg> for Draggable<Msg> {
             .is_some_and(|child| child.continuous())
     }
 
+    fn decorative(&self) -> bool {
+        self.children
+            .first()
+            .is_some_and(|child| child.decorative())
+    }
+
     fn drag_payload(&self) -> Option<u64> {
         Some(self.payload)
     }
@@ -332,6 +338,12 @@ impl<Msg: Clone> Widget<Msg> for DragTarget<Msg> {
         self.children
             .first()
             .is_some_and(|child| child.continuous())
+    }
+
+    fn decorative(&self) -> bool {
+        self.children
+            .first()
+            .is_some_and(|child| child.decorative())
     }
 
     fn drop_zone(&self) -> bool {

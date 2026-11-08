@@ -165,6 +165,11 @@ mod web_keys;
 #[cfg(any(web, test))]
 mod web_page;
 mod widget_app;
+// The desktop window's size, place and maximized state, kept between runs (milestone 783).
+#[cfg(any(desktop, test))]
+mod window_memory;
+// When the next frame comes, with decoration alone moving (milestone 783).
+mod pacing;
 
 /// A windowless driver for tests. Hidden: not part of what an application builds on.
 #[cfg(any(test, feature = "testing"))]
@@ -184,6 +189,7 @@ pub use link::{link_among, location_of_link};
 #[cfg(all(any(desktop, android, web), feature = "notifications"))]
 pub use notification::{NotificationError, NotificationResponse, SystemNotification};
 pub use open_url::{open_url, OpenUrlError};
+pub use pacing::DECORATIVE_FRAME_RATE;
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use remote::RemoteData;
 #[cfg(feature = "secure-store")]

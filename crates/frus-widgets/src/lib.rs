@@ -241,7 +241,7 @@ pub use animated::{
     AnimatedSlide, Opacity,
 };
 pub use animatedsize::{AnimatedSize, SizeAnimation};
-pub use animationhandle::{tick_animations, AnimationHandle};
+pub use animationhandle::{decorative_animations_moving, tick_animations, AnimationHandle};
 pub use appbar::{platform_centers_title, AppBar, APP_BAR_HEIGHT, APP_BAR_MAX_TITLE_SCALE};
 pub use aspectratio::AspectRatio;
 pub use asyncbuild::{

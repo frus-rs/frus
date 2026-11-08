@@ -79,6 +79,8 @@ pub struct AnimationController {
     heading_up: bool,
     /// The active repeat loop; `None` means a one-shot animation.
     repeat: Option<Repeat>,
+    /// Whether its movement is decoration alone (milestone 783).
+    decorative: bool,
 }
 
 impl AnimationController {
@@ -93,6 +95,7 @@ impl AnimationController {
             active: None,
             heading_up: false,
             repeat: None,
+            decorative: false,
         }
     }
 
@@ -119,6 +122,28 @@ impl AnimationController {
     /// The current status.
     pub fn status(&self) -> Status {
         self.status
+    }
+
+    /// Marks its movement as **decoration** (milestone 783): a loop that only shows that
+    /// something is going on — a pulse, a shimmer, a glow that breathes — and that nobody
+    /// follows frame by frame. While nothing else moves, the frames that drive it come at the
+    /// application's rate for decoration rather than the display's. Never for a movement that
+    /// follows input or carries the eye from one place to another.
+    ///
+    /// ```
+    /// use frus_core::AnimationController;
+    ///
+    /// let mut pulse = AnimationController::unit();
+    /// pulse.set_decorative(true);
+    /// assert!(pulse.is_decorative());
+    /// ```
+    pub fn set_decorative(&mut self, decorative: bool) {
+        self.decorative = decorative;
+    }
+
+    /// Whether its movement is decoration; see [`set_decorative`](Self::set_decorative).
+    pub fn is_decorative(&self) -> bool {
+        self.decorative
     }
 
     /// `true` while a simulation is running, meaning a frame is needed.

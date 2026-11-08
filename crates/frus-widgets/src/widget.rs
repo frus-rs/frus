@@ -990,6 +990,27 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// If `true`, the widget's [`continuous`](Self::continuous) animation is **decoration**:
+    /// it shows that something is going on — an indeterminate indicator turning, a
+    /// placeholder shimmering, a pulse — and nobody follows it frame by frame (milestone 783).
+    ///
+    /// While nothing else moves, the shell then draws at the application's rate for
+    /// decoration (30 frames a second by default; see
+    /// `Application::decorative_frame_rate` in the shell) instead of the display's, which
+    /// spares the battery and the GPU. The built-in indeterminate indicators and
+    /// [`crate::Skeleton`] say `true`. Anything that follows input, a scroll, a gesture, a
+    /// transition, must leave it `false`, the default.
+    ///
+    /// ```
+    /// use frus_widgets::{CircularProgressIndicator, Widget};
+    ///
+    /// let spinner = CircularProgressIndicator::new();
+    /// assert!(Widget::<()>::continuous(&spinner) && Widget::<()>::decorative(&spinner));
+    /// ```
+    fn decorative(&self) -> bool {
+        false
+    }
+
     /// If `true`, this widget is a **repaint boundary**: its subtree is cached
     /// (primitives + interaction maps) and **reused as is** as long as its geometry
     /// and the interaction state of its descendants do not change — a widget
@@ -2326,6 +2347,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn continuous(&self) -> bool {
         (**self).continuous()
+    }
+    fn decorative(&self) -> bool {
+        (**self).decorative()
     }
     fn scroll_content(&self) -> Option<&dyn Widget<Msg>> {
         (**self).scroll_content()

@@ -1431,6 +1431,11 @@ impl<Msg> Widget<Msg> for LineChart<Msg> {
         self.animated && !crate::MediaQuery::reduce_motion()
     }
 
+    /// The halo's pulse is decoration: drawn at the rate for decoration (milestone 783).
+    fn decorative(&self) -> bool {
+        true
+    }
+
     fn on_click(&self) -> Option<Msg> {
         None
     }

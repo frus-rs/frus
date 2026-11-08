@@ -57,6 +57,14 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   `cx.use_pref(key, default)` shows one in a component (every platform).
 - **Secrets**: `frus::secure_store()` (feature `secure-store`) keeps them with the system's
   credential store (Windows, macOS, iOS, Linux, Android; `Unsupported` on the web).
+- **The window's place**: on Windows, macOS and Linux the window comes back at the size, the
+  place and the maximized state it was closed with, fitted to the screens there are at the
+  next start. Nothing to write; `FrusApp::remember_window(false)` turns it off, and
+  `.window_size(w, h)` is the size of the first run.
+- **Frames spent on decoration**: a spinner, a placeholder's pulse or any animation marked
+  decorative (`Widget::decorative`, `AnimationHandle::decorative()`) is drawn at 30 frames a
+  second when nothing else moves, not at the display's rate.
+  `FrusApp::decorative_frame_rate(Some(fps))` changes the rate, `None` removes the limit.
 
 ---
 

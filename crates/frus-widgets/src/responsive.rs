@@ -373,6 +373,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().is_some_and(|w| w.continuous())
     }
 
+    fn decorative(&self) -> bool {
+        self.inner.as_ref().is_some_and(|w| w.decorative())
+    }
+
     fn virtual_list(&self, viewport: frus_core::Size) -> Option<crate::list::VirtualList<'_, Msg>> {
         self.inner.as_ref().and_then(|w| w.virtual_list(viewport))
     }

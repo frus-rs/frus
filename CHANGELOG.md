@@ -8,11 +8,26 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 782 so far, each documenting the objective, the alternatives
+> record — one per step, 783 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The desktop window comes back as it was left; decoration at its own frame rate** (J783).
+  The window's size, place and maximized state are kept in `window.json` in the application's
+  data folder and restored before it is shown, fitted to the screens there are now (a window
+  whose monitor was unplugged opens centred on the main one, one bigger than its screen shrinks
+  to it, the logical size survives a new scale factor). A window closed maximized opens
+  maximized over its earlier bounds; a minimized one never opens minimized. On by default;
+  `FrusApp::remember_window(false)` / `Application::remember_window` turns it off, and
+  `window_size` is the size of the first run. Continuous animations that are pure decoration
+  (indeterminate progress indicators, `Skeleton`, a chart's pulsing halo, any widget whose new
+  `Widget::decorative` says so, any controller marked with `AnimationHandle::decorative()`)
+  no longer force the display's refresh rate when nothing else moves: they are drawn at
+  `DECORATIVE_FRAME_RATE` (30) frames a second, or what `FrusApp::decorative_frame_rate` /
+  `Application::decorative_frame_rate` says (`None` for no limit). Scrolls, gestures and
+  transitions are never held back. New `Ui::wants_full_rate_animation`,
+  `decorative_animations_moving`.
 - **Slivers** (J780). `CustomScrollView` scrolls several pieces as one: `SliverList` (fixed
   extent, any extent, or given children), `SliverGrid` (`count` or `extent` columns),
   `SliverToBoxAdapter`, `SliverPadding`, `SliverFillRemaining`, `SliverPersistentHeader`

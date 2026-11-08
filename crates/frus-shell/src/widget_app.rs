@@ -71,6 +71,8 @@ pub struct FrusApp {
     builder: Option<Wrap>,
     router: Option<GoRouter>,
     window_size: Option<(f32, f32)>,
+    remember_window: bool,
+    decorative_frame_rate: Option<f32>,
     icon: crate::AppIcon,
     on_start: Option<Box<dyn FnOnce()>>,
     tray: Option<Box<dyn Fn() -> crate::Tray<Callback>>>,
@@ -148,6 +150,8 @@ impl FrusApp {
             builder: None,
             router: None,
             window_size: None,
+            remember_window: true,
+            decorative_frame_rate: Some(crate::DECORATIVE_FRAME_RATE),
             icon: crate::AppIcon::Frus,
             on_start: None,
             tray: None,
@@ -338,9 +342,46 @@ impl FrusApp {
         self
     }
 
-    /// The window's initial size, in logical pixels.
+    /// The window's initial size, in logical pixels. On a desktop the window then comes back
+    /// as it was left (see [`remember_window`](Self::remember_window)), so this is the size of
+    /// the first run.
     pub fn window_size(mut self, width: f32, height: f32) -> Self {
         self.window_size = Some((width, height));
+        self
+    }
+
+    /// Whether the desktop window comes back as it was left — its size, its place, maximized
+    /// or not (milestone 783). On by default; `false` opens it at
+    /// [`window_size`](Self::window_size) every time. See
+    /// [`Application::remember_window`].
+    ///
+    /// ```
+    /// use frus_shell::FrusApp;
+    /// use frus_widgets::text;
+    ///
+    /// let app = FrusApp::from_fn(|_| Box::new(text("kiosk")))
+    ///     .window_size(1024.0, 768.0)
+    ///     .remember_window(false);
+    /// # let _ = app;
+    /// ```
+    pub fn remember_window(mut self, remember: bool) -> Self {
+        self.remember_window = remember;
+        self
+    }
+
+    /// How many frames a second decoration — a spinner, a placeholder's pulse — is drawn at
+    /// when nothing else moves (milestone 783): 30 by default, `None` for the display's rate.
+    /// See [`Application::decorative_frame_rate`].
+    ///
+    /// ```
+    /// use frus_shell::FrusApp;
+    /// use frus_widgets::text;
+    ///
+    /// let app = FrusApp::from_fn(|_| Box::new(text("loading"))).decorative_frame_rate(Some(24.0));
+    /// # let _ = app;
+    /// ```
+    pub fn decorative_frame_rate(mut self, fps: Option<f32>) -> Self {
+        self.decorative_frame_rate = fps;
         self
     }
 
@@ -556,6 +597,14 @@ impl Application for FrusApp {
 
     fn window_size(&self) -> Option<(f32, f32)> {
         self.window_size
+    }
+
+    fn remember_window(&self) -> bool {
+        self.remember_window
+    }
+
+    fn decorative_frame_rate(&self) -> Option<f32> {
+        self.decorative_frame_rate
     }
 
     fn icon(&self) -> crate::AppIcon {

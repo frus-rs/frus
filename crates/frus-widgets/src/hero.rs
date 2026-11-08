@@ -117,6 +117,12 @@ impl<Msg: Clone> Widget<Msg> for Hero<Msg> {
             .is_some_and(|child| child.continuous())
     }
 
+    fn decorative(&self) -> bool {
+        self.children
+            .first()
+            .is_some_and(|child| child.decorative())
+    }
+
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {
         // Nothing of its own: the child is the element.
     }

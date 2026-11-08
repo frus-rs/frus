@@ -428,6 +428,10 @@ macro_rules! forward_transparent {
                 self.inner.continuous()
             }
 
+            fn decorative(&self) -> bool {
+                self.inner.decorative()
+            }
+
             fn draws_own_focus(&self) -> bool {
                 self.inner.draws_own_focus()
             }
