@@ -18,10 +18,13 @@ pub struct ReadmeDoctests;
 // for **this** crate only: the `main!` macro below expands in the user's crate, so
 // it keeps explicit `target_os` / `target_arch` predicates.
 
-// Accessibility: AccessKit on desktop, a hand-rolled DOM bridge on the web — not
-// Android, not iOS (see a11y.rs and a11y_web.rs).
+// Accessibility: AccessKit on desktop, a hand-rolled DOM bridge on the web, and a node
+// provider of our own on Android (milestone 782) — not iOS (see a11y.rs, a11y_web.rs,
+// a11y_android.rs and android_accessibility.rs).
 #[cfg(desktop)]
 mod a11y;
+#[cfg(any(android, test))]
+mod a11y_android;
 #[cfg(web)]
 mod a11y_web;
 #[cfg(web)]
@@ -29,6 +32,8 @@ mod address;
 /// Selecting aligned and cut texts through the shell (milestone 742).
 #[cfg(all(test, desktop))]
 mod aligned_selection_tests;
+#[cfg(android)]
+mod android_accessibility;
 #[cfg(android)]
 mod android_autofill;
 #[cfg(android)]

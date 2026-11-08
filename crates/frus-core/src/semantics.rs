@@ -79,6 +79,10 @@ pub struct SemanticsProperties {
     pub disabled: bool,
     /// Numeric bounds `(min, value, max)` for sliders and progress bars.
     pub range: Option<(f32, f32, f32)>,
+    /// The value is **hidden** from sight — a password field's dots — so a screen reader
+    /// must not read it out either: it is told the field is a password and given only as
+    /// many dots as there are characters.
+    pub obscured: bool,
 }
 
 impl SemanticsProperties {
@@ -137,6 +141,38 @@ impl SemanticsProperties {
         self
     }
 
+    /// Marks the value as hidden (a password field's).
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let field = SemanticsProperties::new(Role::TextInput).value("hunter2").obscured(true);
+    /// assert!(field.obscured);
+    /// ```
+    pub fn obscured(mut self, obscured: bool) -> Self {
+        self.obscured = obscured;
+        self
+    }
+
+    /// The value as an assistive technology may read it out: the value itself, or, when it
+    /// is [`obscured`](Self::obscured), one dot per character, so the length is known and
+    /// the characters are not.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let field = SemanticsProperties::new(Role::TextInput).value("abc").obscured(true);
+    /// assert_eq!(field.readable_value().as_deref(), Some("\u{2022}\u{2022}\u{2022}"));
+    /// ```
+    pub fn readable_value(&self) -> Option<String> {
+        let value = self.value.as_ref()?;
+        Some(if self.obscured {
+            "\u{2022}".repeat(value.chars().count())
+        } else {
+            value.clone()
+        })
+    }
+
     /// `true` when this node carries something useful to assistive technology — a
     /// non-null role or a label. Empty containers are left out of the tree.
     pub fn is_meaningful(&self) -> bool {
@@ -181,6 +217,7 @@ impl SemanticsProperties {
             clickable: self.clickable || under.clickable,
             disabled: self.disabled || under.disabled,
             range: self.range.or(under.range),
+            obscured: self.obscured || under.obscured,
         }
     }
 }
@@ -198,6 +235,27 @@ mod tests {
         assert_eq!(s.label.as_deref(), Some("Notifications"));
         assert_eq!(s.toggled, Toggled::True);
         assert!(s.is_meaningful());
+    }
+
+    /// **A hidden value is never handed over** (milestone 782): an obscured field gives its
+    /// length in dots, and an open one its text.
+    #[test]
+    fn an_obscured_value_reads_as_dots() {
+        let open = SemanticsProperties::new(Role::TextInput).value("pa55");
+        assert_eq!(open.readable_value().as_deref(), Some("pa55"));
+        let hidden = open.clone().obscured(true);
+        assert_eq!(
+            hidden.readable_value().as_deref(),
+            Some("\u{2022}".repeat(4).as_str())
+        );
+        assert_eq!(
+            SemanticsProperties::new(Role::TextInput)
+                .obscured(true)
+                .readable_value(),
+            None
+        );
+        // Merged over another annotation, the field stays hidden.
+        assert!(SemanticsProperties::new(Role::None).over(&hidden).obscured);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 frus claims one language, top to bottom. This note states precisely what that claim
 covers, where it stops, and what it would take to move the boundary. It is written
 for two readers: someone deciding whether to build an application on frus, and
-whoever implements the iOS shell or finishes Android accessibility.
+whoever implements the iOS shell.
 
 The short version: **an application developer writes Rust, and no Java, Kotlin,
 Swift or Objective-C.** That holds today on desktop and Android, and it will hold
@@ -94,7 +94,7 @@ class requires a class definition, which requires bytecode, which requires eithe
 compiler or a bytecode emitter. So wherever Android's design says *"extend this
 class and override these methods"*, pure Rust cannot answer.
 
-frus has met this exactly once so far.
+frus has met this twice so far: the keyboard, below, and the screen reader.
 [`FrusTextBridge.java`](../crates/frus-shell/java/dev/frus/input/FrusTextBridge.java)
 is 209 lines and exists because `NativeActivity` provides no `InputConnection`.
 Without it, every IME degrades to `TYPE_NULL` — Latin keys only, no composition, no
@@ -121,13 +121,16 @@ file at all. It does not extend classes, so it does not help with `View`,
 
 That is the rule to carry: **interfaces are free, classes cost a dex.**
 
-### The next shim is already visible
+### Screen readers on Android
 
-Android accessibility is marked partial in [ROADMAP.md](../ROADMAP.md), and
-finishing it means providing an `AccessibilityNodeProvider` — an abstract class, to
-be subclassed. By the rule above, that is a second dex shim, a sibling of the IME
-bridge. It should be planned as such rather than discovered halfway through, and
-the two shims should probably share one dex and one loader.
+TalkBack reads a frus window through `FrusAccessibility`, the second class in the same dex
+([milestone 782](milestone-782.md)): one view, as large as the content, whose
+`AccessibilityNodeProvider` shows one virtual view per semantic node of the frame, with
+its role, bounds, words, states and actions. Nothing is asked of the application: the
+semantics its widgets already declare are what TalkBack reads, swiping moves through
+them, a double tap presses, and fields, sliders and scrolling areas answer TalkBack's
+editing, adjusting and scrolling. Not answered yet: exploring by touch, and the outline
+TalkBack draws around the node it is on (see the milestone's "Not done").
 
 ---
 
