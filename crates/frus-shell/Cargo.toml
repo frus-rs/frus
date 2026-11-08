@@ -39,7 +39,7 @@ notifications = ["dep:notify-rust"]
 # development files to build (`libgtk-3-dev`), the menus being made with it.
 tray = ["dep:tray-icon"]
 # The taskbar's badge and progress: `Taskbar` (milestone 708). The desktop; off by default.
-taskbar = ["dep:windows", "dep:objc2-app-kit", "dep:zbus"]
+taskbar = ["dep:objc2-app-kit", "dep:zbus"]
 # Global shortcuts: `GlobalShortcut` (milestone 709). The desktop (X11 on Linux); off by default.
 global-shortcuts = ["dep:global-hotkey"]
 # Secrets kept by the system: `SecureStore` (milestone 776). Windows' Credential Manager, the
@@ -161,7 +161,7 @@ optional = true
 block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSResponder"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSURL"] }
 
 # The secure store (feature `secure-store`) on macOS and iOS: the Keychain's generic passwords.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
@@ -169,8 +169,12 @@ security-framework = { version = "3", optional = true, default-features = false 
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar (feature `taskbar`): its button's progress and overlay, a COM interface the raw
-# bindings below do not carry. Already in the tree through the tray and the notifications.
-windows = { version = "0.62", optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# bindings below do not carry; and the system's share window (milestone 775), a WinRT interface.
+# Already in the tree through the tray and the notifications.
+windows = { version = "0.62", features = ["ApplicationModel_DataTransfer", "Foundation", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The share window's list of files, and waiting for a file to be found (milestone 775).
+windows-collections = "0.3"
+windows-future = "0.3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",

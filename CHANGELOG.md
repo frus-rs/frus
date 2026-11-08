@@ -23,6 +23,15 @@ any release may break.
   the Keychain on macOS and iOS, the Secret Service on Linux, an AES-256-GCM key in the
   Android Keystore on Android; `Unsupported` on the web, which has nowhere safe to keep one.
 
+- **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
+  opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
+  Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.
+  `frus::share("text")` and `frus::Share::text(..).subject(..).url(..).file(path).show()` show the
+  system's share sheet on Android, Windows, macOS and the web; on Android files are copied to the
+  shared Downloads collection so the target can read them (Android 10 and later), and a desktop
+  that cannot show its share window copies the text to the clipboard and answers
+  `ShareOutcome::CopiedToClipboard`. Linux and iOS answer `Unsupported`.
+
 - **A restored scroll offset waits for the content it needs** (J768). Seen on an Android 10
   phone: an application that loads its content after the first frame (the demo reads its
   tasks on another thread) came back from the system ending its process at the top of the

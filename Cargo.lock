@@ -1776,6 +1776,8 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows",
+ "windows-collections",
+ "windows-future",
  "windows-sys 0.61.2",
  "winit",
  "zbus 6.2.1",
