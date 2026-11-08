@@ -2688,7 +2688,9 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
 
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         let mut s = frus_core::SemanticsProperties::new(frus_core::Role::TextInput)
-            .value(self.value.clone());
+            .value(self.value.clone())
+            // A masked field's characters are not read out either (milestone 782).
+            .obscured(self.obscure);
         // The label names the field — the placeholder when there is none, as the reference
         // reads a hint out for a field that has no label, so a reader is never told only
         // "edit" (milestone 710); an error is appended so it gets read out.

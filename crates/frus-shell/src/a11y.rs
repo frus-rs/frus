@@ -63,7 +63,14 @@ fn node_id(id: WidgetId) -> NodeId {
 
 /// Builds an AccessKit node from a frus annotation and its bounds.
 fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
-    let mut node = Node::new(to_ak_role(sem.role));
+    // A masked field is a password field to the reader, and its value only dots
+    // (milestone 782).
+    let role = if sem.obscured && sem.role == Role::TextInput {
+        AkRole::PasswordInput
+    } else {
+        to_ak_role(sem.role)
+    };
+    let mut node = Node::new(role);
     node.set_bounds(AkRect {
         x0: rect.x as f64,
         y0: rect.y as f64,
@@ -81,8 +88,8 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         if let Some(label) = &sem.label {
             node.set_label(label.clone());
         }
-        if let Some(value) = &sem.value {
-            node.set_value(value.clone());
+        if let Some(value) = sem.readable_value() {
+            node.set_value(value);
         }
     }
     match sem.toggled {
@@ -468,6 +475,19 @@ mod tests {
         for role in [Role::Label, Role::Button, Role::CheckBox] {
             assert!(!to_ak_node(rect, &sem(role)).supports_action(Action::SetValue));
         }
+    }
+
+    /// **A password is not handed to the reader** (milestone 782): a masked field is a
+    /// password field whose value is one dot per character.
+    #[test]
+    fn a_masked_field_gives_only_dots() {
+        let rect = Rect::new(0.0, 0.0, 120.0, 30.0);
+        let field = to_ak_node(rect, &sem(Role::TextInput).value("s3cret").obscured(true));
+        assert_eq!(field.role(), AkRole::PasswordInput);
+        assert_eq!(field.value(), Some("\u{2022}".repeat(6).as_str()));
+        let open = to_ak_node(rect, &sem(Role::TextInput).value("Ada"));
+        assert_eq!(open.role(), AkRole::TextInput);
+        assert_eq!(open.value(), Some("Ada"));
     }
 
     fn request(action: Action, data: Option<ActionData>) -> ActionRequest {

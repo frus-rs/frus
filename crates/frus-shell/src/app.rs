@@ -1152,8 +1152,8 @@ pub struct App<A: Application> {
     reorder_y: f32,
     /// The last **announcement** pushed to the accessibility bridge's live region, for
     /// the screen reader. It persists as is: it is re-spoken only on a change, so the
-    /// same text carried over every frame does not repeat. Desktop and web.
-    #[cfg(any(desktop, web))]
+    /// same text carried over every frame does not repeat. Desktop, web and Android.
+    #[cfg(any(desktop, web, android))]
     announce: String,
     /// The tap-or-long-press recogniser (gesture tier 1).
     press: PressRecognizer,
@@ -1341,6 +1341,14 @@ pub struct App<A: Application> {
     /// Is the software keyboard being asked for? It follows the text fields' focus.
     #[cfg(android)]
     soft_input_shown: bool,
+    /// The screen reader's view of the window (milestone 782): the virtual view ids, the
+    /// tree last published, and the announcement last read out.
+    #[cfg(android)]
+    a11y_ids: crate::a11y_android::VirtualIds,
+    #[cfg(android)]
+    a11y_tree: Option<crate::a11y_android::AndroidTree>,
+    #[cfg(android)]
+    a11y_announced: String,
     /// The system bars as the platform was last told them, so that it is told only of a
     /// change (#46).
     #[cfg(android)]
@@ -1456,7 +1464,7 @@ impl<A: Application> App<A> {
             gesture_start: Instant::now(),
             reorder_x: 0.0,
             reorder_y: 0.0,
-            #[cfg(any(desktop, web))]
+            #[cfg(any(desktop, web, android))]
             announce: String::new(),
             press: PressRecognizer::new(),
             long_press_msg: None,
@@ -1527,6 +1535,12 @@ impl<A: Application> App<A> {
             #[cfg(android)]
             soft_input_shown: false,
             #[cfg(android)]
+            a11y_ids: Default::default(),
+            #[cfg(android)]
+            a11y_tree: None,
+            #[cfg(android)]
+            a11y_announced: String::new(),
+            #[cfg(android)]
             system_bars: None,
             restoration_published: None,
             #[cfg(web)]
@@ -1562,7 +1576,7 @@ impl<A: Application> App<A> {
     /// What an assistive technology's click on widget `id` does: what a pointer click on it
     /// would — its message, or, for a built-in button of the selection bar that carries none,
     /// its editing action (milestone 568), on the field the bar is open on.
-    #[cfg(any(desktop, web))]
+    #[cfg(any(desktop, web, android))]
     fn activate_for_assistive_tech(&mut self, id: WidgetId) {
         if let Some(action) = self.ui.as_ref().and_then(|ui| ui.edit_action_for(id)) {
             self.perform_edit_action(action);
@@ -1582,7 +1596,7 @@ impl<A: Application> App<A> {
     /// Puts `value` in the field `id`, for an assistive technology that set it (milestone 710):
     /// through the message typing it would have produced, as an autofill or an undo does — so
     /// a field that refuses typing refuses this too — with the caret after what arrived.
-    #[cfg(any(desktop, test, feature = "testing"))]
+    #[cfg(any(desktop, android, test, feature = "testing"))]
     fn set_value_for_assistive_tech(&mut self, id: WidgetId, value: String) {
         let message = self
             .tree
@@ -1834,6 +1848,169 @@ impl<A: Application> App<A> {
                 }
             }
         }
+    }
+
+    /// Publishes the frame's tree to the Android node provider (milestone 782): built only
+    /// while an accessibility service is on, and sent only when it, or the announcement,
+    /// changed, with the events that say what did.
+    #[cfg(android)]
+    fn sync_android_a11y(&mut self) {
+        if !crate::android_accessibility::enabled() {
+            // A service turned on again starts from a whole tree.
+            self.a11y_tree = None;
+            self.a11y_announced = self.announce.clone();
+            return;
+        }
+        let Some(ui) = self.ui.as_ref() else {
+            return;
+        };
+        let areas: Vec<crate::a11y_android::ScrollArea> = ui
+            .scroll_regions()
+            .iter()
+            .map(|area| crate::a11y_android::ScrollArea {
+                id: area.id,
+                viewport: area.viewport,
+                max: (area.max_x, area.max_y),
+                offset: self
+                    .runtime
+                    .scroll
+                    .get(&area.id)
+                    .copied()
+                    .unwrap_or((0.0, 0.0)),
+            })
+            .collect();
+        let tree = crate::a11y_android::build(
+            ui.semantics(),
+            &areas,
+            self.runtime.input.focused,
+            self.total_scale(),
+            &mut self.a11y_ids,
+        );
+        let announce = (self.announce != self.a11y_announced && !self.announce.is_empty())
+            .then_some(self.announce.as_str());
+        let events = match self.a11y_tree.as_ref() {
+            Some(old) => crate::a11y_android::diff(old, &tree),
+            None => crate::a11y_android::diff(&Default::default(), &tree),
+        };
+        if events.is_empty() && announce.is_none() && self.a11y_tree.is_some() {
+            return;
+        }
+        crate::android_accessibility::publish(&tree, &events, announce);
+        self.a11y_announced = self.announce.clone();
+        self.a11y_tree = Some(tree);
+    }
+
+    /// Carries out what the screen reader asked since the last frame (milestone 782): a press
+    /// is a press, a focus a focus, set text the field's own typing, a scroll a page of the
+    /// area, and a slider's step or value what its keys or a drag would have done.
+    #[cfg(android)]
+    fn drain_android_a11y(&mut self) {
+        use crate::a11y_android::A11yAction;
+        let requests = crate::android_accessibility::drain();
+        if requests.is_empty() {
+            return;
+        }
+        let Some(tree) = self.a11y_tree.clone() else {
+            return;
+        };
+        for request in requests {
+            let Some(action) = crate::a11y_android::to_action(&request, &tree, &self.a11y_ids)
+            else {
+                continue;
+            };
+            match action {
+                A11yAction::Click(id) => {
+                    // A field is pressed to be typed into: it takes the focus, and the keyboard
+                    // follows, as a tap on it does.
+                    let field = self
+                        .tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))
+                        .is_some_and(wants_keyboard);
+                    if field {
+                        self.focus_for_assistive_tech(id);
+                    } else {
+                        self.activate_for_assistive_tech(id);
+                    }
+                }
+                A11yAction::Focus(id) => self.focus_for_assistive_tech(id),
+                A11yAction::ClearFocus(id) => {
+                    if self.runtime.input.focused == Some(id) {
+                        self.runtime.input.focused = None;
+                        self.request_redraw();
+                    }
+                }
+                A11yAction::SetValue(id, value) => self.set_value_for_assistive_tech(id, value),
+                A11yAction::Scroll(id, forward) => self.scroll_page_for_assistive_tech(id, forward),
+                A11yAction::Adjust(id, forward) => {
+                    let key = if forward {
+                        Key::Right {
+                            shift: false,
+                            word: false,
+                        }
+                    } else {
+                        Key::Left {
+                            shift: false,
+                            word: false,
+                        }
+                    };
+                    let response = self
+                        .tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))
+                        .map(|widget| widget.on_key(&key));
+                    if let Some(KeyResponse::Handled(Some(message))) = response {
+                        self.dispatch(message);
+                        self.request_redraw();
+                    }
+                }
+                A11yAction::SetFraction(id, fraction) => {
+                    let message = self
+                        .tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))
+                        .and_then(|widget| widget.on_drag(fraction));
+                    if let Some(message) = message {
+                        self.dispatch(message);
+                        self.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Gives widget `id` the focus a screen reader asked for — shown, as a key's would be.
+    #[cfg(android)]
+    fn focus_for_assistive_tech(&mut self, id: WidgetId) {
+        // A button of the selection bar takes no focus: the bar acts on the field.
+        if self.ui.as_ref().is_some_and(|ui| ui.hit_is_on_toolbar(id)) {
+            return;
+        }
+        self.runtime.input.focused = Some(id);
+        self.note_input(true);
+        self.request_redraw();
+    }
+
+    /// Scrolls the area `id` a page forward or back, for a screen reader (milestone 782): the
+    /// same eased move a wheel's notch makes, one viewport along the area's axis, never past
+    /// its ends.
+    #[cfg(android)]
+    fn scroll_page_for_assistive_tech(&mut self, id: WidgetId, forward: bool) {
+        let Some(area) = self.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
+            return;
+        };
+        self.runtime.forget_restored_scroll();
+        self.runtime.stop_scroll_fling(id);
+        let current = self.runtime.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
+        let target = crate::a11y_android::page_target(
+            area.viewport,
+            (area.max_x, area.max_y),
+            current,
+            forward,
+        );
+        self.runtime.scroll_target.insert(id, target);
+        self.runtime.scroll_velocity.entry(id).or_insert((0.0, 0.0));
+        self.request_redraw();
     }
 
     /// Keeps the **system bars** in step with the frame (#46): their colour and their icons,
@@ -2785,6 +2962,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // Actions a screen reader asked for, through the DOM bridge (#18).
         #[cfg(web)]
         self.drain_a11y_actions();
+        // And through the Android node provider (milestone 782).
+        #[cfg(android)]
+        self.drain_android_a11y();
         // And what the browser did to the field it edits for the application (milestone 711).
         #[cfg(web)]
         self.drain_web_editing();
@@ -3983,6 +4163,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         a11y.update(ui.semantics(), focus, editing, &title, &self.announce);
                     }
                 }
+
+                // Publish the frame's tree to the Android node provider (milestone 782), while
+                // a screen reader is on to read it.
+                #[cfg(android)]
+                self.sync_android_a11y();
 
                 // The system bars follow the frame: the regions under them, then the theme.
                 self.sync_system_bars(&theme);
@@ -6468,13 +6653,13 @@ impl<A: Application> App<A> {
 
     /// Speaks a message aloud through the screen reader's **live region**, for a
     /// column reorder and the like. With no screen reader running it costs nothing. The
-    /// text is re-spoken only on a change. Desktop and web; a no-op on Android and iOS,
-    /// which have no bridge yet.
-    #[cfg(any(desktop, web))]
+    /// text is re-spoken only on a change. Desktop, web and Android; a no-op on iOS, which
+    /// has no bridge yet.
+    #[cfg(any(desktop, web, android))]
     fn set_announcement(&mut self, message: String) {
         self.announce = message;
     }
-    #[cfg(not(any(desktop, web)))]
+    #[cfg(not(any(desktop, web, android)))]
     fn set_announcement(&mut self, _message: String) {}
 
     /// Returning focus when an overlay closes: if the focused widget has **vanished**

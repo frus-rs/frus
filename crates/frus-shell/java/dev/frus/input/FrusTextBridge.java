@@ -295,6 +295,9 @@ public final class FrusTextBridge extends View {
         super(context);
         setFocusable(true);
         setFocusableInTouchMode(true);
+        // A screen reader meets the fields in FrusAccessibility's tree (milestone 782); this
+        // view, focusable for the keyboard's sake, would otherwise be one more stop, unnamed.
+        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         if (Build.VERSION.SDK_INT >= 26) {
             // A 1x1 view is not somewhere a service looks for fields unless told to.
             setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_YES);
