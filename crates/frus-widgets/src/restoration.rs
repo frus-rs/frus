@@ -660,9 +660,11 @@ impl Restoration {
                     Reading::Nothing => None,
                     Reading::Value(value) => Some(value),
                 },
+                // A restored offset still waiting for its content is where the reader
+                // left the region: a process ended before the content came keeps it.
                 Source::Scroll(id) => runtime
-                    .scroll
-                    .get(id)
+                    .restoring_scroll(*id)
+                    .or_else(|| runtime.scroll.get(id).copied())
                     .map(|(x, y)| format!("{x},{y}"))
                     .or_else(|| entry.last.clone()),
                 Source::Edit(id) => runtime

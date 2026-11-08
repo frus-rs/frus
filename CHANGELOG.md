@@ -27,6 +27,31 @@ any release may break.
   off in the frame laid out above it are put back when the page pans instead (the field was
   left scrolled out of sight, during and after typing), and the browser is panned to the line
   being typed in.
+- **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
+  opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
+  Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.
+  `frus::share("text")` and `frus::Share::text(..).subject(..).url(..).file(path).show()` show the
+  system's share sheet on Android, Windows, macOS and the web; on Android files are copied to the
+  shared Downloads collection so the target can read them (Android 10 and later), and a desktop
+  that cannot show its share window copies the text to the clipboard and answers
+  `ShareOutcome::CopiedToClipboard`. Linux and iOS answer `Unsupported`.
+
+- **A restored scroll offset waits for the content it needs** (J768). Seen on an Android 10
+  phone: an application that loads its content after the first frame (the demo reads its
+  tasks on another thread) came back from the system ending its process at the top of the
+  page, because the first frames' short page clamped the restored offset to it for good. A
+  restored offset is now kept as the goal: the region is drawn as far along it as its content
+  goes and reaches it in the frame the content becomes long enough. The goal is let go as
+  soon as the user presses, types or scrolls, or anything else moves the region, so content
+  arriving later never moves a page the reader is already using; restoration keeps the goal
+  meanwhile. `Runtime::forget_restored_scroll` is what the shell calls on every press and key.
+- **`frus run` is smooth: applications optimise their dependencies in debug** (J772). An
+  application made by `frus create` built the renderer, the text shaper and frus without any
+  optimisation in a debug run: a frame of a full page cost 31 ms on the CPU and every page
+  change stuttered. The template and the examples now declare
+  `[profile.dev.package."*"] opt-level = 3` (4.3 ms for the same frame); the application's own
+  crate stays unoptimised, quick to rebuild and to hot-reload. Existing applications add the
+  two lines to their `Cargo.toml`.
 - **Editors: hot reload on by default with every frus, every run's end said, a sensible
   default device** (J771). The Android Studio plugin and the VS Code extension pass `--hot`
   for a debug run by default, so hot reload is on with frus 0.5.0 too, whose own default is
@@ -56,7 +81,6 @@ any release may break.
   flag to start it with, instead of "Failed to create surface for any enabled backend".
   `frus run` and `frus emulators --launch` start emulators with `-feature
   GLESDynamicVersion`, which gives such images OpenGL ES 3.
-
 - **The floating action button is placed from what the screen shell measured** (J766).
   `FabLocation` now has every placement: at the top (astride the app bar's bottom edge),
   floating, docked, the mini form of each, and `EndContained` inside the bottom bar; and

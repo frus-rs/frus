@@ -91,6 +91,16 @@ target_sdk_version = 34
 # location = "Shows the shops near you."
 # notifications = true
 
+# --- While you develop ---
+#
+# `frus run` builds in debug. Left at Cargo's default, that compiles the renderer, the
+# text shaper and frus itself without any optimisation: frames cost several times their
+# budget and every page change stutters. Optimising the dependencies, and only them,
+# keeps `frus run` smooth; your own crate stays quick to rebuild and to hot-reload. The
+# dependencies take longer to build the first time, then they are cached.
+[profile.dev.package."*"]
+opt-level = 3
+
 # --- What you ship ---
 #
 # `frus run` builds in **debug**, and a debug build carries its symbols: on Android that

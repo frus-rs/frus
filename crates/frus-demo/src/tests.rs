@@ -2190,6 +2190,101 @@ fn the_tasks_page_comes_back_scrolled_where_it_was_left() {
     assert_eq!(second.offsets()[0].1, before, "and it stays there");
 }
 
+/// **The Tasks page comes back scrolled when its tasks arrive after the first frame**
+/// (milestone 768). Seen on the Android 10 phone: the demo loads its tasks on another thread
+/// at start-up, so the restored page's first frame has no tasks yet, the restored offset was
+/// more than that short page could scroll, and it was clamped to the top for good; the tasks
+/// arrived a frame later. The restored offset now waits for the content to take it.
+#[test]
+fn the_tasks_page_comes_back_scrolled_when_its_tasks_arrive_late() {
+    let (w, h) = (392.7, 700.0);
+    let tasks: Vec<(bool, String)> = (1..=12).map(|i| (false, format!("Task {i}"))).collect();
+    let (app, _router, demo) = crate::build();
+    demo.replace_all(tasks.clone());
+    let mut first = Driver::new(app, w, h);
+    first.run(1.0);
+    scroll_to_the_end(&mut first);
+    let before = first.offsets()[0].1;
+    let drawn = first.offsets()[1].0;
+    assert!(
+        before.1 > 200.0,
+        "the drag scrolled the page far: {before:?}"
+    );
+    let data = first
+        .restoration_data()
+        .expect("the demo asks for restoration");
+
+    let (app, _router, demo) = crate::build();
+    let mut second = Driver::new(app, w, h);
+    assert!(second.restore(&data));
+    // The first frames: the tasks are still being read, as on the phone. (The second frame
+    // is the one that keeps the offset inside the short page.)
+    second.run(2.0 / 60.0);
+    let early = second.offsets()[0].1;
+    assert!(
+        early.1 < before.1,
+        "without its tasks the page cannot scroll that far: {early:?}"
+    );
+    // The load hands them over (their rows grow in over a few frames), and the page goes
+    // where it was left: the offset, and what is drawn — the strip of showcases near the
+    // top of the page is where the first process left it, scrolled out of sight above.
+    demo.replace_all(tasks);
+    second.run(1.0);
+    assert_eq!(
+        second.offsets()[0].1,
+        before,
+        "the page is where it was left"
+    );
+    assert_eq!(second.offsets()[1].0, drawn, "and drawn there");
+    second.run(1.0);
+    assert_eq!(second.offsets()[0].1, before, "and it stays there");
+}
+
+/// Drags the demo's page up, slowly enough not to fling, until it goes no further.
+fn scroll_to_the_end(driver: &mut Driver<FrusApp>) {
+    for _ in 0..4 {
+        driver.press(frus_widgets::Point::new(200.0, 600.0));
+        for step in 1..=30 {
+            driver.move_to(frus_widgets::Point::new(200.0, 600.0 - step as f32 * 15.0));
+            driver.run(1.0 / 60.0);
+        }
+        driver.run(0.2);
+        driver.release(frus_widgets::Point::new(200.0, 150.0));
+        driver.run(1.0);
+    }
+}
+
+/// **A restored offset waiting for its content is let go once the user acts** (milestone
+/// 768): content that arrives after a press does not move the page under the finger.
+#[test]
+fn a_restored_offset_waiting_for_its_content_is_let_go_on_a_press() {
+    let (w, h) = (392.7, 700.0);
+    let tasks: Vec<(bool, String)> = (1..=12).map(|i| (false, format!("Task {i}"))).collect();
+    let (app, _router, demo) = crate::build();
+    demo.replace_all(tasks.clone());
+    let mut first = Driver::new(app, w, h);
+    first.run(1.0);
+    scroll_to_the_end(&mut first);
+    let data = first.restoration_data().expect("restoration is on");
+
+    let (app, _router, demo) = crate::build();
+    let mut second = Driver::new(app, w, h);
+    assert!(second.restore(&data));
+    second.run(2.0 / 60.0);
+    let early = second.offsets()[0].1;
+    // A tap on the page's background, before the tasks are read.
+    second.press(frus_widgets::Point::new(10.0, 300.0));
+    second.release(frus_widgets::Point::new(10.0, 300.0));
+    second.run(1.0 / 60.0);
+    demo.replace_all(tasks);
+    second.run(1.0);
+    assert_eq!(
+        second.offsets()[0].1,
+        early,
+        "the page stays where the reader started using it"
+    );
+}
+
 /// **The About tab's showcases take the tab's width on a phone** (milestone 759). Seen on
 /// the phone: the two loading placeholders under the pagination were blank space, the three
 /// statistic tiles huddled at the left as narrow as their numbers, and the tags field was

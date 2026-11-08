@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Run Frus Update updates every install, and says when there is nothing to do**: it compares
+  `frus --version` with the newest on crates.io and, when that one is newer, runs
+  `cargo install frus-cli --locked --force`, so a `frus` installed from a checkout is replaced too
+  (cargo refused that without `--force`, and the update silently did nothing).
 - **Hot reload by default, with every frus**: a debug run passes `--hot`, so that a save is
   patched into the running application with frus 0.5.0 too, whose own default is off.
   `"hot": false` restarts to reload instead (`--no-hot`, left out for a frus that does not know
