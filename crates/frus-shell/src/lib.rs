@@ -66,7 +66,7 @@ mod file_dialog;
 mod file_drop;
 mod frame_stats;
 mod gesture;
-/// Haptic feedback (milestone 777).
+// Haptic feedback (milestone 777).
 pub mod haptics;
 #[cfg(any(web, test))]
 mod history;

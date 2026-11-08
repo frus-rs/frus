@@ -153,19 +153,24 @@ On machines:
   `connectivity now: Wifi`. Wi-Fi was **not** turned off to see a change: the machine is shared
   with other running work that needs the network, so the change path was left to the unit
   tests and the phone.
-- **Linux**: the formats were checked against a real kernel (WSL2): its `/proc/net/route`
-  names `eth0` with a default route, its `uevent` has no `DEVTYPE` and its ARP type is 1, which
-  the classifier reads as `Ethernet`. The watch itself was not run there.
+- **Linux** (WSL2, Ubuntu 24.04): the same test, built and run there, reads `connectivity now:
+  Ethernet` — its `/proc/net/route` names `eth0` with a default route, its `uevent` has no
+  `DEVTYPE` and its ARP type is 1. No change was provoked.
 - **Clippy** with `-D warnings` for `aarch64-linux-android`, `wasm32-unknown-unknown` and
   `x86_64-apple-darwin` (which compiles the `NWPathMonitor` code), and `cargo check` for
   `aarch64-apple-ios`.
 
 ## Not done
 
+- **Phone check not run: phone disconnected.** The release APK of the demo (Settings screen: the
+  network and a button per haptic) was built for `aarch64-linux-android` with this branch and
+  `cargo clippy --target aarch64-linux-android` is clean, but the test phone was not attached
+  (`adb devices` empty) for the length of the milestone. So neither `performHapticFeedback` nor
+  the default-network callback was seen running, and airplane mode was not toggled.
 - **iOS**: haptics answer `Unsupported` and connectivity `Unknown`. The `UIImpactFeedbackGenerator`
   family and `NWPathMonitor` (the macOS code would serve) are the way.
 - **macOS** connectivity is compiled for the target but was not run on a Mac.
-- **Linux** looks every two seconds rather than listening to netlink: a change takes up to two
+- **Linux** change detection was not seen on a machine (only the first read). It looks every two seconds rather than listening to netlink: a change takes up to two
   seconds to show.
 - **Web**: not run in a browser in this milestone.
 - No **switch or checkbox** feedback on Android, deliberately (see above); the iOS switch's
