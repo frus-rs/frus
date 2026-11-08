@@ -1,33 +1,43 @@
-use frus::{Align, Column, FontWeight, StatelessWidget, Text};
+use frus::{Align, BuildContext, Column, FontWeight, StatelessWidget, Widget};
 
-use crate::common::colors::{black, grey};
+use crate::common::{
+    colors::{black, grey},
+    ui::{text, tracked},
+};
 
-pub struct Greetings;
+/// The date, the greeting and the line under it.
+pub(crate) struct Greetings {
+    pub name: String,
+}
 
 impl StatelessWidget for Greetings {
-    fn build(&self, _cx: &frus::BuildContext) -> Box<dyn frus::Widget> {
+    fn build(&self, _cx: &BuildContext) -> Box<dyn Widget> {
         Box::new(
             Column::new()
                 .spacing(4.0)
                 .cross_axis_alignment(Align::Start)
-                .child(
-                    Text::new("Tuesday, September 24")
-                        .size(12.0)
-                        .color(grey())
-                        .weight(FontWeight::Regular),
-                )
-                .child(
-                    Text::new("Good morning, Kalybos")
-                        .size(30.0)
-                        .color(black())
-                        .weight(FontWeight::Bold),
-                )
-                .child(
-                    Text::new("Here’s what needs your attention.")
-                        .size(12.0)
-                        .color(grey())
-                        .weight(FontWeight::Regular),
-                ),
+                .child(text(
+                    "Tuesday, September 24",
+                    12.0,
+                    16.0,
+                    grey(),
+                    FontWeight::Regular,
+                ))
+                .child(tracked(
+                    format!("Good morning, {}", self.name),
+                    30.0,
+                    36.0,
+                    -0.75,
+                    black(),
+                    FontWeight::Bold,
+                ))
+                .child(text(
+                    "Here’s what needs your attention.",
+                    14.0,
+                    20.0,
+                    grey(),
+                    FontWeight::Regular,
+                )),
         )
     }
 }

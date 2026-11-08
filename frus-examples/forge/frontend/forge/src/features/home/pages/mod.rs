@@ -1,3 +1,3 @@
 pub(crate) mod homepage;
-pub(crate) mod widgets;
 pub(crate) mod states;
+pub(crate) mod widgets;

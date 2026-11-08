@@ -11,7 +11,7 @@ use crate::common::{auth::Auth, routers::router};
 
 mod common;
 mod features;
-mod models;
+pub mod models;
 
 // **One entry point** — a single declaration generates the desktop / Android / Web
 // entries (see `frus::main!`). The thin `src/bin/forge.rs` binary calls the
@@ -23,7 +23,7 @@ frus::main!({
     frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-Regular.ttf").to_vec());
     frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-SemiBold.ttf").to_vec());
     // The family name stored *inside* these TTFs (name ID 16), not the file name.
-    frus::fonts::set_default_family("Inter");
+    frus::fonts::set_default_family("Inter 24pt");
     FrusApp::router(router(Auth::new())).title("Forge")
     //     .builder(move |cx, child| window(cx, child)
     // )
