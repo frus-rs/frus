@@ -123,6 +123,15 @@ pub use frus_shell::Tester;
 #[cfg(all(feature = "notifications", not(target_os = "ios")))]
 pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification};
 
+/// **Haptic feedback** (milestone 777): `frus::haptics::light()`, `medium()`, `heavy()`,
+/// `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`.
+///
+/// ```no_run
+/// let _ = frus::haptics::success();
+/// ```
+pub use frus_shell::haptics;
+pub use frus_shell::HapticsError;
+
 /// Asking the person for the camera, the microphone, the location, notifications
 /// (milestone 730).
 pub use frus_shell::{open_permission_settings, Permission, PermissionStatus};

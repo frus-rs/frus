@@ -26,6 +26,20 @@ any release may break.
   debugging (0.01 to 100). The system's reduce-motion setting is now read on Windows, macOS,
   Linux (GTK), iOS and the Web as well as Android; `MediaQuery::reduce_motion()` reports it,
   and `Skeleton`'s shimmer and a chart's pulsing halo hold still under it.
+- **Haptic feedback and connectivity** (J777). `frus::haptics::light()`, `medium()`,
+  `heavy()`, `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`: the
+  system's touch feedback on Android (`View.performHapticFeedback`, the vibrator standing in,
+  the person's touch-feedback setting obeyed), `navigator.vibrate` on the web, and
+  `HapticsError::Unsupported` on the desktops, which have nothing to vibrate. A long press
+  that selects text now vibrates on Android, as the system's fields do;
+  `Theme::with_feedback(false)` turns it off. `frus::connectivity()` says which network the
+  device is on (`None`, `Wifi`, `Cellular`, `Ethernet`, `Other`, `Unknown`) and every change
+  builds the interface again; a component reads it with `cx.use_connectivity()`. Android
+  watches the default network, Windows its internet connection profile, macOS
+  `NWPathMonitor`, Linux the default route, the web `navigator.onLine`. Being on a network
+  does not mean the internet answers, and the docs say so. `frus build` and `frus run` now
+  declare `VIBRATE` and `ACCESS_NETWORK_STATE` for Android, both granted at install with no
+  question asked.
 - **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
   opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
   Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.

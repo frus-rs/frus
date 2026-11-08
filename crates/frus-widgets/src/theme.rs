@@ -962,6 +962,12 @@ pub struct Theme {
     /// ([`ThemeExtension`](crate::ThemeExtension)). Empty by default; see
     /// [`Theme::with_extension`] and [`Theme::extension`].
     pub extensions: crate::ThemeExtensions,
+    /// **Whether gestures answer with the platform's touch feedback** — on Android, the
+    /// short vibration of a long press that selects text. `true` by default; `false`
+    /// ([`Theme::with_feedback`]) turns it off for the whole application. The person's own
+    /// system setting is obeyed either way: with touch feedback turned off there, nothing
+    /// vibrates.
+    pub enable_feedback: bool,
 }
 
 impl Theme {
@@ -998,6 +1004,7 @@ impl Theme {
             visual_density: None,
             motion: std::sync::Arc::new(crate::MotionTheme::M3),
             extensions: crate::ThemeExtensions::EMPTY,
+            enable_feedback: true,
         }
     }
 
@@ -1050,6 +1057,18 @@ impl Theme {
     /// ```
     pub fn extension<T: crate::ThemeExtension>(&self) -> Option<&T> {
         self.extensions.get::<T>()
+    }
+
+    /// The same theme, with the platform's touch feedback on or off
+    /// ([`Theme::enable_feedback`]).
+    ///
+    /// ```
+    /// let quiet = frus_widgets::Theme::default().with_feedback(false);
+    /// assert!(!quiet.enable_feedback);
+    /// ```
+    pub fn with_feedback(mut self, enabled: bool) -> Self {
+        self.enable_feedback = enabled;
+        self
     }
 
     /// The same theme, following `platform`'s conventions ([`Theme::platform`]).
@@ -1191,6 +1210,7 @@ impl Theme {
         // platform. The extensions travel as their own `lerp` says.
         out.motion = near.motion.clone();
         out.extensions = self.extensions.lerp(&other.extensions, t);
+        out.enable_feedback = near.enable_feedback;
         // A density moves smoothly, as the reference's does; a pair that both follow their
         // platform keeps following it.
         out.visual_density = match (self.visual_density, other.visual_density) {

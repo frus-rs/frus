@@ -397,6 +397,8 @@ fn android_manifest(config_changes: &str) -> String {
 <!-- Written by `frus run` for the hot-reload engine's Android build (milestone 763). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application android:hasCode="true" android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true"
         android:allowNativeHeapPointerTagging="false"
@@ -894,6 +896,9 @@ resources = "res"
             "android:name=\"android.app.lib_name\" android:value=\"main\"",
             "android.intent.category.LAUNCHER",
             "android.permission.INTERNET",
+            // What frus itself uses (milestone 777).
+            "android.permission.VIBRATE",
+            "android.permission.ACCESS_NETWORK_STATE",
         ] {
             assert!(manifest.contains(kept), "{kept}: {manifest}");
         }
