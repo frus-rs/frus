@@ -132,7 +132,8 @@ which frus does not initialise. The three direct calls per platform were smaller
   `cargo clippy -p frus-shell --features secure-store --no-deps --target aarch64-linux-android
   -- -D warnings`. This lint found two errors that no desktop build could see, both fixed: a
   closure that returned a JNI object without being able to name the environment's lifetime,
-  which did not compile, and a manual `% 2`. The phone round trip was not run (see Not done).
+  which did not compile, and a manual `% 2`. The same application then ran on the test phone
+  (below).
 
 ### The Windows run
 
@@ -159,14 +160,28 @@ After both runs, `%APPDATA%\frus\prefcheck\prefs.json` held `{"launches": 2, "th
 `cmdkey /list` showed a generic credential with target `frus.prefcheck/token`, user `token`,
 persisted on the local machine. The credential was deleted afterwards.
 
+### The phone run
+
+The same check application ran on the test phone, a Huawei STK-L21 on Android 10. It was a
+debug APK built with cargo-apk on Windows, freshly installed. The first launch wrote the
+values; after `am force-stop`, a second launch (a new process) read them back:
+
+```
+I/prefcheck(22537): PREFCHECK prefs before: launches=Some(1) theme=Some("dark")
+I/prefcheck(22537): PREFCHECK prefs set launches=2: Ok(())
+I/prefcheck(22537): PREFCHECK secure before: token=Ok(Some("secret-1"))
+I/prefcheck(22537): PREFCHECK secure set token=secret-2: Ok(())
+I/prefcheck(22537): PREFCHECK secure after: token=Ok(Some("secret-2"))
+I/prefcheck(22537): PREFCHECK secure delete other: Ok(())
+```
+
+`run-as` showed `files/frus-prefs.json` holding `{"launches": 2, "theme": "dark"}` and
+`files/frus-secure-store.json` holding only ciphertext. The token was stored as a 12-byte
+nonce and a 24-byte ciphertext: the 8 bytes of `secret-2` plus the 16-byte GCM tag. The
+nonce was different from the first run's, because the Keystore picks a fresh one.
+
 ## Not done
 
-- **Not run on an Android phone.** The test phone was disconnected for the whole session
-  (`adb devices` listed nothing), so nothing was checked on a device: the Keystore key, the
-  encrypted file, preferences in `files` across `am force-stop`, and `__android_started`
-  running before the application's expression. The check application's APK compiled for
-  `aarch64-linux-android`, but cargo-apk crashed with a bus error while packaging it, so no
-  APK was produced either.
 - **`use_pref` was not checked on screen.** The hook's rebuild was covered by unit tests only.
   No screenshot was taken during the Windows run.
 - **Biometric unlock** of a secret (a key that needs a fingerprint or the device's PIN to
