@@ -153,9 +153,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar (feature `taskbar`): its button's progress and overlay, a COM interface the raw
-# bindings below do not carry; and the system's share window (milestone 775), a WinRT interface.
-# Already in the tree through the tray and the notifications.
-windows = { version = "0.62", features = ["ApplicationModel_DataTransfer", "Foundation", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# bindings below do not carry; the system's share window (milestone 775), a WinRT interface;
+# and the connectivity (milestone 777): the connection profile Windows uses for the internet,
+# and its network events. Already in the tree through the tray and the notifications.
+windows = { version = "0.62", features = ["ApplicationModel_DataTransfer", "Foundation", "Networking_Connectivity", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The share window's list of files, and waiting for a file to be found (milestone 775).
 windows-collections = "0.3"
 windows-future = "0.3"

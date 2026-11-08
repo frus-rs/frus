@@ -1361,6 +1361,8 @@ impl<A: Application> App<A> {
         let mut shell = Self::with_mailbox(app, Mailbox(Some(proxy)));
         // A window standing in for a device follows that device's platform (milestone 721).
         // Only a real window: a test's shell is never a simulation.
+        // The device's networks are watched from the first read (milestone 777).
+        crate::connectivity::install();
         shell.simulated = crate::simulated::Simulated::from_env();
         if let Some(simulated) = &shell.simulated {
             frus_widgets::set_debug_default_target_platform_override(Some(
@@ -3348,6 +3350,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A hot-reload patch changed what the components build.
                 #[cfg(feature = "hot-reload")]
                 let arrived = crate::hot::take_patched() || arrived;
+                // The device changed networks: what reads the connectivity builds again
+                // (milestone 777).
+                let arrived = frus_widgets::take_connectivity_change() || arrived;
                 if frus_widgets::take_rebuild_request() || arrived {
                     self.build_dirty = true;
                 }
@@ -5098,8 +5103,10 @@ impl<A: Application> App<A> {
                 self.place_field_press();
             }
             self.select_held_word(id);
+            self.long_press_feedback();
         }
         if region && self.select_region_word_held() {
+            self.long_press_feedback();
             // The page under the finger stops being scrolled by it: the hold was a selection.
             if let Some(Drag::Scroll { id, .. }) = self.drag {
                 self.runtime.release_scroll(id);
@@ -5119,6 +5126,16 @@ impl<A: Application> App<A> {
             self.reorder_y = self.cursor.y;
         }
         self.request_redraw();
+    }
+
+    /// A long press selected text: the system's feedback for it — Android's long-press
+    /// vibration — unless the application's theme turned it off (milestone 777).
+    fn long_press_feedback(&self) {
+        let theme = self.themes.displayed(&self.app);
+        crate::haptics::gesture_feedback(
+            &theme,
+            crate::haptics::long_press_feedback(crate::haptics::system_platform()),
+        );
     }
 
     /// The loop's idle policy: wake at the **nearest** deadline — the long press, the
@@ -14283,6 +14300,26 @@ mod selection_area_tests {
         assert!(bar_button(&d, "Select all").is_some(), "and Select all");
     }
 
+    /// **A hold that selects words in an area is felt on Android** (milestone 777); a hold on a
+    /// button, which selects nothing, is not.
+    #[test]
+    fn a_hold_that_selects_words_vibrates_on_android() {
+        crate::haptics::pretend_system(Some(frus_widgets::TargetPlatform::Android));
+        let mut d = driver();
+        let _ = crate::haptics::take_given();
+        let button = on(&d, "Press", 10.0);
+        hold(&mut d, button);
+        assert_eq!(crate::haptics::take_given(), vec![], "nothing selected");
+        let at = on(&d, "second line", 12.0);
+        assert!(hold(&mut d, at), "the hold fired");
+        assert_eq!(d.area_selection().as_deref(), Some("second"));
+        assert_eq!(
+            crate::haptics::take_given(),
+            vec![crate::haptics::Haptic::LongPress]
+        );
+        crate::haptics::pretend_system(None);
+    }
+
     /// **On a desktop theme the bar is the menu, and its rows act on the area as the pill's
     /// buttons do** (milestone 618).
     #[test]
@@ -18033,6 +18070,77 @@ mod field_drag_tests {
         assert!(d.simulated_keyboard(), "with its keyboard");
         let (_, anchor) = d.edit_of(id).expect("a caret placed by the tap");
         assert!(anchor.is_none(), "a caret, not a selection");
+    }
+
+    /// **A hold that selects a word gives the long press's feedback** on Android, as the
+    /// system's own fields do (milestone 777) — and a tap gives none.
+    #[test]
+    fn a_hold_that_selects_a_word_vibrates_on_android() {
+        crate::haptics::pretend_system(Some(frus_widgets::TargetPlatform::Android));
+        let mut d = driver();
+        let second = at(&d, "bravo");
+        let _ = crate::haptics::take_given();
+        tap(&mut d, second);
+        assert_eq!(crate::haptics::take_given(), vec![], "a tap is not felt");
+        let first = at(&d, "alpha");
+        d.press(first);
+        assert!(d.hold_deadline(), "the hold fired");
+        d.run(0.05);
+        d.release(first);
+        d.run(0.1);
+        assert_eq!(
+            crate::haptics::take_given(),
+            vec![crate::haptics::Haptic::LongPress]
+        );
+        crate::haptics::pretend_system(None);
+    }
+
+    /// The same hold on a desktop system, and under a theme that turned feedback off, is not
+    /// felt.
+    #[test]
+    fn a_hold_is_not_felt_on_a_desktop_or_when_the_theme_says_so() {
+        struct Quiet;
+        impl Application for Quiet {
+            type Message = Msg;
+            fn update(&mut self, message: Msg) -> Command<Msg> {
+                Form.update(message)
+            }
+            fn view(&self, theme: &Theme) -> Box<dyn Widget<Msg>> {
+                Form.view(theme)
+            }
+            fn theme(&self) -> Theme {
+                Theme::default().with_feedback(false)
+            }
+        }
+        fn hold<A: Application>(d: &mut Driver<A>, p: Point) {
+            d.press(p);
+            assert!(d.hold_deadline(), "the hold fired");
+            d.run(0.05);
+            d.release(p);
+            d.run(0.1);
+        }
+        crate::haptics::pretend_system(Some(frus_widgets::TargetPlatform::Windows));
+        let mut d = driver();
+        let first = at(&d, "alpha");
+        let _ = crate::haptics::take_given();
+        hold(&mut d, first);
+        assert_eq!(crate::haptics::take_given(), vec![], "a desktop has none");
+
+        crate::haptics::pretend_system(Some(frus_widgets::TargetPlatform::Android));
+        let mut d = Driver::new(Quiet, W, H);
+        d.simulate("android-phone");
+        d.run(0.2);
+        let (_, r) = d
+            .texts()
+            .into_iter()
+            .find(|(t, _)| t.contains("alpha"))
+            .expect("the first field");
+        let first = Point::new(r.x + r.width * 0.5, r.y + r.height * 0.5);
+        let _ = crate::haptics::take_given();
+        hold(&mut d, first);
+        assert!(d.focused().is_some(), "the hold still selected");
+        assert_eq!(crate::haptics::take_given(), vec![], "the theme said no");
+        crate::haptics::pretend_system(None);
     }
 
     /// **A hold selects the word**, focusing the field, and the form does not scroll.

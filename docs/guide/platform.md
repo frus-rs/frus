@@ -23,6 +23,8 @@ frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "
 | [The application's icon](#the-applications-icon) | — | ✓ | ✓ | ✓ |
 | [One instance at a time](#one-instance-at-a-time) | — | ✓ | — | — |
 | [Permissions](#permissions) | — | ✓ | ✓ | ✓ |
+| [Haptic feedback](#haptic-feedback) | — | — | ✓ | ✓ |
+| [Which network](#which-network) | — | ✓ | ✓ | ✓ |
 
 ## Picking a file
 
@@ -294,6 +296,71 @@ a refusal is final (`Blocked`). The application's `Info.plist` must say why it w
 `NSLocationWhenInUseUsageDescription`, written from the table above): macOS ends a process that asks without it, so frus does
 not ask, and the status is `Blocked` with a line in the log. That includes a program run outside
 a bundle.
+
+## Haptic feedback
+
+`frus::haptics` gives the short vibrations that answer a gesture or mark an outcome:
+`light()`, `medium()`, `heavy()`, `selection()`, `success()`, `warning()`, `error()`, and
+`vibrate(duration)` for an alert. Each returns at once; the `Result` says whether the platform
+took it, and is usually ignored:
+
+```rust
+use frus::{Button, Widget};
+
+fn pay() -> Box<dyn Widget> {
+    Box::new(Button::new("Pay").on_press(|| {
+        // ...the payment went through:
+        let _ = frus::haptics::success();
+    }))
+}
+```
+
+On **Android** they are the system's own touch feedback, tuned per device and needing no
+permission; where the system has no such effect the vibrator stands in, which needs
+`android.permission.VIBRATE`, declared by `frus build` and `frus run`. The person's setting is
+obeyed: with touch feedback turned off in the system's settings nothing vibrates (an explicit
+`vibrate(duration)` is an alert, and follows the vibration settings instead). On the **web** it
+is `navigator.vibrate`, which Chrome honours once the person has touched the page; Safari and
+desktop Firefox have none and answer `HapticsError::Unsupported`. **Windows, macOS and Linux**
+have no haptic hardware to drive: every call answers `HapticsError::Unsupported` and does
+nothing, so the same code runs everywhere.
+
+The widgets give the platform's own feedback where it has one: on Android, a long press that
+selects text vibrates. `Theme::with_feedback(false)` turns that off for the application.
+
+## Which network
+
+`frus::connectivity()` says which network the device is on: `None`, `Wifi`, `Cellular`,
+`Ethernet`, `Other` (a VPN, a tether, or a browser that only says "online"), or `Unknown` where
+frus cannot tell. The first call starts watching the system, and every change builds the
+interface again, so a view that reads it follows it; a component reads it with
+`cx.use_connectivity()`:
+
+```rust
+use frus::{component, Connectivity, Text, Widget};
+
+fn offline_banner() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        Box::new(Text::new(match cx.use_connectivity() {
+            Connectivity::None => "You are offline",
+            Connectivity::Cellular => "On mobile data",
+            _ => "",
+        }))
+    }))
+}
+```
+
+**On a network is not on the internet.** A captive portal, a router with no line behind it or
+a firewall leave the device connected and every request failing. Use it to explain a failure,
+or to retry once a network comes back, never to decide that a request will work.
+
+| Platform | What it reads |
+| --- | --- |
+| Android | The default network, through `ConnectivityManager`'s callback. Needs `android.permission.ACCESS_NETWORK_STATE`, declared by `frus build` and `frus run`. |
+| Windows | The connection profile Windows uses for the internet, and its network events. |
+| macOS | The path the system routes traffic through (`NWPathMonitor`). |
+| Linux | The interface of the default route (`/proc/net/route`), looked at every two seconds. |
+| Web | `navigator.onLine` and its `online`/`offline` events; the connection's type where the browser gives it (Chrome on Android). |
 
 ## One instance at a time
 
