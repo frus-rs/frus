@@ -13,6 +13,16 @@ any release may break.
 
 ## [Unreleased]
 
+- **Tabs with their own stacks, screens that answer, route observers** (J781).
+  `GoRoute::shell(builder, branches)` puts a frame — a scaffold with a bottom bar — around
+  `ShellBranch`es that each keep their own stack of pages and their state while another is
+  shown (`NavigationShell::go_branch`). The system's Back pops the tab's own pages first, then
+  shows the first tab (`ShellBack::FirstBranch`, the default, or `Leave`), then leaves; the edge
+  swipe never switches tabs (`Application::can_handle_back`). A deep link or browser address
+  selects the tab and builds its stack. `router.push_for_result::<T>(..)` is a future of what the
+  page is popped with (`pop_with(value)`), `None` if it went by Back or a gesture; `push_then` is
+  the closure form. `router.observe(|change| ..)` and `.observer(..)` report every push, pop,
+  replace, go and tab switch. `Navigator::expand` takes the parent's room.
 - **TalkBack reads frus windows on Android** (J782). Each widget's declared semantics now
   reaches TalkBack through a node provider in the bundled dex: one virtual view per node, with
   its Android class, bounds, label, value, states and actions. Swiping moves through them, a

@@ -9093,7 +9093,7 @@ impl<A: Application> App<A> {
             self.request_redraw();
             return true;
         }
-        if self.app.can_go_back() {
+        if self.app.can_handle_back() {
             self.build_dirty = true;
             // A pop, not a swipe: no finger is on the page (milestone 622).
             self.app.go_back();
