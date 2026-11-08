@@ -27,6 +27,19 @@ any release may break.
   off in the frame laid out above it are put back when the page pans instead (the field was
   left scrolled out of sight, during and after typing), and the browser is panned to the line
   being typed in.
+- **Motion tokens, status colours, theme extensions, animation speed and reduced motion
+  everywhere** (J778). `theme.motion` (`MotionTheme`) holds the design system's durations
+  (`short1` to `extra_long4`), easings (`standard`, `emphasized` and their decelerate and
+  accelerate forms, `legacy`) and springs (`spring_fast`, `spring_default`, `spring_slow`);
+  `Theme::with_motion` retimes an application, and `BottomNavigationBar` reads them. The colour
+  scheme gains `success`, `warning` and `info`, each with `on_`, container and on-container
+  roles, harmonised toward the seed in `from_seed`; `Alert` uses them for its kinds and
+  `SnackBar` for its success stripe and a new `warning()` kind. `Theme::with_extension` and
+  `theme.extension::<T>()` carry an application's own tokens (`ThemeExtension`), interpolated
+  during a theme fade. `frus::set_animation_speed(0.1)` slows every animation ten times for
+  debugging (0.01 to 100). The system's reduce-motion setting is now read on Windows, macOS,
+  Linux (GTK), iOS and the Web as well as Android; `MediaQuery::reduce_motion()` reports it,
+  and `Skeleton`'s shimmer and a chart's pulsing halo hold still under it.
 - **Haptic feedback and connectivity** (J777). `frus::haptics::light()`, `medium()`,
   `heavy()`, `selection()`, `success()`, `warning()`, `error()` and `vibrate(duration)`: the
   system's touch feedback on Android (`View.performHapticFeedback`, the vibrator standing in,
@@ -41,6 +54,16 @@ any release may break.
   does not mean the internet answers, and the docs say so. `frus build` and `frus run` now
   declare `VIBRATE` and `ACCESS_NETWORK_STATE` for Android, both granted at install with no
   question asked.
+- **Preferences and a secure store** (J776). `frus::prefs()` keeps small settings across
+  restarts: `set`, `get::<T>`, `remove`, `clear` for any serde value, synchronous. A JSON file
+  in the application's data folder on the desktop (`%APPDATA%`, `Application Support`,
+  `$XDG_DATA_HOME`) and in its `files` folder on Android, written to a temporary file and
+  renamed; `localStorage` on the web. `cx.use_pref(key, default)` shows one in a component,
+  and any change, from any thread, builds the interface again. `frus::secure_store()`
+  (feature `secure-store`) keeps secrets with the system: the Credential Manager on Windows,
+  the Keychain on macOS and iOS, the Secret Service on Linux, an AES-256-GCM key in the
+  Android Keystore on Android; `Unsupported` on the web, which has nowhere safe to keep one.
+
 - **Open an address, and share through the system's share sheet** (J775). `frus::open_url`
   opens `https://` in the browser and `mailto:`, `tel:` and `sms:` in their applications, on
   Windows, macOS, Linux, Android and the web, refusing paths and `javascript:` addresses.

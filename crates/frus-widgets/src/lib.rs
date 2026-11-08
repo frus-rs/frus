@@ -96,6 +96,7 @@ mod gesturedetector;
 mod grid;
 mod gridtile;
 mod hero;
+mod motion;
 mod mouseregion;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
@@ -153,6 +154,7 @@ mod placeholder;
 mod popover;
 mod portal;
 mod positioned;
+mod prefs;
 mod progressbar;
 mod radio;
 mod rating;
@@ -207,6 +209,7 @@ mod textinput;
 mod theme;
 mod themebuilder;
 mod themed;
+mod themeextension;
 mod timeline;
 mod timepicker;
 mod titlebar;
@@ -394,6 +397,7 @@ pub use media::{
 pub use mediascope::MediaScope;
 pub use menu::{MenuItem, PopupMenuButton};
 pub use menubar::{MenuBar, MenuPath, SubmenuButton};
+pub use motion::MotionTheme;
 pub use mouseregion::{HoverEvent, HoverRegion, MouseRegion};
 pub use navbar::NavigationBar;
 pub use navdrawer::NavigationDrawer;
@@ -422,6 +426,12 @@ pub use placeholder::{Placeholder, PLACEHOLDER_COLOR, PLACEHOLDER_FALLBACK, PLAC
 pub use popover::MenuAnchor;
 pub use portal::{OverlayPortal, Placement};
 pub use positioned::{Positioned, Positioning};
+#[doc(hidden)]
+pub use prefs::{
+    __install_prefs_storage, __prefs_storage_installed, __take_prefs_change, __use_memory_prefs,
+    PrefsChange, PrefsMap, PrefsStorage,
+};
+pub use prefs::{prefs, Prefs, PrefsError, UsePref};
 pub use progressbar::LinearProgressIndicator;
 pub use radio::{Radio, RadioGroup};
 pub use rating::Rating;
@@ -466,6 +476,9 @@ pub use segmented::{
 };
 pub use selectiontoolbar::{EditAction, ToolbarContext, ToolbarItem};
 pub use semantics::{Description, Semantics};
+/// The JSON the preferences are kept as, for the platform layer's storages.
+#[doc(hidden)]
+pub use serde_json as __serde_json;
 pub use sheet::{
     sheet_takes_release, split_sheet_drag, DraggableScrollableSheet, SheetArea, SheetSpec,
     SheetState, SheetTo, SnapSimulation, SHEET_SNAP_MIN_SPEED,
@@ -516,6 +529,7 @@ pub use theme::{
 };
 pub use themebuilder::ThemeBuilder;
 pub use themed::Themed;
+pub use themeextension::{ThemeExtension, ThemeExtensions};
 pub use timeline::Timeline;
 pub use timepicker::{Endpoint, TimeField, TimePicker, TimeRange};
 pub use titlebar::{CaptionButton, TitleBar, TitleBarRole, WindowMenuBar};
@@ -562,6 +576,11 @@ pub use widgettheme::{
 // Convenience re-exports for callers.
 #[doc(hidden)]
 pub use frus_core::__set_detected_target_platform;
+/// How fast animated time runs, for slowing every animation down while debugging it.
+pub use frus_core::{
+    animation_speed, dilate_frame_time, set_animation_speed, MAX_ANIMATION_SPEED,
+    MIN_ANIMATION_SPEED,
+};
 pub use frus_core::{
     debug_default_target_platform_override, default_target_platform,
     set_debug_default_target_platform_override, Platform, TargetPlatform, IS_WEB,

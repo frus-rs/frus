@@ -295,6 +295,36 @@ pub struct ColorScheme {
     pub error_container: Color,
     /// What is legible on [`error_container`](Self::error_container).
     pub on_error_container: Color,
+    /// The colour of **success**: something that worked, a valid entry, a finished task.
+    ///
+    /// Not one of Material 3's roles, which stop at `error`; every application ends up
+    /// needing it, so it is here, built the way `error` is: a hue of its own (a green),
+    /// turned slightly toward the seed so it belongs to the palette, at the same tones.
+    pub success: Color,
+    /// What is legible on [`success`](Self::success).
+    pub on_success: Color,
+    /// The quiet form of [`success`](Self::success), for a surface: a confirmation banner.
+    pub success_container: Color,
+    /// What is legible on [`success_container`](Self::success_container).
+    pub on_success_container: Color,
+    /// The colour of a **warning**: something that deserves attention, short of an error.
+    /// An amber, built like [`success`](Self::success).
+    pub warning: Color,
+    /// What is legible on [`warning`](Self::warning).
+    pub on_warning: Color,
+    /// The quiet form of [`warning`](Self::warning), for a surface.
+    pub warning_container: Color,
+    /// What is legible on [`warning_container`](Self::warning_container).
+    pub on_warning_container: Color,
+    /// The colour of neutral **information**: a tip, a notice. A blue, built like
+    /// [`success`](Self::success).
+    pub info: Color,
+    /// What is legible on [`info`](Self::info).
+    pub on_info: Color,
+    /// The quiet form of [`info`](Self::info), for a surface.
+    pub info_container: Color,
+    /// What is legible on [`info_container`](Self::info_container).
+    pub on_info_container: Color,
     /// The accent as it must be drawn **on `inverse_surface`**: a snack bar's action
     /// (`snack_bar.dart:954`). `primary` on an inverted surface is the pair the scheme
     /// guarantees nothing about, which is exactly why this role exists.
@@ -313,6 +343,52 @@ pub struct ColorScheme {
     pub scrim: Color,
     /// The color of drop shadows (the alpha is applied at the point of use).
     pub shadow: Color,
+}
+
+/// The source colours of the three **status** families: a green, an amber and a blue.
+/// Their hue and chroma are what a family keeps; the tone is chosen per role.
+const STATUS_SOURCES: [Color; 3] = [
+    // Success, warning, info.
+    Color::rgb(
+        0x2E as f32 / 255.0,
+        0x9D as f32 / 255.0,
+        0x4F as f32 / 255.0,
+    ),
+    Color::rgb(
+        0xF2 as f32 / 255.0,
+        0xA9 as f32 / 255.0,
+        0x00 as f32 / 255.0,
+    ),
+    Color::rgb(
+        0x1E as f32 / 255.0,
+        0x88 as f32 / 255.0,
+        0xE5 as f32 / 255.0,
+    ),
+];
+
+/// The status families' palettes for a scheme whose seed has hue `seed_hue`.
+///
+/// Each source hue is **harmonised** toward the seed: turned by half the angle between
+/// them, at most 15 degrees. A green next to a purple seed leans a little purple, which is
+/// what makes it look like part of the palette, and it stays a green, which is what makes
+/// it mean success.
+fn status_palettes(seed_hue: f64) -> [frus_core::TonalPalette; 3] {
+    STATUS_SOURCES.map(|source| {
+        let hct = frus_core::Hct::from_color(source);
+        frus_core::TonalPalette::new(harmonize(hct.hue, seed_hue), hct.chroma.clamp(36.0, 60.0))
+    })
+}
+
+/// `hue` turned toward `toward` by half the angle between them, at most 15 degrees.
+fn harmonize(hue: f64, toward: f64) -> f64 {
+    let difference = 180.0 - ((hue - toward).rem_euclid(360.0) - 180.0).abs();
+    let rotation = (difference * 0.5).min(15.0);
+    let direction = if (toward - hue).rem_euclid(360.0) <= 180.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    (hue + rotation * direction).rem_euclid(360.0)
 }
 
 impl ColorScheme {
@@ -377,6 +453,20 @@ impl ColorScheme {
             on_error: Color::rgb8(38, 12, 12),
             error_container: Color::rgb8(130, 37, 41),
             on_error_container: Color::rgb8(255, 218, 216),
+            // The status families: this crate's HCT at the error family's tones, from the
+            // primary's hue (`status_palettes`). A test holds them to the computation.
+            success: Color::rgb8(106, 221, 140),
+            on_success: Color::rgb8(0, 57, 25),
+            success_container: Color::rgb8(1, 82, 39),
+            on_success_container: Color::rgb8(135, 250, 165),
+            warning: Color::rgb8(237, 194, 27),
+            on_warning: Color::rgb8(60, 47, 0),
+            warning_container: Color::rgb8(86, 69, 0),
+            on_warning_container: Color::rgb8(255, 224, 130),
+            info: Color::rgb8(139, 206, 255),
+            on_info: Color::rgb8(0, 52, 78),
+            info_container: Color::rgb8(0, 75, 111),
+            on_info_container: Color::rgb8(201, 230, 255),
             inverse_primary: Color::rgb8(2, 109, 56),
             surface_tint: Color::rgb8(96, 200, 130),
             surface_dim: Color::rgb8(30, 33, 40),
@@ -438,6 +528,20 @@ impl ColorScheme {
             on_error: Color::rgb8(255, 255, 255),
             error_container: Color::rgb8(255, 218, 215),
             on_error_container: Color::rgb8(65, 0, 5),
+            // The status families: this crate's HCT at the error family's tones, from the
+            // primary's hue (`status_palettes`). A test holds them to the computation.
+            success: Color::rgb8(2, 109, 53),
+            on_success: Color::rgb8(255, 255, 255),
+            success_container: Color::rgb8(135, 250, 165),
+            on_success_container: Color::rgb8(0, 33, 12),
+            warning: Color::rgb8(114, 92, 1),
+            on_warning: Color::rgb8(255, 255, 255),
+            warning_container: Color::rgb8(255, 224, 130),
+            on_warning_container: Color::rgb8(35, 27, 0),
+            info: Color::rgb8(2, 100, 145),
+            on_info: Color::rgb8(255, 255, 255),
+            info_container: Color::rgb8(201, 230, 255),
+            on_info_container: Color::rgb8(0, 30, 47),
             inverse_primary: Color::rgb8(111, 220, 149),
             surface_tint: Color::rgb8(46, 160, 96),
             surface_dim: Color::rgb8(223, 228, 234),
@@ -486,6 +590,10 @@ impl ColorScheme {
         let n = |tone: f64| neutral.tone(tone);
         let nv = |tone: f64| neutral_variant.tone(tone);
         let e = |tone: f64| error.tone(tone);
+        let [success, warning, info] = status_palettes(hct.hue);
+        let ok = |tone: f64| success.tone(tone);
+        let warn = |tone: f64| warning.tone(tone);
+        let inf = |tone: f64| info.tone(tone);
 
         if dark {
             Self {
@@ -536,6 +644,18 @@ impl ColorScheme {
                 on_error: e(20.0),
                 error_container: e(30.0),
                 on_error_container: e(90.0),
+                success: ok(80.0),
+                on_success: ok(20.0),
+                success_container: ok(30.0),
+                on_success_container: ok(90.0),
+                warning: warn(80.0),
+                on_warning: warn(20.0),
+                warning_container: warn(30.0),
+                on_warning_container: warn(90.0),
+                info: inf(80.0),
+                on_info: inf(20.0),
+                info_container: inf(30.0),
+                on_info_container: inf(90.0),
                 // The accent as it reads on the inverted surface: the *other* theme's
                 // tone of the same palette, which is what an inverted surface is.
                 inverse_primary: p(40.0),
@@ -590,6 +710,18 @@ impl ColorScheme {
                 on_error: e(100.0),
                 error_container: e(90.0),
                 on_error_container: e(10.0),
+                success: ok(40.0),
+                on_success: ok(100.0),
+                success_container: ok(90.0),
+                on_success_container: ok(10.0),
+                warning: warn(40.0),
+                on_warning: warn(100.0),
+                warning_container: warn(90.0),
+                on_warning_container: warn(10.0),
+                info: inf(40.0),
+                on_info: inf(100.0),
+                info_container: inf(90.0),
+                on_info_container: inf(10.0),
                 inverse_primary: p(80.0),
                 surface_tint: p(40.0),
                 surface_dim: n(89.0),
@@ -668,6 +800,18 @@ impl ColorScheme {
             on_error: c(self.on_error, other.on_error),
             error_container: c(self.error_container, other.error_container),
             on_error_container: c(self.on_error_container, other.on_error_container),
+            success: c(self.success, other.success),
+            on_success: c(self.on_success, other.on_success),
+            success_container: c(self.success_container, other.success_container),
+            on_success_container: c(self.on_success_container, other.on_success_container),
+            warning: c(self.warning, other.warning),
+            on_warning: c(self.on_warning, other.on_warning),
+            warning_container: c(self.warning_container, other.warning_container),
+            on_warning_container: c(self.on_warning_container, other.on_warning_container),
+            info: c(self.info, other.info),
+            on_info: c(self.on_info, other.on_info),
+            info_container: c(self.info_container, other.info_container),
+            on_info_container: c(self.on_info_container, other.on_info_container),
             inverse_primary: c(self.inverse_primary, other.inverse_primary),
             surface_tint: c(self.surface_tint, other.surface_tint),
             surface_dim: c(self.surface_dim, other.surface_dim),
@@ -810,6 +954,14 @@ pub struct Theme {
     /// ([`Theme::with_visual_density`]). Unset, the theme's platform decides: standard on
     /// phones, compact on the desktops — see [`Theme::visual_density`] (milestone 631).
     pub visual_density: Option<crate::VisualDensity>,
+    /// **How things move**: the named durations, easing curves and springs the widgets
+    /// animate with ([`MotionTheme`](crate::MotionTheme)). Shared, so a theme copy does not
+    /// copy them; change them with [`Theme::with_motion`].
+    pub motion: std::sync::Arc<crate::MotionTheme>,
+    /// **Tokens of the application's own**, one value per type
+    /// ([`ThemeExtension`](crate::ThemeExtension)). Empty by default; see
+    /// [`Theme::with_extension`] and [`Theme::extension`].
+    pub extensions: crate::ThemeExtensions,
     /// **Whether gestures answer with the platform's touch feedback** — on Android, the
     /// short vibration of a long press that selects text. `true` by default; `false`
     /// ([`Theme::with_feedback`]) turns it off for the whole application. The person's own
@@ -850,8 +1002,61 @@ impl Theme {
             cupertino_override_theme: None,
             cupertino_theme: None,
             visual_density: None,
+            motion: std::sync::Arc::new(crate::MotionTheme::M3),
+            extensions: crate::ThemeExtensions::EMPTY,
             enable_feedback: true,
         }
+    }
+
+    /// The same theme, animating with `motion` ([`Theme::motion`]).
+    ///
+    /// ```
+    /// use frus_widgets::{MotionTheme, Theme};
+    ///
+    /// let snappy = Theme::light().with_motion(MotionTheme {
+    ///     short4: 0.12,
+    ///     ..MotionTheme::M3
+    /// });
+    /// assert_eq!(snappy.motion.short4, 0.12);
+    /// ```
+    pub fn with_motion(mut self, motion: crate::MotionTheme) -> Self {
+        self.motion = std::sync::Arc::new(motion);
+        self
+    }
+
+    /// The same theme, carrying `tokens` as well: an application's or a design system's
+    /// own values, read back with [`Theme::extension`]. A second value of the same type
+    /// replaces the first.
+    ///
+    /// ```
+    /// use frus_widgets::{Theme, ThemeExtension};
+    ///
+    /// #[derive(Clone, Debug, PartialEq)]
+    /// struct Spacing { gutter: f32 }
+    /// impl ThemeExtension for Spacing {}
+    ///
+    /// let theme = Theme::light().with_extension(Spacing { gutter: 24.0 });
+    /// assert_eq!(theme.extension::<Spacing>().map(|s| s.gutter), Some(24.0));
+    /// ```
+    pub fn with_extension<T: crate::ThemeExtension>(mut self, tokens: T) -> Self {
+        self.extensions.insert(tokens);
+        self
+    }
+
+    /// The tokens of type `T` this theme carries, if it carries any
+    /// ([`Theme::with_extension`]).
+    ///
+    /// ```
+    /// use frus_widgets::{Theme, ThemeExtension};
+    ///
+    /// #[derive(Clone, Debug, PartialEq)]
+    /// struct Brand { corner: f32 }
+    /// impl ThemeExtension for Brand {}
+    ///
+    /// assert!(Theme::light().extension::<Brand>().is_none());
+    /// ```
+    pub fn extension<T: crate::ThemeExtension>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
 
     /// The same theme, with the platform's touch feedback on or off
@@ -1001,6 +1206,10 @@ impl Theme {
         out.user_interface_level = near.user_interface_level;
         out.cupertino_override_theme = near.cupertino_override_theme.clone();
         out.cupertino_theme = near.cupertino_theme.clone();
+        // The motion tokens are timings, not looks: they switch at the half, like the
+        // platform. The extensions travel as their own `lerp` says.
+        out.motion = near.motion.clone();
+        out.extensions = self.extensions.lerp(&other.extensions, t);
         out.enable_feedback = near.enable_feedback;
         // A density moves smoothly, as the reference's does; a pair that both follow their
         // platform keeps following it.
@@ -1086,6 +1295,86 @@ mod tests {
         assert_eq!(back.brightness(), Brightness::Light);
     }
 
+    /// **The hand-written schemes' status roles are the computation's** (milestone 778):
+    /// the literals in `light()` and `dark()` are what `from_seed` gives for their own
+    /// primary, written out so building a theme does not solve twelve colours.
+    #[test]
+    fn the_written_status_roles_are_the_computed_ones() {
+        let rgb8 = |c: Color| [c.r, c.g, c.b].map(|v| (v * 255.0).round() as u8);
+        for (written, dark) in [(ColorScheme::light(), false), (ColorScheme::dark(), true)] {
+            let computed = ColorScheme::from_seed(ColorScheme::light().primary, dark);
+            let pairs = [
+                ("success", written.success, computed.success),
+                ("on_success", written.on_success, computed.on_success),
+                (
+                    "success_container",
+                    written.success_container,
+                    computed.success_container,
+                ),
+                (
+                    "on_success_container",
+                    written.on_success_container,
+                    computed.on_success_container,
+                ),
+                ("warning", written.warning, computed.warning),
+                ("on_warning", written.on_warning, computed.on_warning),
+                (
+                    "warning_container",
+                    written.warning_container,
+                    computed.warning_container,
+                ),
+                (
+                    "on_warning_container",
+                    written.on_warning_container,
+                    computed.on_warning_container,
+                ),
+                ("info", written.info, computed.info),
+                ("on_info", written.on_info, computed.on_info),
+                (
+                    "info_container",
+                    written.info_container,
+                    computed.info_container,
+                ),
+                (
+                    "on_info_container",
+                    written.on_info_container,
+                    computed.on_info_container,
+                ),
+            ];
+            for (name, a, b) in pairs {
+                assert_eq!(rgb8(a), rgb8(b), "{name}, dark: {dark}");
+            }
+        }
+    }
+
+    /// **Status colours are harmonised toward the seed, and stay what they are**: a green
+    /// next to a purple seed leans toward it, by at most 15 degrees.
+    #[test]
+    fn status_hues_lean_toward_the_seed_by_at_most_fifteen_degrees() {
+        assert!(
+            (harmonize(140.0, 150.0) - 145.0).abs() < 1e-9,
+            "half the angle"
+        );
+        assert!(
+            (harmonize(140.0, 300.0) - 155.0).abs() < 1e-9,
+            "towards a hue 160 degrees ahead, capped at 15"
+        );
+        assert!(
+            (harmonize(140.0, 330.0) - 125.0).abs() < 1e-9,
+            "the short way round is backwards"
+        );
+        assert!(harmonize(350.0, 10.0).abs() < 1e-9, "across zero");
+        let green = frus_core::Hct::from_color(STATUS_SOURCES[0]).hue;
+        for seed in [Color::rgb8(0x9C, 0x27, 0xB0), Color::rgb8(0x42, 0x85, 0xF4)] {
+            let palettes = status_palettes(frus_core::Hct::from_color(seed).hue);
+            let moved = 180.0 - ((palettes[0].hue - green).rem_euclid(360.0) - 180.0).abs();
+            assert!(
+                moved <= 15.0 + 1e-9 && moved > 0.0,
+                "{seed:?}: moved {moved}"
+            );
+        }
+    }
+
     /// The WCAG contrast between two colors (a ratio ≥ 1).
     fn contrast(a: Color, b: Color) -> f32 {
         let (la, lb) = (a.compute_luminance() + 0.05, b.compute_luminance() + 0.05);
@@ -1113,6 +1402,20 @@ mod tests {
                     ("surface", s.surface, s.on_surface),
                     ("tertiary", s.tertiary, s.on_tertiary),
                     ("error", s.error, s.on_error),
+                    ("success", s.success, s.on_success),
+                    ("warning", s.warning, s.on_warning),
+                    ("info", s.info, s.on_info),
+                    (
+                        "success_container",
+                        s.success_container,
+                        s.on_success_container,
+                    ),
+                    (
+                        "warning_container",
+                        s.warning_container,
+                        s.on_warning_container,
+                    ),
+                    ("info_container", s.info_container, s.on_info_container),
                     ("inverse", s.inverse_surface, s.on_inverse_surface),
                     // The containers carry text too — an errored field's helper line is
                     // `on_error_container` on `error_container`, and it has to be read.

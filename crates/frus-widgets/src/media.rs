@@ -586,6 +586,23 @@ impl MediaQuery {
         self
     }
 
+    /// Whether the user asked for **reduced motion** — the ambient
+    /// [`Accessibility::disable_animations`], as the platform reports it with the
+    /// application's word over it.
+    ///
+    /// The question a widget that animates for decoration asks before it does: a pulse,
+    /// a shimmer, a halo holds still when this is true.
+    ///
+    /// ```
+    /// use frus_widgets::MediaQuery;
+    ///
+    /// // Outside any frame nobody has asked for anything.
+    /// assert!(!MediaQuery::reduce_motion());
+    /// ```
+    pub fn reduce_motion() -> bool {
+        Self::of().accessibility.disable_animations
+    }
+
     /// The description currently in force, or [`UNSET`](Self::UNSET) outside any
     /// scope.
     #[inline(never)]

@@ -27,7 +27,7 @@
 
 use std::rc::Rc;
 
-use frus_core::{AnimationController, Color, Curve, Path, Point, TextStyle};
+use frus_core::{AnimationController, Color, Path, Point, TextStyle};
 
 use crate::callback::Callback;
 use crate::lazy::Lazy;
@@ -43,19 +43,6 @@ use crate::{
 
 /// The bar's height, above the room it keeps for the system's bars.
 pub const BOTTOM_NAVIGATION_BAR_HEIGHT: f32 = 56.0;
-
-/// How long a change of selection takes to show.
-const DURATION: f32 = 0.2;
-
-/// The curve the selection moves along: fast out, slow in.
-fn curve() -> Curve {
-    Curve::Cubic {
-        x1: 0.4,
-        y1: 0.0,
-        x2: 0.2,
-        y2: 1.0,
-    }
-}
 
 /// How a [`BottomNavigationBar`]'s items are laid out and coloured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,12 +414,17 @@ impl BarState {
     /// Follows the selection the bar is told: the old item goes, the new one comes, and a
     /// shifting bar starts a splash of the new item's colour. A splash that has spread
     /// becomes the bar's colour.
+    ///
+    /// The change takes the theme's `short4` along its `legacy` easing (milestone 778):
+    /// 200 ms, fast out and slow in, as before, now from the motion tokens.
     fn follow(
         &mut self,
         items: &[BottomNavigationBarItem],
         current: usize,
         kind: BottomNavigationBarType,
+        motion: &crate::MotionTheme,
     ) {
+        let (duration, curve) = (motion.short4, || motion.legacy.clone());
         if self.selection.len() != items.len() {
             *self = Self::new(items, current);
             return;
@@ -441,7 +433,7 @@ impl BarState {
             if kind == BottomNavigationBarType::Shifting {
                 if let Some(color) = items[current].background_color {
                     let spread = AnimationHandle::new(AnimationController::unit());
-                    spread.forward(DURATION, curve());
+                    spread.forward(duration, curve());
                     self.circles.push(Circle {
                         index: current,
                         color,
@@ -449,8 +441,8 @@ impl BarState {
                     });
                 }
             }
-            self.selection[self.current].reverse(DURATION, curve());
-            self.selection[current].forward(DURATION, curve());
+            self.selection[self.current].reverse(duration, curve());
+            self.selection[current].forward(duration, curve());
             self.current = current;
         } else if self.circles.is_empty() {
             self.background = items[current].background_color;
@@ -524,7 +516,7 @@ fn build(parts: Parts) -> Box<dyn Widget> {
             BottomNavigationBarType::Shifting
         });
         let state = cx.use_ref(|| BarState::new(&p.items, current));
-        state.update(|s| s.follow(&p.items, current, kind));
+        state.update(|s| s.follow(&p.items, current, kind, &theme.motion));
         let progress: Vec<f32> = state.with(|s| s.selection.iter().map(|a| a.value()).collect());
 
         // The colours, as the reference resolves them: the caller's, the theme's, then the
@@ -801,7 +793,12 @@ mod tests {
         let mut state = BarState::new(&items, 0);
         assert_eq!(state.selection[0].value(), 1.0);
         assert_eq!(state.background, Some(Color::rgb8(255, 0, 0)));
-        state.follow(&items, 1, BottomNavigationBarType::Shifting);
+        state.follow(
+            &items,
+            1,
+            BottomNavigationBarType::Shifting,
+            &crate::MotionTheme::M3,
+        );
         assert!(state.selection[0].is_animating() && state.selection[1].is_animating());
         assert_eq!(
             state.circles.len(),
@@ -810,7 +807,12 @@ mod tests {
         );
         // Once the splash has spread, it is the bar's colour.
         state.circles[0].spread.set_value(1.0);
-        state.follow(&items, 1, BottomNavigationBarType::Shifting);
+        state.follow(
+            &items,
+            1,
+            BottomNavigationBarType::Shifting,
+            &crate::MotionTheme::M3,
+        );
         assert!(state.circles.is_empty());
         assert_eq!(state.background, Some(Color::rgb8(0, 0, 255)));
     }
@@ -822,7 +824,12 @@ mod tests {
             BottomNavigationBarItem::new("B", "B"),
         ];
         let mut state = BarState::new(&items, 0);
-        state.follow(&items, 1, BottomNavigationBarType::Fixed);
+        state.follow(
+            &items,
+            1,
+            BottomNavigationBarType::Fixed,
+            &crate::MotionTheme::M3,
+        );
         assert!(state.circles.is_empty());
     }
 }

@@ -11,7 +11,7 @@ use crate::interaction::Status;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
-/// Vitesse de pulsation (radians/seconde).
+/// How fast the placeholder pulses, in radians per second.
 const SPEED: f32 = 2.5;
 
 /// An animated loading block.
@@ -69,8 +69,10 @@ impl<Msg> Widget<Msg> for Skeleton {
         &[]
     }
 
+    /// Redrawn every frame for its pulse — unless the user asked for reduced motion, where
+    /// it holds still and there is nothing to redraw for (milestone 778).
     fn continuous(&self) -> bool {
-        true
+        !crate::MediaQuery::reduce_motion()
     }
 
     /// **The width offered, when it was given none** (milestone 759).
@@ -90,8 +92,13 @@ impl<Msg> Widget<Msg> for Skeleton {
 
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
         let o = status.opacity;
-        // A `0..1` pulse driven by time.
-        let pulse = 0.5 + 0.5 * (status.time * SPEED).sin();
+        // A `0..1` pulse driven by time. A decoration, so it holds at its middle when the
+        // user asked for reduced motion (milestone 778).
+        let pulse = if crate::MediaQuery::reduce_motion() {
+            0.5
+        } else {
+            0.5 + 0.5 * (status.time * SPEED).sin()
+        };
         let alpha = (0.18 + 0.22 * pulse) * o;
         scene.draw_rect(
             bounds,
@@ -141,6 +148,23 @@ mod tests {
     fn intensity_varies_with_time() {
         // Two distinct instants of the pulse give different opacities.
         assert_ne!(alpha_at(0.0), alpha_at(0.6));
+    }
+
+    /// **Reduced motion stills the shimmer** (milestone 778): the same two instants paint
+    /// the same placeholder, and nothing asks for another frame.
+    #[test]
+    fn reduced_motion_stills_the_pulse() {
+        let still = crate::MediaQuery::new(frus_core::Size::new(400.0, 300.0)).with_accessibility(
+            crate::Accessibility {
+                disable_animations: true,
+                ..crate::Accessibility::NONE
+            },
+        );
+        let guard = still.install();
+        assert_eq!(alpha_at(0.0), alpha_at(0.6));
+        assert!(!Widget::<()>::continuous(&Skeleton::new()));
+        drop(guard);
+        assert_ne!(alpha_at(0.0), alpha_at(0.6), "and it moves again after");
     }
 
     /// The bars a scene draws, wherever they are nested.

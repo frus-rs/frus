@@ -1328,7 +1328,8 @@ impl<Msg> Widget<Msg> for LineChart<Msg> {
                 if !stacked {
                     let py = baseline_y - (vals[hi] / max) * plot_h;
                     // Animated pulsing halo (milestone 217): grows then fades under the marker.
-                    if self.animated {
+                    // A decoration: it holds still under reduced motion (milestone 778).
+                    if self.animated && !crate::MediaQuery::reduce_motion() {
                         let phase = (status.time * PULSE_SPEED).fract();
                         let r = (MARKER_R + 2.0) + phase * PULSE_GROW;
                         scene.fill_path(
@@ -1425,8 +1426,9 @@ impl<Msg> Widget<Msg> for LineChart<Msg> {
     }
 
     fn continuous(&self) -> bool {
-        // Continuous repaint while the pulsing halo is on (milestone 217).
-        self.animated
+        // Continuous repaint while the pulsing halo is on (milestone 217), and not when
+        // the user asked for reduced motion, where there is no halo (milestone 778).
+        self.animated && !crate::MediaQuery::reduce_motion()
     }
 
     fn on_click(&self) -> Option<Msg> {

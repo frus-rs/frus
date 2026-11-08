@@ -2332,6 +2332,15 @@ impl<A: Application> App<A> {
             self.build_dirty = true;
         }
 
+        // **Reduced motion** (milestone 778): the system's own switch, where it has one and
+        // it can be read. Unreadable, it stays as it was: off unless something said so.
+        if let Some(reduce) = crate::reduce_motion::system_reduce_motion() {
+            if reduce != self.platform.accessibility.disable_animations {
+                self.platform.accessibility.disable_animations = reduce;
+                self.build_dirty = true;
+            }
+        }
+
         // **The reader's languages**, read once. Changing the display language on a
         // desktop means signing out and back in on Windows, and is a per-process
         // environment variable on Linux — so there is nothing to watch for, and re-reading
@@ -2843,6 +2852,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 if self.title_bar_on {
                     self.request_redraw();
                 }
+                // Back from the system's settings, perhaps with motion reduced: what the
+                // platform says about its user is read again (milestone 778).
+                #[cfg(not(android))]
+                if focused {
+                    self.refresh_platform_settings();
+                    self.request_redraw();
+                }
             }
 
             WindowEvent::Resized(size) => {
@@ -3229,6 +3245,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     .map(|prev| (now - prev).as_secs_f32().min(0.05))
                     .unwrap_or(0.0);
                 self.last_frame = Some(now);
+                // **Animated time**, at the speed the application set for debugging
+                // (milestone 778): every animation below is moved by this one step, so one
+                // multiplication slows or speeds them all. Input and timers keep the wall
+                // clock.
+                let dt = frus_widgets::dilate_frame_time(dt);
 
                 // A continuous clock, in seconds, for the time-driven animations.
                 self.elapsed += dt;
@@ -3350,10 +3371,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A hot-reload patch changed what the components build.
                 #[cfg(feature = "hot-reload")]
                 let arrived = crate::hot::take_patched() || arrived;
-                // The device changed networks: what reads the connectivity builds again
-                // (milestone 777).
+                // A preference changed, maybe on another thread (milestone 776), or the device
+                // changed networks (milestone 777): `|`, not `||`, so every flag is taken.
                 let arrived = frus_widgets::take_connectivity_change() || arrived;
-                if frus_widgets::take_rebuild_request() || arrived {
+                if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change()
+                    || arrived
+                {
                     self.build_dirty = true;
                 }
                 let need_build = frame_needs_build(
@@ -12949,6 +12972,9 @@ pub mod testing {
             for (_, message) in due {
                 s.dispatch(message);
             }
+            // The animations' step, at the debugging speed, as the window's frame takes it;
+            // the gestures and timers above stay on the driver's own clock.
+            let dt = frus_widgets::dilate_frame_time(dt);
             let mut app_animating = s.app.tick(dt);
             let settings = s
                 .platform
@@ -12971,7 +12997,10 @@ pub mod testing {
             let asked = s.app.effects();
             s.run_command(asked);
             let arrived = s.take_task_arrivals();
-            if frus_widgets::take_rebuild_request() || arrived {
+            // A preference changed, maybe on another thread (milestone 776): `|`, not `||`, so
+            // both flags are taken.
+            if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change() || arrived
+            {
                 s.build_dirty = true;
             }
             s.report_focus();
