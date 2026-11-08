@@ -796,6 +796,23 @@ mod tests {
         assert_eq!(added.matches("uses_permission").count(), 5, "{added}");
     }
 
+    /// **A debug run is smooth**: `frus run` builds in debug, and without this the renderer,
+    /// the text shaper and frus run unoptimised, at several times a frame's budget. Only the
+    /// dependencies are optimised, so the application's own crate stays quick to rebuild
+    /// and to hot-reload (milestone 772).
+    #[test]
+    fn a_debug_build_optimises_the_dependencies() {
+        let files = render(&project(), None).unwrap();
+        let manifest = file(&files, "Cargo.toml");
+        let section = manifest
+            .split("[profile.dev.package.\"*\"]")
+            .nth(1)
+            .expect("the dependencies' debug profile");
+        let body = section.split("\n[").next().unwrap();
+        assert!(body.contains("\nopt-level = 3\n"), "{body}");
+        assert!(!manifest.contains("\n[profile.dev]\n"));
+    }
+
     #[test]
     fn rendering_leaves_out_the_template_config() {
         let files = render(&project(), None).unwrap();
