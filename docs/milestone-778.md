@@ -148,15 +148,24 @@ is information, not decoration.
   from PowerShell on the same machine: animations on, so `Some(false)` (see the report).
 - `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
 
+## Goldens
+
+- **`toast_host`, regenerated.** CI's render differs from the committed golden in 180 pixels
+  past the tolerance, all of them in one 4 x 45 rectangle at x 271..274, y 122..166: the stripe
+  down the leading edge of the *success* snack bar. It was the crate's hard-coded green
+  `(70, 190, 120)` and is now the dark scheme's `success` role, `(106, 221, 140)`. That is the
+  change this milestone makes on purpose. The remaining differences are one or two levels in a
+  channel, within the tolerance. The new golden is CI's own render, as the GPU job wrote it
+  (`toast_host.actual.png`).
+- **`alert_kinds`** (in `widgets.rs`) is expected to change too: its info, success, warning and
+  error boxes now take `info`, `success`, `warning` and `error` from the scheme. Its new golden is taken from CI's render once the GPU job reaches it.
+
 ## Not done
 
-- **Goldens not run.** Under WSL the run failed with I/O errors and then WSL itself stopped
-  (`E_UNEXPECTED`): drive C:, which holds WSL's disk, had no free space left. The goldens that
-  should move are the ones showing what changed colour: `widgets.rs`'s alerts (info, success,
-  warning and error now take the scheme's roles) and `goldens.rs`'s snack bar stack with a
-  success bar (its stripe is now `success`). Nothing else in this change paints differently at
-  speed 1 with motion not reduced. They need running and regenerating under WSL once there is
-  room.
+- **Goldens were not run under WSL.** WSL failed with I/O errors and then stopped altogether
+  (`E_UNEXPECTED`), because drive C:, which holds WSL's disk, had no free space left. The
+  goldens were rendered by CI's GPU job instead, which uses the same pinned Mesa as the WSL
+  recipe; see "Goldens" above.
 - **Reduced motion was read for real on Windows only.** The macOS, Linux, iOS and Web readers
   compile (`cargo check` for `x86_64-apple-darwin` and `aarch64-apple-ios`, clippy for
   `wasm32-unknown-unknown`) but were not run on those systems. On Linux the answer is read once
