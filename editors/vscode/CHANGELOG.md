@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Run Frus Update updates every install, and says when there is nothing to do**: it compares
+  `frus --version` with the newest on crates.io and, when that one is newer, runs
+  `cargo install frus-cli --locked --force`, so a `frus` installed from a checkout is replaced too
+  (cargo refused that without `--force`, and the update silently did nothing).
 - **Hot reload by default, with every frus**: a debug run passes `--hot`, so that a save is
   patched into the running application with frus 0.5.0 too, whose own default is off.
   `"hot": false` restarts to reload instead (`--no-hot`, left out for a frus that does not know
@@ -20,9 +24,7 @@
   and F5 runs the application in a window shaped like the one chosen.
 - **frus: Create New Project**: a folder, a name and an organisation, then `frus create`, and
   the new project opened. Also a **Create frus Project** button in an empty window.
-- **frus: Run Frus Update**: says when `frus` is the newest already; otherwise
-  `cargo install frus-cli --force` in a terminal, which also replaces a `frus` installed from a
-  checkout (cargo refuses that without `--force`).
+- **frus: Run Frus Update**: `cargo install frus-cli` in a terminal, the newest `frus`.
 - **frus: Run Doctor** is now **frus: Run Frus Doctor**.
 
 ## 0.1.1
