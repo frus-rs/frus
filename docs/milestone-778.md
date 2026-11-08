@@ -158,14 +158,20 @@ is information, not decoration.
   channel, within the tolerance. The new golden is CI's own render, as the GPU job wrote it
   (`toast_host.actual.png`).
 - **`alert_kinds`** (in `widgets.rs`) is expected to change too: its info, success, warning and
-  error boxes now take `info`, `success`, `warning` and `error` from the scheme. Its new golden is taken from CI's render once the GPU job reaches it.
+  error boxes now take `info`, `success`, `warning` and `error` from the scheme. **Regenerated** from CI's render: the layout, text and
+  shapes are the same, and the four tints and stripes changed colour. The info box was green
+  before, `theme.primary` in the dark theme, and stood next to a green success box: the picture
+  the test exists to show ("four different colours, not three and a duplicate") was in fact two
+  greens. It is now blue (`info`), success is the scheme's green, warning its amber, error its
+  red. 76 301 pixels differ, nearly all inside the tinted boxes.
 
 ## Not done
 
 - **Goldens were not run under WSL.** WSL failed with I/O errors and then stopped altogether
   (`E_UNEXPECTED`), because drive C:, which holds WSL's disk, had no free space left. The
   goldens were rendered by CI's GPU job instead, which uses the same pinned Mesa as the WSL
-  recipe; see "Goldens" above.
+  recipe; see "Goldens" above. With the two regenerated, the job's other goldens (106 in
+  `goldens.rs`, 16 in `motion.rs`, 49 in `widgets.rs`) pass unchanged.
 - **Reduced motion was read for real on Windows only.** The macOS, Linux, iOS and Web readers
   compile (`cargo check` for `x86_64-apple-darwin` and `aarch64-apple-ios`, clippy for
   `wasm32-unknown-unknown`) but were not run on those systems. On Linux the answer is read once
