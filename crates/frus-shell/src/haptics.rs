@@ -154,12 +154,14 @@ thread_local! {
 
 /// Makes this thread's shell give the feedback of `platform`'s system, for a test.
 #[cfg(test)]
+#[inline(never)]
 pub(crate) fn pretend_system(platform: Option<frus_widgets::TargetPlatform>) {
     SYSTEM.with(|system| system.set(platform));
 }
 
 /// The system whose feedback the widgets give: the one running, not the theme's, as the
 /// leading toolkit does — feedback is how the device feels, not how the application looks.
+#[inline(never)]
 pub(crate) fn system_platform() -> frus_widgets::TargetPlatform {
     #[cfg(any(test, feature = "testing"))]
     if let Some(platform) = SYSTEM.with(|system| system.get()) {
@@ -171,12 +173,14 @@ pub(crate) fn system_platform() -> frus_widgets::TargetPlatform {
 /// The feedback the shell gave on this thread since the last call, for its tests.
 #[cfg(any(test, feature = "testing"))]
 #[cfg_attr(not(test), allow(dead_code))]
+#[inline(never)]
 pub(crate) fn take_given() -> Vec<Haptic> {
     GIVEN.with(|given| std::mem::take(&mut *given.borrow_mut()))
 }
 
 /// The feedback a widget's gesture gives — a long press that selected text —, unless the
 /// application's theme turned it off. A failure is not worth a word: the gesture worked.
+#[inline(never)]
 pub(crate) fn gesture_feedback(theme: &frus_widgets::Theme, kind: Option<Haptic>) {
     if !theme.enable_feedback {
         return;

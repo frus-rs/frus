@@ -480,8 +480,10 @@ impl State for SettingsState {
             }))
             .crumb("Home")
             .crumb("Settings"),
-            device(theme),
             row![tabs].justify(Justify::Center),
+            // Below the controls, not above them: the controls stay where a reader (and the
+            // tests' bench) finds them on arrival.
+            device(theme),
         ]
         .padding(20.0)
         .gap(16.0);
