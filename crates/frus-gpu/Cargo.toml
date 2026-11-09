@@ -21,6 +21,7 @@ bundled-sans = ["frus-text/bundled-sans"]
 bundled-italic = ["frus-text/bundled-italic"]
 bundled-mono = ["frus-text/bundled-mono"]
 bundled-arabic = ["frus-text/bundled-arabic"]
+dictionary-line-breaks = ["frus-text/dictionary-line-breaks"]
 
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.5" }

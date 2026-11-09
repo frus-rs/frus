@@ -5,8 +5,8 @@
 # repository root never reach crates.io. Each published crate keeps a copy, and this
 # keeps the copies identical to the root. Run with --fix to refresh them.
 #
-# frus-glyphon is skipped: it is a modified copy of a third-party crate and carries
-# that crate's own licence files.
+# frus-glyphon and frus-cosmic-text are skipped: each is a modified copy of a third-party
+# crate and carries that crate's own licence files.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -14,6 +14,7 @@ status=0
 for manifest in crates/*/Cargo.toml; do
   dir=$(dirname "$manifest")
   [ "$dir" = "crates/frus-glyphon" ] && continue
+  [ "$dir" = "crates/frus-cosmic-text" ] && continue
   grep -q '^publish = false' "$manifest" && continue
   for file in LICENSE-MIT LICENSE-APACHE NOTICE; do
     if ! cmp -s "$file" "$dir/$file"; then

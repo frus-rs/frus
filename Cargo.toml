@@ -23,7 +23,10 @@ taffy = "0.7"
 # frus's copy of glyphon 0.12, its shader made to build on OpenGL ES (the Android emulator,
 # devices without Vulkan): see crates/frus-glyphon/README.md. Imported as `glyphon`.
 glyphon = { package = "frus-glyphon", path = "crates/frus-glyphon", version = "0.5" }
-cosmic-text = "0.19"
+# frus's copy of cosmic-text 0.19, with variable font axes, a language per span, per-span
+# script fallback and dictionary line breaking: see crates/frus-cosmic-text/README.md.
+# Imported as `cosmic_text`.
+cosmic-text = { package = "frus-cosmic-text", path = "crates/frus-cosmic-text", version = "0.5" }
 lyon = "1"
 # Image decoding (PNG/JPEG). The format list is kept short to lighten the dependency tree.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

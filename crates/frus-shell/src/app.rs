@@ -927,7 +927,11 @@ fn install_ambient<A: Application>(app: &A, preferred: &[frus_widgets::Locale]) 
     // **Which language the interface is in**, resolved from what the platform reports
     // against what the application has. Installed before the table, because an
     // application choosing its table by language reads it from here.
-    frus_widgets::locale::install(app.resolved_locale(preferred));
+    let locale = app.resolved_locale(preferred);
+    // Text whose style names no language is shaped in this one: the glyph forms a font
+    // localizes, and which platform face draws the Han characters (milestone 784).
+    frus_text::set_default_locale(&locale.to_string());
+    frus_widgets::locale::install(locale);
     if let Some(table) = app.localizations() {
         frus_widgets::localizations::install(table);
     }
@@ -11523,6 +11527,8 @@ mod tests {
         // The device speaks Belgian French; the application has French, so it wins.
         install_ambient(&Speaks(None), &[Locale::with_country("fr", "BE")]);
         assert_eq!(frus_widgets::locale::of(), Locale::new("fr"));
+        // Text is shaped in it too, unless its style names another language.
+        assert_eq!(frus_text::default_locale(), Some("fr"));
 
         // A platform that reported nothing is not a failure: the application's own first
         // choice stands.

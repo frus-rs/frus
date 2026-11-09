@@ -9,6 +9,7 @@
 #
 #   milestone 292 (the first measurement)   10,012,520 bytes
 #   milestone 508 (this budget set)         10,427,568 bytes   -- +4% in 216 milestones
+#   milestone 784 (before raising)          14,163,432 bytes   -- budget raised to 14.5 MB
 #
 # The budget is about 25% over the measurement. It is there to catch a jump, not drift:
 # the release profile going missing (the debug library was 300 MB), LTO or stripping
@@ -19,5 +20,9 @@
 #
 # Raising it is allowed, and meant to be deliberate: in the change that needs it, with
 # the reason in the commit.
+# Milestone 784 raised it from 13,000,000: the `dictionary-line-breaks` feature (on by
+# default) ships ICU4X's word dictionaries for Thai, Lao, Khmer and Myanmar, about 1.1 MB,
+# so text in those scripts wraps between words with no setup. An app that never shows them
+# turns the feature off and gets the megabyte back.
 
-budget_bytes = 13000000
+budget_bytes = 14500000

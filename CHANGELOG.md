@@ -31,6 +31,21 @@ any release may break.
   theme struct in `theme.widgets` (`wavy_progress`, `carousel`, `date_picker_dialog`,
   `expandable_rail`, `glass`, `loading_indicator`; `AppBarTheme` gains `medium_title_style`
   and `large_title_style`).
+- **Material 3 widgets, batch 1** (J786). `SplitButton` (a leading action and a trailing menu
+  toggle, five `ButtonSize`s, filled / tonal / elevated / outlined, inner corners that tighten
+  when pressed, a pill with an upward chevron while open); `ButtonGroup` (standard or
+  connected, `single` or `multiple` choice, the shape morph on press, read as radio or toggle
+  buttons); `FabMenu` (a floating action button opening labelled actions over a scrim, its
+  close button over the button, primary / secondary / tertiary); `Toolbar` (docked or
+  floating, horizontal or vertical, vibrant, `hidden` slides it away) with `HideOnScroll`;
+  `SideSheet` (standard beside the page or modal from the end edge, RTL aware, dragged away);
+  `FullScreenDialog` (close, title, confirming action); `RichTooltip` (title, text, actions,
+  hovered or `persistent`); and selection mode — `SelectionController`, `SelectableItem`,
+  `SelectionAppBar` ("3 selected", Back leaves the mode). Each has a `*Theme` in
+  `WidgetThemes`. New in the framework: `SemanticsProperties::expanded` (AccessKit, web
+  `aria-expanded`, Android expand / collapse actions), `Widget::back_dismiss`,
+  `Widget::overlay_pinned`, `Placement::Covering`, `Drawer::drag_to_dismiss` and
+  `Localizations::more_options_label`.
 - **The Material motion system: patterns, presence and presets** (J785). New
   `MotionPattern::{FadeThrough, SharedAxis(SharedAxis::X | Y | Z), FadeScale}` with
   `pose(progress, entering, forward)`, timed from `theme.motion` (300 ms, fade scale 150/75 ms),
@@ -51,6 +66,18 @@ any release may break.
   instant. `PagePose` gains `shift_x`/`shift_y` and `PageTransitionsBuilder` three variants
   (a breaking change for exhaustive matches and struct literals). New `Navigator::transition`,
   `Widget::navigator_transition`. Example: `cargo run -p frus-demo --example motion`.
+- **OpenType features, variable font axes, a language per span, Thai line breaking, platform
+  fallback fonts** (J784). `TextStyle::font_feature("smcp", 1)`, `.font_variation("wdth", 75.0)`
+  and `.locale("ja")`, and the same on `TextSpan`, carried as a four-byte `TextShaping`
+  (new `FontTag`, `TextShaping`; new field `shaping` on `TextStyle`, `ResolvedTextStyle`,
+  `TextRun` and `Primitive::Text`). Every axis of a variable font is shaped and drawn, and a
+  `wght` axis becomes the weight. The language selects a font's localized forms and, for Han
+  characters, the platform face of that language; unset, it is the application's resolved
+  locale. Thai, Lao, Khmer and Myanmar wrap between words with ICU4X dictionaries (feature
+  `dictionary-line-breaks`, on by default). On Android a character no loaded face has is drawn
+  by the face the system's `fonts.xml` names, loaded the first time its script is shown. frus
+  now carries a copy of cosmic-text, `frus-cosmic-text`, as it does of glyphon. New
+  `frus_text::shaped`, `set_default_locale`, `default_locale`.
 - **The desktop window comes back as it was left; decoration at its own frame rate** (J783).
   The window's size, place and maximized state are kept in `window.json` in the application's
   data folder and restored before it is shown, fitted to the screens there are now (a window

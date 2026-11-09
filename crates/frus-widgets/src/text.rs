@@ -1923,6 +1923,7 @@ mod tests {
                 bounds: Rect::UNBOUNDED,
                 owner: 0,
                 letter_spacing: 0.0,
+                shaping: frus_core::TextShaping::NONE,
             }
         );
     }

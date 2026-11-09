@@ -19,7 +19,7 @@ categories = ["text-processing", "gui"]
 # (`frus_text::add_font`) turns off the ones it does not need. Turning one off never
 # turns an API into a panic: the missing role falls back to what is loaded.
 [features]
-default = ["bundled-sans", "bundled-italic", "bundled-mono", "bundled-arabic"]
+default = ["bundled-sans", "bundled-italic", "bundled-mono", "bundled-arabic", "dictionary-line-breaks"]
 # The sans-serif, regular + bold — what almost every application actually draws.
 bundled-sans = []
 # The oblique faces (~1.28 MB). Without them, italic text renders upright.
@@ -28,6 +28,11 @@ bundled-italic = []
 bundled-mono = []
 # The Arabic Naskh faces (~357 kB), needed for Arabic to shape at all on Android.
 bundled-arabic = []
+# Lines break between the words of Thai, Lao, Khmer and Myanmar, which put no space between
+# them (milestone 784): the ICU4X dictionaries, about 1.1 MB of an application's binary. Off,
+# text in those scripts breaks only at spaces and punctuation, and a long sentence is cut
+# wherever it overflows.
+dictionary-line-breaks = ["cosmic-text/dictionary-line-breaks"]
 
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.5" }
@@ -36,6 +41,9 @@ cosmic-text.workspace = true
 log.workspace = true
 # A clock on every target, the web's included: how long the fonts take to load (#211).
 web-time = "1"
+# The script of a run, to pick its fallback faces (milestone 784); already in the tree,
+# cosmic-text uses it.
+unicode-script = "0.5"
 
 # The Web: cosmic-text asks `sys-locale` for the reader's language when it builds a font system,
 # and `sys-locale` reads the browser's only with this feature. Without it the answer is nothing,

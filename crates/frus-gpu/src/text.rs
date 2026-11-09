@@ -210,6 +210,7 @@ impl TextPainter {
                         height: line_ratio,
                         family,
                         letter_spacing,
+                        shaping,
                         clip,
                         ..
                     } => {
@@ -245,6 +246,9 @@ impl TextPainter {
                             .style(frus_text::available_style(*italic));
                         // Spaced as the measurement spaced it (milestone 623).
                         let attrs = frus_text::spaced(attrs, *letter_spacing, *size);
+                        // Features, axes and language, as the measurement shaped them
+                        // (milestone 784).
+                        let attrs = frus_text::shaped(attrs, *shaping);
                         buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
                         // Alignment is per buffer line, and it is only set when it was
                         // asked for: the default leaves cosmic-text to align by the
@@ -316,23 +320,26 @@ impl TextPainter {
                         let spans = runs.iter().enumerate().map(|(index, run)| {
                             (
                                 run.text.as_str(),
-                                frus_text::spaced(
-                                    glyphon::Attrs::new()
-                                        .family(frus_text::family_for(&run.text))
-                                        .weight(glyphon::Weight(frus_text::available_weight(
-                                            run.weight,
-                                        )))
-                                        .style(frus_text::available_style(run.italic))
-                                        .metrics(glyphon::Metrics::new(
-                                            run.size,
-                                            run.size * LINE_HEIGHT_FACTOR,
-                                        ))
-                                        .color(to_glyphon(&run.color))
-                                        // Ties each glyph to its source run, for the
-                                        // per-span decorations.
-                                        .metadata(index),
-                                    run.letter_spacing,
-                                    run.size,
+                                frus_text::shaped(
+                                    frus_text::spaced(
+                                        glyphon::Attrs::new()
+                                            .family(frus_text::family_for(&run.text))
+                                            .weight(glyphon::Weight(frus_text::available_weight(
+                                                run.weight,
+                                            )))
+                                            .style(frus_text::available_style(run.italic))
+                                            .metrics(glyphon::Metrics::new(
+                                                run.size,
+                                                run.size * LINE_HEIGHT_FACTOR,
+                                            ))
+                                            .color(to_glyphon(&run.color))
+                                            // Ties each glyph to its source run, for the
+                                            // per-span decorations.
+                                            .metadata(index),
+                                        run.letter_spacing,
+                                        run.size,
+                                    ),
+                                    run.shaping,
                                 ),
                             )
                         });
@@ -617,6 +624,7 @@ mod tests {
             decoration: TextDecoration::NONE,
             decoration_color: None,
             letter_spacing: 0.0,
+            shaping: frus_core::TextShaping::NONE,
         };
         let mut scene = Scene::new();
         scene.rich_text(
@@ -685,6 +693,7 @@ mod tests {
             decoration,
             decoration_color: None,
             letter_spacing: 0.0,
+            shaping: frus_core::TextShaping::NONE,
         };
         let plain = {
             let mut scene = Scene::new();

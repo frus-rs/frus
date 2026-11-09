@@ -66,6 +66,9 @@ bundled-sans = ["frus-shell/bundled-sans", "frus-widgets/bundled-sans", "frus-te
 bundled-italic = ["frus-shell/bundled-italic", "frus-widgets/bundled-italic", "frus-text/bundled-italic"]
 bundled-mono = ["frus-shell/bundled-mono", "frus-widgets/bundled-mono", "frus-text/bundled-mono"]
 bundled-arabic = ["frus-shell/bundled-arabic", "frus-widgets/bundled-arabic", "frus-text/bundled-arabic"]
+# Line breaking between the words of Thai, Lao, Khmer and Myanmar (milestone 784). Part of
+# `default`; see frus-text's manifest for its size.
+dictionary-line-breaks = ["frus-shell/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks", "frus-text/dictionary-line-breaks"]
 icons-outlined = ["frus-widgets/icons-outlined"]
 icons-rounded = ["frus-widgets/icons-rounded"]
 icons-sharp = ["frus-widgets/icons-sharp"]

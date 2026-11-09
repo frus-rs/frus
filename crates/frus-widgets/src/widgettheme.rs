@@ -191,6 +191,24 @@ pub struct WidgetThemes {
     pub tree: TreeTheme,
     /// Defaults for [`OpenContainer`](crate::OpenContainer) (milestone 785).
     pub open_container: crate::OpenContainerTheme,
+    // Milestone 786.
+    /// Defaults for [`SplitButton`](crate::SplitButton).
+    pub split_button: crate::SplitButtonTheme,
+    /// Defaults for [`ButtonGroup`](crate::ButtonGroup).
+    pub button_group: crate::ButtonGroupTheme,
+    /// Defaults for [`FabMenu`](crate::FabMenu).
+    pub fab_menu: crate::FabMenuTheme,
+    /// Defaults for [`Toolbar`](crate::Toolbar).
+    pub toolbar: crate::ToolbarTheme,
+    /// Defaults for [`SideSheet`](crate::SideSheet).
+    pub side_sheet: crate::SideSheetTheme,
+    /// Defaults for [`FullScreenDialog`](crate::FullScreenDialog).
+    pub full_screen_dialog: crate::FullScreenDialogTheme,
+    /// Defaults for [`RichTooltip`](crate::RichTooltip).
+    pub rich_tooltip: crate::RichTooltipTheme,
+    /// Defaults for [`SelectableItem`](crate::SelectableItem) and
+    /// [`SelectionAppBar`](crate::SelectionAppBar).
+    pub selection: crate::SelectionTheme,
 }
 
 /// How a selection in text that is not a field looks — a

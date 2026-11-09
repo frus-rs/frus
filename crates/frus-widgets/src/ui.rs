@@ -568,6 +568,7 @@ struct BarrierBase {
     reorderables: usize,
     interactives: usize,
     semantics: usize,
+    dismisses: usize,
 }
 
 struct XformBase {
@@ -3228,6 +3229,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// is walked.
     fn barrier_base(&self) -> BarrierBase {
         BarrierBase {
+            dismisses: self.dismisses.len(),
             scene: self.scene.primitives().len(),
             hits: self.hits.len(),
             long_presses: self.long_presses.len(),
@@ -3486,6 +3488,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             self.text_stops.truncate(base.text_stops);
             self.reorderables.truncate(base.reorderables);
             self.interactives.truncate(base.interactives);
+            // A page held out of the input path — one under another in a navigator — does
+            // not answer Back either (milestone 786).
+            self.dismisses.truncate(base.dismisses);
             // The modal focus scope is an index **into** `focusables`. A barrier that cut
             // away the focusable it pointed at would leave it dangling past the end, and
             // every later slice of the pool would then be empty — no focusable at all,
@@ -4322,6 +4327,10 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // A widget that hears the pointer's raw events (milestone 586).
             if widget.pointer_listener() {
                 self.pointer_listeners.push((id, touch, draw_rect));
+            }
+            // A mode Back leaves first — a list in multi-select (milestone 786).
+            if let Some(msg) = widget.back_dismiss() {
+                self.dismisses.push(msg);
             }
             if let Some(msg) = widget.on_long_press() {
                 self.long_presses.push(Hit {
@@ -5702,7 +5711,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // A tooltip only shows while the anchor is hovered; an animated overlay disappears
             // once its progress has fallen back to zero.
             let visible = match placement {
-                Placement::Tooltip => self.runtime.input.hovered == Some(id.child(0)),
+                // A pinned one — a persistent rich tooltip — shows for as long as it is
+                // told to (milestone 786).
+                Placement::Tooltip => {
+                    widget.overlay_pinned() || self.runtime.input.hovered == Some(id.child(0))
+                }
                 _ => true,
             };
             if visible && progress > 0.001 {
@@ -6462,6 +6475,14 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 Placement::Bottom => (0.0, self.available.height - progress * size.height),
                 // Above the gesture bar and the navigation bar, whatever the page under it did
                 // with them.
+                // Its bottom-end corner on the anchor's: in RTL the end is the left.
+                Placement::Covering if self.rtl() => {
+                    (anchor.x, anchor.y + anchor.height - size.height)
+                }
+                Placement::Covering => (
+                    anchor.x + anchor.width - size.width,
+                    anchor.y + anchor.height - size.height,
+                ),
                 Placement::Notification => (
                     0.0,
                     self.available.height - size.height - crate::MediaQuery::of().safe().bottom,
@@ -6474,7 +6495,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // sliding out under a `Navigator`, a row scrolled sideways past the edge.
             let anchored = matches!(
                 placement,
-                Placement::Below | Placement::Tooltip | Placement::Beside
+                Placement::Below | Placement::Tooltip | Placement::Beside | Placement::Covering
             );
             let anchor_on_screen = !anchored
                 || (anchor.x < self.available.width
@@ -6526,11 +6547,19 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 if pos.0 < 0.0 {
                     pos.0 = 0.0;
                 }
+                // A covering panel taller than the room above its anchor starts at the top.
+                if placement == Placement::Covering && pos.1 < 0.0 {
+                    pos.1 = 0.0;
+                }
             }
 
             if matches!(
                 placement,
-                Placement::Center | Placement::Left | Placement::Right | Placement::Bottom
+                Placement::Center
+                    | Placement::Left
+                    | Placement::Right
+                    | Placement::Bottom
+                    | Placement::Covering
             ) {
                 // The scrim behind the modal / the drawer, modulated by the progress (a fade
                 // synchronised with the slide). The colour is the overlay's own when it asked
@@ -6568,7 +6597,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // list) leave the focus alone.
             let modal = matches!(
                 placement,
-                Placement::Center | Placement::Left | Placement::Right | Placement::Bottom
+                Placement::Center
+                    | Placement::Left
+                    | Placement::Right
+                    | Placement::Bottom
+                    | Placement::Covering
             );
             if modal || traps {
                 self.focus_scope_start = Some(self.focusables.len());

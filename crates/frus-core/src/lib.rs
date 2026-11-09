@@ -32,6 +32,7 @@ mod responsive;
 mod scene;
 mod semantics;
 mod shape;
+mod text_shaping;
 mod text_style;
 
 pub use animation::{
@@ -81,6 +82,7 @@ pub use scene::{
 };
 pub use semantics::{Role, SemanticsProperties, Toggled};
 pub use shape::{BorderSide, ShapeBorder};
+pub use text_shaping::{FontTag, TextShaping};
 pub use text_style::{
     install_text_scale, text_scale, with_text_scale, FontFamily, FontWeight, ResolvedTextStyle,
     TextAffinity, TextAlign, TextDecoration, TextOverflow, TextPosition, TextRun, TextScaleGuard,

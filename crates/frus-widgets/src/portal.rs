@@ -41,6 +41,11 @@ pub enum Placement {
     /// press anywhere else still reaches the page (milestone 716). Where the application's
     /// snack bars are shown — see `host::show_snack_bar`.
     Notification,
+    /// **Over** the anchor, the overlay's bottom-end corner on the anchor's, with a scrim:
+    /// a panel that grows upwards out of the control that opened it and covers it — a
+    /// floating action button's menu, whose close button lands where the button was
+    /// (milestone 786). Kept inside the window.
+    Covering,
 }
 
 /// A portal: an **anchor** (in the flow) and an optional floating **overlay**.
