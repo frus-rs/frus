@@ -54,7 +54,7 @@ struct Parts<Msg> {
 /// # use frus_widgets::{FullScreenDialog, Text};
 /// # #[derive(Clone)] enum Msg { Close, Save }
 /// let open = true;
-/// FullScreenDialog::new(open)
+/// FullScreenDialog::<Msg>::new(open)
 ///     .title("New event")
 ///     .on_close(Msg::Close)
 ///     .action("Save", Msg::Save)

@@ -186,7 +186,7 @@ struct Parts<Msg> {
 /// # use frus_widgets::{ButtonSize, Icons, SplitButton, Variant};
 /// # #[derive(Clone)] enum Msg { Send, ToggleMenu, Schedule, Draft }
 /// let menu_open = false;
-/// SplitButton::new("Send", Msg::Send)
+/// SplitButton::<Msg>::new("Send", Msg::Send)
 ///     .icon(Icons::SEND)
 ///     .size(ButtonSize::Medium)
 ///     .variant(Variant::Tonal)

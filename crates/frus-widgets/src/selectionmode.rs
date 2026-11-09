@@ -404,7 +404,7 @@ struct BarParts<Msg> {
 /// ```
 /// # use frus_widgets::{IconButton, Icons, SelectionAppBar};
 /// # #[derive(Clone)] enum Msg { Clear, Delete }
-/// SelectionAppBar::new(3, Msg::Clear)
+/// SelectionAppBar::<Msg>::new(3, Msg::Clear)
 ///     .action(IconButton::new(Icons::DELETE).label("Delete").on_press(Msg::Delete));
 /// ```
 ///

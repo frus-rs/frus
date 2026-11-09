@@ -62,11 +62,11 @@ struct Parts<Msg> {
 /// # #[derive(Clone)] enum Msg { ToggleTip, LearnMore }
 /// let open = false;
 /// // Shown while the pointer rests on the button:
-/// RichTooltip::new(IconButton::new(Icons::INFO))
+/// RichTooltip::<Msg>::new(IconButton::new(Icons::INFO))
 ///     .title("Grant value")
 ///     .text("The amount awarded, before fees.");
 /// // Kept open until dismissed, with an action:
-/// RichTooltip::new(IconButton::new(Icons::INFO).on_press(Msg::ToggleTip))
+/// RichTooltip::<Msg>::new(IconButton::new(Icons::INFO).on_press(Msg::ToggleTip))
 ///     .title("Grant value")
 ///     .text("The amount awarded, before fees.")
 ///     .action("Learn more", Msg::LearnMore)

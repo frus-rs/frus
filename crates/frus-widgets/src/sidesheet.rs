@@ -72,7 +72,7 @@ struct Parts<Msg> {
 /// # use frus_widgets::{button, SideSheet, Text};
 /// # #[derive(Clone)] enum Msg { Close, Apply }
 /// let open = true;
-/// SideSheet::modal(open)
+/// SideSheet::<Msg>::modal(open)
 ///     .title("Filters")
 ///     .on_dismiss(Msg::Close)
 ///     .child(Text::new("Price, rating, distance"))

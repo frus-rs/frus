@@ -118,7 +118,7 @@ struct Parts<Msg> {
 /// # use frus_widgets::{FabMenu, Icons};
 /// # #[derive(Clone)] enum Msg { ToggleMenu, Compose, Meet }
 /// let open = false;
-/// FabMenu::new(open, Msg::ToggleMenu)
+/// FabMenu::<Msg>::new(open, Msg::ToggleMenu)
 ///     .icon(Icons::ADD)
 ///     .item(Icons::EDIT, "Compose", Msg::Compose)
 ///     .item(Icons::VIDEOCAM, "New meeting", Msg::Meet);
