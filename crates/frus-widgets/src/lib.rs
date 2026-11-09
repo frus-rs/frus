@@ -43,6 +43,7 @@ mod button;
 mod callback;
 mod card;
 mod carousel;
+mod carouselm3;
 mod chart;
 mod checkbox;
 mod chip;
@@ -62,6 +63,7 @@ mod customlayout;
 mod custompaint;
 mod datatable;
 mod datepicker;
+mod datepickerdialog;
 mod datetimepicker;
 mod datetimerange;
 mod dialog;
@@ -102,6 +104,8 @@ mod mouseregion;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
 mod animationhandle;
+mod expandrail;
+mod glass;
 pub mod host;
 mod icon;
 mod iconbutton;
@@ -124,6 +128,7 @@ pub mod licenses;
 mod list;
 mod listener;
 mod listtile;
+mod loadingindicator;
 mod local_task;
 /// Which language the interface is in: [`locale::Locale`], [`locale::resolve`] and
 /// [`locale::of`].
@@ -189,6 +194,7 @@ mod selectiontoolbar;
 pub mod semantics;
 #[cfg(test)]
 mod shadowprobe;
+mod shapes;
 mod sheet;
 mod shortcuts;
 mod skeleton;
@@ -227,6 +233,7 @@ mod twopane;
 mod ui;
 mod undo;
 mod visualdensity;
+mod wavy;
 mod wheel;
 mod widget;
 mod widgetstate;
@@ -281,7 +288,9 @@ pub use animated::{
 };
 pub use animatedsize::{AnimatedSize, SizeAnimation};
 pub use animationhandle::{decorative_animations_moving, tick_animations, AnimationHandle};
-pub use appbar::{platform_centers_title, AppBar, APP_BAR_HEIGHT, APP_BAR_MAX_TITLE_SCALE};
+pub use appbar::{
+    platform_centers_title, AppBar, AppBarSize, APP_BAR_HEIGHT, APP_BAR_MAX_TITLE_SCALE,
+};
 pub use aspectratio::AspectRatio;
 pub use asyncbuild::{
     set_task_spawner, task_arrivals, tasks_in_flight, AsyncSnapshot, BoxedTask, Builder,
@@ -312,6 +321,10 @@ pub use button::{
 pub use callback::{Callback, IntoMsg};
 pub use card::{Card, CardVariant, CARD_ELEVATION, CARD_MARGIN};
 pub use carousel::CarouselView;
+pub use carouselm3::{
+    Carousel, CarouselItem, CarouselItemState, CarouselSizing, CarouselTheme, CAROUSEL_HEIGHT,
+    CAROUSEL_ITEM_PADDING, CAROUSEL_RADIUS,
+};
 pub use chart::{BarChart, LineChart};
 pub use checkbox::Checkbox;
 pub use chip::{
@@ -353,6 +366,11 @@ pub use datatable::{
     compare_cells, page_count, page_range_label, page_rows, row_matches, sort_rows, DataTable,
 };
 pub use datepicker::DatePicker;
+pub use datepickerdialog::{
+    days_in_month, format_date, is_leap_year, month_lead_cells, parse_date, CalendarDate,
+    DatePickerDialog, DatePickerDialogTheme, DatePickerEvent, DatePickerMode, DatePickerModel,
+    DatePickerOutcome, DATE_PICKER_WIDTH,
+};
 pub use datetimepicker::DateTimePicker;
 pub use datetimerange::DateTimeRange;
 pub use dialog::{
@@ -376,6 +394,10 @@ pub use dropdownmenu::DropdownMenu;
 pub use dsl::{button, center, expanded, flexible, keyed, spacer, text};
 pub use editing::TextEditingController;
 pub use expanded::{Expanded, FlexFit, Flexible};
+pub use expandrail::{
+    ExpandableNavigationRail, ExpandableRailTheme, RailDestination, RAIL_COLLAPSED_WIDTH,
+    RAIL_EXPANDED_WIDTH,
+};
 pub use expansionpanel::{ExpansionPanel, ExpansionPanelList};
 pub use fab::{FabSize, FloatingActionButton};
 pub use filters::{BackdropFilter, BackdropGroup, ColorFiltered, ImageFiltered, ShaderMask};
@@ -393,6 +415,7 @@ pub use frus_lottie::{Animation as LottieAnimation, AnimationHandle as LottieHan
 #[cfg(feature = "svg")]
 pub use frus_svg::{Svg, SvgError, SvgHandle};
 pub use gesturedetector::{GestureDetector, PanAxis, PanEvent};
+pub use glass::{GlassSurface, GlassTheme, GLASS_BLUR_SIGMA};
 pub use grid::GridView;
 pub use gridtile::{GridTile, GridTileBar, GRID_TILE_BAR_HEIGHT, GRID_TILE_BAR_TWO_LINE_HEIGHT};
 pub use hero::{lerp_rect, Hero, HeroSpot};
@@ -423,6 +446,10 @@ pub use listtile::{
     ListTile, LIST_TILE_DENSE_HEIGHTS, LIST_TILE_HEIGHTS, LIST_TILE_MIN_LEADING_WIDTH,
     LIST_TILE_MIN_VERTICAL_PADDING, LIST_TILE_PADDING_END, LIST_TILE_PADDING_START,
     LIST_TILE_TITLE_GAP,
+};
+pub use loadingindicator::{
+    loading_shapes, loading_spring, LoadingIndicator, LoadingIndicatorTheme,
+    LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_SIZE,
 };
 pub use local_task::{
     local_tasks, run_local_tasks, set_local_wake, spawn_local, TaskHandle, TaskScope,
@@ -522,6 +549,9 @@ pub use semantics::{Description, Semantics};
 /// The JSON the preferences are kept as, for the platform layer's storages.
 #[doc(hidden)]
 pub use serde_json as __serde_json;
+pub use shapes::{
+    CornerRounding, MaterialShapes, Morph, MorphingShape, RoundedPolygon, MORPH_POINTS,
+};
 pub use sheet::{
     sheet_takes_release, split_sheet_drag, DraggableScrollableSheet, SheetArea, SheetSpec,
     SheetState, SheetTo, SnapSimulation, SHEET_SNAP_MIN_SPEED,
@@ -601,6 +631,10 @@ pub use ui::{
 };
 pub use undo::{EditKind, EditSnapshot, UndoHistory, RUN_PAUSE};
 pub use visualdensity::VisualDensity;
+pub use wavy::{
+    wavy_amplitude, CircularWavyProgressIndicator, LinearWavyProgressIndicator, WavyProgressTheme,
+    WavySliderTrackShape,
+};
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
 pub use widget::{
     CellFn, DragMode, DragTrack, FillAxes, FilterContext, ReorderAxis, ThumbDrag, Widget,

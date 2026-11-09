@@ -320,6 +320,85 @@ pub trait Localizations {
             "December",
         ]
     }
+
+    /// The heading of a date picker in its calendar (`datePickerHelpText`).
+    fn date_picker_title(&self) -> &str {
+        "Select date"
+    }
+
+    /// The heading of a date range picker.
+    fn date_range_picker_title(&self) -> &str {
+        "Select range"
+    }
+
+    /// The heading of a date picker in its text mode.
+    fn date_input_title(&self) -> &str {
+        "Enter date"
+    }
+
+    /// The label of a date picker's text field.
+    fn date_input_label(&self) -> &str {
+        "Date"
+    }
+
+    /// How a date is typed, `dd`, `mm` and `yyyy` in this locale's order, split by `/`:
+    /// both the field's hint and the order a typed date is read in.
+    fn date_input_pattern(&self) -> &str {
+        "mm/dd/yyyy"
+    }
+
+    /// The button that switches a date picker to typing.
+    fn input_mode_label(&self) -> &str {
+        "Switch to input"
+    }
+
+    /// The button that switches a date picker back to its calendar.
+    fn calendar_mode_label(&self) -> &str {
+        "Switch to calendar"
+    }
+
+    /// Under a typed date that is not one.
+    fn invalid_date_label(&self) -> &str {
+        "Invalid format."
+    }
+
+    /// Under a typed date outside the dates that may be picked.
+    fn date_out_of_range_label(&self) -> &str {
+        "Out of range."
+    }
+
+    /// The button that keeps a full-screen picker's choice.
+    fn save_button_label(&self) -> &str {
+        "Save"
+    }
+
+    /// The button that opens a date picker's list of years.
+    fn select_year_label(&self) -> &str {
+        "Select year"
+    }
+
+    /// The days of the week, short, Sunday first.
+    fn short_weekdays(&self) -> [&str; 7] {
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    }
+
+    /// The months, short, January first.
+    fn short_months(&self) -> [&str; 12] {
+        [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+    }
+
+    /// A date as a picker's headline says it: weekday, month and day — "Mon, Aug 17".
+    /// `weekday` counts from Sunday, `month` from one.
+    fn medium_date(&self, weekday: usize, month: u32, day: u32) -> String {
+        format!(
+            "{}, {} {}",
+            self.short_weekdays()[weekday % 7],
+            self.short_months()[(month.clamp(1, 12) - 1) as usize],
+            day
+        )
+    }
 }
 
 /// **The English table**: every method left as the trait wrote it.
@@ -528,6 +607,72 @@ impl Localizations for French {
             "novembre",
             "décembre",
         ]
+    }
+
+    fn date_picker_title(&self) -> &str {
+        "Sélectionner une date"
+    }
+
+    fn date_range_picker_title(&self) -> &str {
+        "Sélectionner une période"
+    }
+
+    fn date_input_title(&self) -> &str {
+        "Saisir une date"
+    }
+
+    /// The same word in French.
+    fn date_input_label(&self) -> &str {
+        "Date"
+    }
+
+    fn date_input_pattern(&self) -> &str {
+        "jj/mm/aaaa"
+    }
+
+    fn input_mode_label(&self) -> &str {
+        "Passer à la saisie"
+    }
+
+    fn calendar_mode_label(&self) -> &str {
+        "Passer au calendrier"
+    }
+
+    fn invalid_date_label(&self) -> &str {
+        "Format non valide."
+    }
+
+    fn date_out_of_range_label(&self) -> &str {
+        "Hors de la plage autorisée."
+    }
+
+    fn save_button_label(&self) -> &str {
+        "Enregistrer"
+    }
+
+    fn select_year_label(&self) -> &str {
+        "Sélectionner l'année"
+    }
+
+    fn short_weekdays(&self) -> [&str; 7] {
+        ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."]
+    }
+
+    fn short_months(&self) -> [&str; 12] {
+        [
+            "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.",
+            "nov.", "déc.",
+        ]
+    }
+
+    /// "lun. 17 août": the day before the month.
+    fn medium_date(&self, weekday: usize, month: u32, day: u32) -> String {
+        format!(
+            "{} {} {}",
+            self.short_weekdays()[weekday % 7],
+            day,
+            self.short_months()[(month.clamp(1, 12) - 1) as usize]
+        )
     }
 }
 
