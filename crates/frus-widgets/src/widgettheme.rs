@@ -82,12 +82,16 @@ pub struct WidgetThemes {
     pub button: ButtonTheme,
     /// Defaults for [`Card`](crate::Card).
     pub card: CardTheme,
+    /// Defaults for [`Carousel`](crate::Carousel).
+    pub carousel: crate::CarouselTheme,
     /// Defaults for [`Checkbox`](crate::Checkbox).
     pub checkbox: CheckboxTheme,
     /// Defaults for [`Chip`](crate::Chip).
     pub chip: ChipTheme,
     /// Defaults for [`DatePicker`](crate::DatePicker).
     pub date_picker: DatePickerTheme,
+    /// Defaults for [`DatePickerDialog`](crate::DatePickerDialog).
+    pub date_picker_dialog: crate::DatePickerDialogTheme,
     /// Defaults for [`Divider`](crate::Divider).
     pub divider: DividerTheme,
     /// Defaults for [`Drawer`](crate::Drawer).
@@ -124,6 +128,10 @@ pub struct WidgetThemes {
     pub nav_bar: NavBarTheme,
     /// Defaults for [`NavigationRail`](crate::NavigationRail) and [`BottomBar`](crate::BottomBar).
     pub nav_rail: NavRailTheme,
+    /// Defaults for [`ExpandableNavigationRail`](crate::ExpandableNavigationRail).
+    pub expandable_rail: crate::ExpandableRailTheme,
+    /// Defaults for [`GlassSurface`](crate::GlassSurface).
+    pub glass: crate::GlassTheme,
     /// Defaults for [`NavigationDrawer`](crate::NavigationDrawer).
     pub nav_drawer: NavDrawerTheme,
     /// Defaults for the **scrollbars** the framework draws over a scrollable.
@@ -134,6 +142,10 @@ pub struct WidgetThemes {
     pub search_view: SearchViewTheme,
     /// Defaults for the two progress indicators.
     pub progress: ProgressTheme,
+    /// Defaults for [`LoadingIndicator`](crate::LoadingIndicator).
+    pub loading_indicator: crate::LoadingIndicatorTheme,
+    /// Defaults for the wavy progress indicators.
+    pub wavy_progress: crate::WavyProgressTheme,
     /// Defaults for [`RadioGroup`](crate::RadioGroup).
     pub radio: RadioTheme,
     /// Defaults for [`SegmentedButton`](crate::SegmentedButton).
@@ -545,6 +557,11 @@ pub struct AppBarTheme {
     /// The elevation of a [`SliverAppBar`](crate::SliverAppBar) once content scrolls under
     /// it. Unset, 3.
     pub scrolled_under_elevation: Option<f32>,
+    /// The big title of a **medium** bar, under its toolbar. Unset, `headline_small` in the
+    /// foreground colour.
+    pub medium_title_style: Option<TextStyle>,
+    /// The big title of a **large** bar. Unset, `headline_medium`.
+    pub large_title_style: Option<TextStyle>,
 }
 
 /// Defaults for [`TextField`](crate::TextField).

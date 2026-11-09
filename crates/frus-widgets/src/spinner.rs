@@ -267,7 +267,7 @@ fn indeterminate_phase(time: f32) -> (f32, f32, f32, f32) {
 }
 
 /// Where the arc starts and how far it sweeps, in radians (`progress_indicator.dart:679`).
-fn arc(value: Option<f32>, time: f32) -> (f32, f32) {
+pub(crate) fn arc(value: Option<f32>, time: f32) -> (f32, f32) {
     use std::f32::consts::{PI, TAU};
     match value {
         Some(v) => (START_ANGLE, v.clamp(0.0, 1.0) * (TAU - EPSILON)),
