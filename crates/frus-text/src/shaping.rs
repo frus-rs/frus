@@ -275,7 +275,10 @@ pub(crate) mod android {
                         .unwrap_or(0);
                     let regular = attribute(open, "weight").is_none_or(|w| w == "400")
                         && attribute(open, "style").is_none_or(|s| s == "normal");
-                    if !file.is_empty() {
+                    // A face only for text asking for a serif (`fallbackFor="serif"`): the
+                    // fallback serves sans text, and reading it would be a file for nothing.
+                    let serif_only = attribute(open, "fallbackFor").is_some();
+                    if !file.is_empty() && !serif_only {
                         if regular {
                             fonts.insert(0, (file.to_string(), index));
                         } else {
@@ -474,6 +477,7 @@ mod tests {
     </family>
     <family lang="und-Thai" variant="elegant">
         <font weight="400" style="normal">NotoSansThai-Regular.ttf</font>
+        <font weight="400" style="normal" fallbackFor="serif">NotoSerifThai-Regular.ttf</font>
     </family>
     <family lang="und-Thai" variant="compact">
         <font weight="700" style="normal">NotoSansThaiUI-Bold.ttf</font>
@@ -499,6 +503,11 @@ mod tests {
             families.len(),
             5,
             "the named family has no lang and is not a fallback"
+        );
+        assert_eq!(
+            families[0].fonts,
+            vec![("NotoSansThai-Regular.ttf".to_string(), 0)],
+            "a serif-only face is not a fallback for sans text"
         );
         assert_eq!(families[1].variant.as_deref(), Some("compact"));
         assert_eq!(

@@ -220,12 +220,43 @@ Also checked: `cargo clippy --workspace --all-targets -D warnings`, `cargo clipp
 frus-text --target aarch64-apple-ios`, `cargo doc --all-features -D warnings` for the three
 crates, `cargo test -p frus-widgets --test core_exports`.
 
+### On the phone
+
+A release APK of a one-page application (Huawei STK-L21, Android 10,
+`XMJNW19B23011768`). The page shows Devanagari, Ethiopic, Khmer and Hebrew, 直骨逸海 in
+`ja`, `zh-Hans`, `zh-Hant` and `ko`, a rich text with a `liga 0` span and a Serbian span, and the
+Thai sentence in a 220 px box. Only DejaVu Sans and Noto Naskh Arabic are bundled.
+
+- **Every script is drawn**, none as a box, by the platform's Noto faces, which come from
+  `fonts.xml`.
+- **Thai wraps between words**, after บ้านบ้าน and before ของ.
+- **The Han characters change face with the language.** `ja` gets Noto Sans CJK JP;
+  `zh-Hans` and `zh-Hant` get the faces this device's `fonts.xml` lists for them (HarmonyOS Sans on
+  this Huawei); `ko` gets Noto Sans CJK KR. 骨 shows it best.
+- **Serbian бдп takes its local forms**, and the `liga 0` span stays two letters.
+- **Fonts load lazily, on first use.** logcat shows the loads 2 s after launch, at the first
+  frame that holds the text:
+  - only for the six scripts on the page, never for Latin;
+  - once per file per font system (frus builds two: one to measure, one to draw);
+  - all within 125 ms;
+  - the first frame came at 870 ms after launch.
+
+The phone did find a waste, now fixed. The first run loaded 31 files: every family
+`fonts.xml` lists for a script, including the faces marked `fallbackFor="serif"`. Those
+faces serve only text that asks for a serif. `fonts.xml` is now read without them,
+covered by `fonts_xml_fallback_families_are_read`. The second run loaded 20 files and
+drew the same page.
+
+```text
+I frus_hello: frus_text::shaping::android: frus: loaded the platform font /system/fonts/NotoSansThaiUI-Regular.ttf for Thai text
+I frus_hello: frus_shell::startup: first frame at 870 ms after launch ... fonts 13 ms (2 loads)
+```
+
+Screenshots: `phone1.png` (before the serif fix) and `phone2.png` (after), with the logcat
+of each, are kept with the milestone's working files.
+
 ## Not done
 
-- **Not run on the phone.** The Android loader is tested with a stand-in `fonts.xml` and a face
-  on disk, and `fonts.xml`'s format is the one Android 10 ships; nobody has looked at Thai or
-  Devanagari on a device yet. The machine was saturated by other builds for most of this
-  milestone, and an APK build did not fit.
 - **Rich text spans keep no family.** `TextRun` has never carried a font family (a rich text is
   drawn in the default family, or the Arabic one for Arabic), so a `TextSpan` cannot name one,
   and a feature on a span works only if the default family has it. Features, axes and the
