@@ -24,8 +24,11 @@ use std::sync::{Mutex, OnceLock, RwLock};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, Weight};
 use frus_core::{
     fits, FontWeight, Point, Rect, ResolvedTextStyle, Size, TextAffinity, TextAlign, TextBlock,
-    TextPosition, TextRun, TextStyle,
+    TextPosition, TextRun, TextShaping, TextStyle,
 };
+
+mod shaping;
+pub use shaping::{default_locale, set_default_locale, shaped};
 
 /// The default line-height to font-size ratio.
 ///
@@ -359,6 +362,35 @@ impl Loaded {
 /// platform's generic, which is not frus's to inventory.
 static WEIGHTS: RwLock<Vec<(u16, u16)>> = RwLock::new(Vec::new());
 
+/// The weights each of the application's registered families covers, as [`WEIGHTS`] does for
+/// the default family.
+static APP_WEIGHTS: RwLock<Vec<FamilyWeights>> = RwLock::new(Vec::new());
+
+/// A family and the weight ranges its faces cover.
+type FamilyWeights = (String, Vec<(u16, u16)>);
+
+/// [`available_weight_value`] for text in `family`: against that family's own faces when the
+/// application registered it, against the default family's for the default family, and as
+/// asked for a platform family (a desktop's `Bahnschrift`), whose faces frus does not
+/// inventory: a variable one draws exactly that weight, and a static one that lacks it is
+/// matched among the platform's faces, which on a desktop always answer.
+pub(crate) fn available_weight_in(family: cosmic_text::Family<'_>, wanted: u16) -> u16 {
+    if let cosmic_text::Family::Name(name) = family {
+        let app = APP_WEIGHTS.read().expect("family registry");
+        if let Some((_, have)) = app.iter().find(|(known, _)| known == name) {
+            if !have.is_empty() {
+                return nearest_weight(wanted, have);
+            }
+        }
+        drop(app);
+        let bundled = ["DejaVu Sans", "DejaVu Sans Mono", "Noto Naskh Arabic"].contains(&name);
+        if !bundled && default_family() != Some(name) && !cfg!(target_os = "android") {
+            return wanted;
+        }
+    }
+    available_weight_value(wanted)
+}
+
 /// The weight ranges `family`'s faces cover in `db`, upright faces first: an italic-only
 /// family still has weights to offer.
 fn weights_of(db: &cosmic_text::fontdb::Database, family: &str) -> Vec<(u16, u16)> {
@@ -468,6 +500,16 @@ fn take_stock(db: &mut cosmic_text::fontdb::Database) {
         Some(name) => weights_of(db, name),
         None => Vec::new(),
     };
+    // The application's own families' weights too, so a `wght` axis asked of one of them is
+    // resolved against its faces rather than the default family's (milestone 784).
+    let app: Vec<String> = APP_FAMILIES.lock().expect("font registry").clone();
+    *APP_WEIGHTS.write().expect("family registry") = app
+        .into_iter()
+        .map(|family| {
+            let weights = weights_of(db, &family);
+            (family, weights)
+        })
+        .collect();
     // What is *actually* there decides whether italic is asked for, since an
     // application may have supplied an oblique face of its own — or none.
     let italic = match LOADED.read().expect("family registry").as_ref() {
@@ -766,6 +808,10 @@ static FONT_LOADING: Mutex<(std::time::Duration, u32)> = Mutex::new((std::time::
 
 fn build_font_system() -> FontSystem {
     let mut font_system = FontSystem::new();
+    // The platform's fallback lists chosen per run's language, and on Android the
+    // platform's own faces read from `fonts.xml` when a script first needs them
+    // (milestone 784).
+    font_system.set_fallback(shaping::FrusFallback::for_platform());
     let db = font_system.db_mut();
     #[cfg(target_os = "android")]
     load_emoji_faces(db, std::path::Path::new(ANDROID_FONT_DIR));
@@ -834,6 +880,10 @@ struct MeasureKey {
     family: Option<frus_core::FontFamily>,
     /// The letter spacing, in bits: two spacings give two widths.
     letter_spacing: u32,
+    /// Features, axes and language: each can change the glyphs and so the width.
+    shaping: TextShaping,
+    /// The application's language, which an unset language means.
+    default_locale: Option<&'static str>,
 }
 
 /// How many entries a generation holds before it is retired. Two generations live at
@@ -876,7 +926,12 @@ fn forget_measurements() {
 /// its axis spans (milestone 626). With the generic family in charge — nothing named, on
 /// a desktop — the answer is the bundled sans's, 400 or 700.
 pub fn available_weight(weight: FontWeight) -> u16 {
-    let wanted = weight.to_u16();
+    available_weight_value(weight.to_u16())
+}
+
+/// [`available_weight`] for any OpenType weight, 1 to 1000 — what a `wght` axis set on a
+/// style asks for (milestone 784). A variable default family draws exactly that.
+pub(crate) fn available_weight_value(wanted: u16) -> u16 {
     let have = WEIGHTS.read().expect("family registry");
     if have.is_empty() {
         return if wanted < 550 { 400 } else { 700 };
@@ -1094,6 +1149,8 @@ fn measure_at(text: &str, style: &ResolvedTextStyle, max_width: Option<f32>) -> 
         line_h: line_h.to_bits(),
         family,
         letter_spacing: letter_spacing.to_bits(),
+        shaping: style.shaping,
+        default_locale: default_locale(),
     };
     if let Some(size) = cached_measurement(&key) {
         return size;
@@ -1114,6 +1171,7 @@ fn measure_at(text: &str, style: &ResolvedTextStyle, max_width: Option<f32>) -> 
         letter_spacing,
         size_px,
     );
+    let attrs = shaped(attrs, style.shaping);
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
@@ -1232,6 +1290,7 @@ pub fn line_spans_resolved(
         style.letter_spacing,
         size_px,
     );
+    let attrs = shaped(attrs, style.shaping);
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
@@ -1287,14 +1346,17 @@ pub fn measure_runs_wrapped(runs: &[TextRun], max_width: Option<f32>) -> Size {
     let spans = runs.iter().map(|run| {
         (
             run.text.as_str(),
-            spaced(
-                Attrs::new()
-                    .family(family_for(&run.text))
-                    .weight(Weight(available_weight(run.weight)))
-                    .style(available_style(run.italic))
-                    .metrics(Metrics::new(run.size, line_height(run.size))),
-                run.letter_spacing,
-                run.size,
+            shaped(
+                spaced(
+                    Attrs::new()
+                        .family(family_for(&run.text))
+                        .weight(Weight(available_weight(run.weight)))
+                        .style(available_style(run.italic))
+                        .metrics(Metrics::new(run.size, line_height(run.size))),
+                    run.letter_spacing,
+                    run.size,
+                ),
+                run.shaping,
             ),
         )
     });
@@ -1349,14 +1411,17 @@ pub fn runs_cut_at(
     let spans = runs.iter().map(|run| {
         (
             run.text.as_str(),
-            spaced(
-                Attrs::new()
-                    .family(family_for(&run.text))
-                    .weight(Weight(available_weight(run.weight)))
-                    .style(available_style(run.italic))
-                    .metrics(Metrics::new(run.size, line_height(run.size))),
-                run.letter_spacing,
-                run.size,
+            shaped(
+                spaced(
+                    Attrs::new()
+                        .family(family_for(&run.text))
+                        .weight(Weight(available_weight(run.weight)))
+                        .style(available_style(run.italic))
+                        .metrics(Metrics::new(run.size, line_height(run.size))),
+                    run.letter_spacing,
+                    run.size,
+                ),
+                run.shaping,
             ),
         )
     });
@@ -1555,13 +1620,16 @@ impl TextLayout {
             buffer.set_wrap(cosmic_text::Wrap::None);
         }
         buffer.set_size(block.width, None);
-        let attrs = spaced(
-            Attrs::new()
-                .family(family_for_style(text, style.family))
-                .weight(Weight(available_weight(style.weight)))
-                .style(available_style(style.italic)),
-            style.letter_spacing,
-            size_px,
+        let attrs = shaped(
+            spaced(
+                Attrs::new()
+                    .family(family_for_style(text, style.family))
+                    .weight(Weight(available_weight(style.weight)))
+                    .style(available_style(style.italic)),
+                style.letter_spacing,
+                size_px,
+            ),
+            style.shaping,
         );
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         align_lines(&mut buffer, block.align);
@@ -1607,14 +1675,17 @@ impl TextLayout {
         let spans = runs.iter().map(|run| {
             (
                 run.text.as_str(),
-                spaced(
-                    Attrs::new()
-                        .family(family_for(&run.text))
-                        .weight(Weight(available_weight(run.weight)))
-                        .style(available_style(run.italic))
-                        .metrics(Metrics::new(run.size, line_height(run.size))),
-                    run.letter_spacing,
-                    run.size,
+                shaped(
+                    spaced(
+                        Attrs::new()
+                            .family(family_for(&run.text))
+                            .weight(Weight(available_weight(run.weight)))
+                            .style(available_style(run.italic))
+                            .metrics(Metrics::new(run.size, line_height(run.size))),
+                        run.letter_spacing,
+                        run.size,
+                    ),
+                    run.shaping,
                 ),
             )
         });
@@ -2252,6 +2323,7 @@ mod tests {
             decoration: frus_core::TextDecoration::NONE,
             decoration_color: None,
             letter_spacing: 0.0,
+            shaping: frus_core::TextShaping::NONE,
         };
         // "normal BOLD" is wider than "normal" alone; the height comes from the
         // largest run.
@@ -2979,6 +3051,7 @@ mod tests {
             decoration: frus_core::TextDecoration::default(),
             decoration_color: None,
             letter_spacing: 0.0,
+            shaping: frus_core::TextShaping::NONE,
         };
         let runs = vec![run("small", 12.0), run("large", 24.0)];
         let mixed = baseline_of_runs(&runs).expect("two runs");

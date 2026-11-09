@@ -54,6 +54,7 @@ bundled-sans = ["frus-gpu/bundled-sans", "frus-widgets/bundled-sans"]
 bundled-italic = ["frus-gpu/bundled-italic", "frus-widgets/bundled-italic"]
 bundled-mono = ["frus-gpu/bundled-mono", "frus-widgets/bundled-mono"]
 bundled-arabic = ["frus-gpu/bundled-arabic", "frus-widgets/bundled-arabic"]
+dictionary-line-breaks = ["frus-gpu/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks"]
 
 # The `cfg` aliases (`desktop` / `android` / `ios` / `web`) — see `build.rs`. Already
 # in the tree, since winit uses it, so nothing extra is downloaded.

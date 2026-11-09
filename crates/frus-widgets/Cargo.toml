@@ -36,6 +36,7 @@ bundled-sans = ["frus-text/bundled-sans"]
 bundled-italic = ["frus-text/bundled-italic"]
 bundled-mono = ["frus-text/bundled-mono"]
 bundled-arabic = ["frus-text/bundled-arabic"]
+dictionary-line-breaks = ["frus-text/dictionary-line-breaks"]
 # The **variant icon styles**. The filled set is always bundled; each of these adds one
 # more blob of artwork (~340, ~400 and ~270 KiB), which is why none is on by default.
 # Without one, its constants do not exist and `Icons::by_name` answers `None` for its

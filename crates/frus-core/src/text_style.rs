@@ -9,7 +9,7 @@
 //! Named typographic scales, in the style of a Material `TextTheme`, are built
 //! out of this type.
 
-use crate::Color;
+use crate::{Color, TextShaping};
 
 /// Which side of a character boundary a caret **belongs to**, when the boundary is drawn
 /// in two places.
@@ -322,6 +322,11 @@ pub struct TextStyle {
     /// font setting: the reference scales a style's font size and leaves its letter spacing
     /// as it was written.
     pub letter_spacing: Option<f32>,
+    /// OpenType features, variable font axes and the language (milestone 784). Set them with
+    /// [`font_feature`](Self::font_feature), [`font_variation`](Self::font_variation) and
+    /// [`locale`](Self::locale). [`TextShaping::NONE`] says nothing; a style that says
+    /// something adds to what it inherits, tag by tag.
+    pub shaping: TextShaping,
 }
 
 /// A [`TextStyle`] with every question answered: what to measure with, and what to draw.
@@ -351,6 +356,9 @@ pub struct ResolvedTextStyle {
     pub family: Option<FontFamily>,
     /// The room added after every character, in logical pixels; `0` for none.
     pub letter_spacing: f32,
+    /// OpenType features, variable font axes and the language. An unset language is the
+    /// application's, decided where the text is shaped.
+    pub shaping: TextShaping,
 }
 
 impl ResolvedTextStyle {
@@ -386,6 +394,7 @@ impl ResolvedTextStyle {
             height: None,
             family: None,
             letter_spacing: 0.0,
+            shaping: TextShaping::NONE,
         }
     }
 }
@@ -402,6 +411,7 @@ impl TextStyle {
         height: None,
         family: None,
         letter_spacing: None,
+        shaping: TextShaping::NONE,
     };
 
     /// A style that names a `size` and nothing else.
@@ -490,6 +500,61 @@ impl TextStyle {
         self
     }
 
+    /// Sets the OpenType feature `tag` to `value`: `1` on, `0` off, or an alternate's index
+    /// (milestone 784). A feature the font does not have is ignored.
+    ///
+    /// ```
+    /// # use frus_core::TextStyle;
+    /// let price = TextStyle::new(14.0)
+    ///     .font_feature("tnum", 1) // figures of one width, so columns line up
+    ///     .font_feature("liga", 0); // no ligatures
+    /// assert_eq!(price.shaping.features().len(), 2);
+    /// ```
+    ///
+    /// Common tags: `smcp` small capitals, `c2sc` capitals to small capitals, `liga`/`dlig`
+    /// ligatures, `tnum`/`pnum` tabular/proportional figures, `lnum`/`onum` lining/old-style
+    /// figures, `frac` fractions, `zero` slashed zero, `ss01`..`ss20` stylistic sets, `salt`
+    /// stylistic alternates, `kern` kerning.
+    #[must_use]
+    pub fn font_feature(mut self, tag: &str, value: u32) -> Self {
+        self.shaping = self.shaping.with_feature(tag, value);
+        self
+    }
+
+    /// Sets the variable font axis `tag` to `value`, in the axis's own units (milestone 784):
+    /// `wght` 1 to 1000, `wdth` a percentage of the normal width, `slnt` degrees, `opsz`
+    /// points, or a font's own axis. An axis the face does not have is ignored, a value is
+    /// clamped to the face's range, and `wght` set here takes over from the weight.
+    ///
+    /// ```
+    /// # use frus_core::TextStyle;
+    /// let heading = TextStyle::new(32.0)
+    ///     .font_variation("wght", 650.0)
+    ///     .font_variation("opsz", 32.0);
+    /// assert_eq!(heading.shaping.variation("wght"), Some(650.0));
+    /// ```
+    #[must_use]
+    pub fn font_variation(mut self, tag: &str, value: f32) -> Self {
+        self.shaping = self.shaping.with_variation(tag, value);
+        self
+    }
+
+    /// Says the text is written in the language `tag`, a BCP 47 tag such as `ja`, `zh-Hant`,
+    /// `ko` or `sr-Cyrl` (milestone 784). It picks the font's localized glyph forms and, for
+    /// the Han characters Chinese, Japanese and Korean share, the platform font that draws
+    /// them. Unset, the application's locale.
+    ///
+    /// ```
+    /// # use frus_core::TextStyle;
+    /// let japanese = TextStyle::new(16.0).locale("ja");
+    /// assert_eq!(japanese.shaping.locale(), Some("ja"));
+    /// ```
+    #[must_use]
+    pub fn locale(mut self, tag: &str) -> Self {
+        self.shaping = self.shaping.with_locale(tag);
+        self
+    }
+
     /// **Merges** `over` on top of `self`, **field by field**: where `over` said nothing,
     /// this one's answer survives.
     ///
@@ -510,6 +575,7 @@ impl TextStyle {
             height: over.height.or(self.height),
             family: over.family.or(self.family),
             letter_spacing: over.letter_spacing.or(self.letter_spacing),
+            shaping: self.shaping.merge(over.shaping),
         }
     }
 
@@ -579,6 +645,7 @@ impl TextStyle {
             height: number(self.height, other.height, t),
             family: swap(self.family, other.family, t),
             letter_spacing: number(self.letter_spacing, other.letter_spacing, t),
+            shaping: self.shaping.lerp(other.shaping, t),
         }
     }
 
@@ -635,6 +702,7 @@ impl TextStyle {
             height: self.height,
             family: self.family,
             letter_spacing: self.letter_spacing.unwrap_or(0.0),
+            shaping: self.shaping,
         }
     }
 }
@@ -796,6 +864,40 @@ impl TextSpan {
         self
     }
 
+    /// Sets an OpenType feature for this subtree: `1` on, `0` off, or an alternate's index.
+    /// See [`TextStyle::font_feature`].
+    ///
+    /// ```
+    /// # use frus_core::TextSpan;
+    /// let half = TextSpan::new("1/2").font_feature("frac", 1);
+    /// ```
+    pub fn font_feature(mut self, tag: &str, value: u32) -> Self {
+        self.overrides = self.overrides.font_feature(tag, value);
+        self
+    }
+
+    /// Sets a variable font axis for this subtree. See [`TextStyle::font_variation`].
+    ///
+    /// ```
+    /// # use frus_core::TextSpan;
+    /// let narrow = TextSpan::new("narrow").font_variation("wdth", 75.0);
+    /// ```
+    pub fn font_variation(mut self, tag: &str, value: f32) -> Self {
+        self.overrides = self.overrides.font_variation(tag, value);
+        self
+    }
+
+    /// Says this subtree is written in the language `tag`. See [`TextStyle::locale`].
+    ///
+    /// ```
+    /// # use frus_core::TextSpan;
+    /// let serbian = TextSpan::new("бгдп").locale("sr");
+    /// ```
+    pub fn locale(mut self, tag: &str) -> Self {
+        self.overrides = self.overrides.locale(tag);
+        self
+    }
+
     /// Applies a whole [`TextStyle`] as this subtree's override, **replacing** whatever
     /// this span had said before.
     ///
@@ -832,6 +934,8 @@ impl TextSpan {
         self.overrides.size.map(f32::to_bits).hash(hasher);
         self.overrides.weight.map(FontWeight::to_u16).hash(hasher);
         self.overrides.italic.hash(hasher);
+        self.overrides.shaping.hash(hasher);
+        self.overrides.letter_spacing.map(f32::to_bits).hash(hasher);
         self.children.len().hash(hasher);
         for child in &self.children {
             child.measure_hash(hasher);
@@ -872,6 +976,8 @@ pub struct TextRun {
     pub decoration_color: Option<Color>,
     /// The room added after every character, in logical pixels; `0` for none.
     pub letter_spacing: f32,
+    /// OpenType features, variable font axes and the language (milestone 784).
+    pub shaping: TextShaping,
 }
 
 #[cfg(test)]

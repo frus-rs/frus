@@ -49,6 +49,55 @@ fn titled() -> Box<dyn Widget> {
 }
 ```
 
+### OpenType features, variable fonts and the language
+
+A style can turn a font's OpenType features on or off, set a variable font's axes, and say which
+language its text is in. A span of rich text can do the same for its own words.
+
+```rust
+use frus::{RichText, Text, TextSpan, TextStyle};
+
+let price = TextStyle::new(16.0)
+    .font_feature("tnum", 1) // figures of one width, so columns of numbers line up
+    .font_feature("liga", 0); // no ligatures
+let heading = TextStyle::new(32.0)
+    .font_variation("wght", 650.0) // a variable font's weight axis, any value it spans
+    .font_variation("wdth", 85.0); // and its width axis
+let japanese = TextStyle::new(16.0).locale("ja");
+
+let total = Text::styled("1 234,50", price);
+let title = Text::styled("Chapter one", heading);
+let mixed = RichText::new(
+    TextSpan::new("One and a half: ")
+        .child(TextSpan::new("1/2").font_feature("frac", 1))
+        .child(TextSpan::new(" \u{76f4}").locale("zh-Hans")),
+);
+```
+
+- **Features** take a four-letter tag and a value: `1` on, `0` off, or an alternate's number.
+  Common ones are `smcp` (small capitals), `liga` (ligatures), `tnum` (tabular figures), `onum`
+  (old-style figures), `frac` (fractions), `zero` (slashed zero) and `ss01` to `ss20` (stylistic
+  sets). A feature the font does not have changes nothing.
+- **Axes** are in each axis's own units: `wght` 1 to 1000, `wdth` a percentage, `slnt` degrees,
+  `opsz` points, or any axis the font defines. A value is clamped to the font's range and an axis
+  it does not have is ignored. `wght` set this way replaces the style's weight: a variable font
+  draws exactly that weight, and a family of static faces its nearest.
+- **The language** is a tag such as `ja`, `zh-Hant`, `ko` or `sr-Cyrl`. It picks the font's local
+  forms (Serbian and Macedonian Cyrillic, Turkish dotted i) and, for the Han characters Chinese,
+  Japanese and Korean share, which of the platform's fonts draws them. Text whose style names no
+  language is in the application's, the locale it resolved.
+
+**Thai, Lao, Khmer and Myanmar** wrap between words, although they write no space between them:
+frus finds the words with a dictionary. That is the `dictionary-line-breaks` feature, on by
+default. It adds about 1.1 MB to a binary, so an application that never shows those scripts can
+turn it off, and they then break only at spaces and punctuation.
+
+**A character none of your fonts has** is drawn by the platform's own font for its script: the
+desktop's (Windows, macOS, and Linux through fontconfig) and, on Android, the one the system's
+`fonts.xml` names, read from `/system/fonts` the first time text in that script is shown. On the
+**web** there is no such font to reach: a page draws only the fonts the application bundles or
+registers, so register a face for every script it shows, or the character is drawn as a box.
+
 ## Colours from the theme
 
 `cx.theme().scheme` holds the colour **roles**: `primary` and `on_primary` (what is drawn on
