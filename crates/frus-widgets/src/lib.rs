@@ -655,6 +655,8 @@ pub use frus_core::{Gradient, RadialGradient, SweepGradient, TileMode};
 pub use frus_core::ShaderMask as LayerShaderMask;
 /// Colour science: the tone-based space the schemes are made in, and the surface tint.
 pub use frus_core::{surface_tint_opacity, Hct, TonalPalette};
+/// OpenType features, variable font axes and the language of a run of text (milestone 784).
+pub use frus_core::{FontTag, TextShaping};
 /// Type as the renderer receives it, and the framework's defaults.
 pub use frus_core::{ResolvedTextStyle, TextRun, DEFAULT_LINE_HEIGHT, DEFAULT_TEXT_SIZE};
 

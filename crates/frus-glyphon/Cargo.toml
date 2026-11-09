@@ -18,7 +18,7 @@ categories = ["gui", "rendering"]
 name = "glyphon"
 
 [dependencies]
-cosmic-text = "0.19"
+cosmic-text.workspace = true
 etagere = "0.3.0"
 lru = { version = "0.19.0", default-features = false }
 rustc-hash = "2.1.1"

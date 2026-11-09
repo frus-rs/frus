@@ -468,6 +468,10 @@ pub enum Primitive {
         /// reason again: the renderer must space the glyphs as the measurement did
         /// (milestone 623).
         letter_spacing: f32,
+        /// OpenType features, variable font axes and the language — carried for the same
+        /// reason again: the renderer must shape the glyphs as the measurement did
+        /// (milestone 784).
+        shaping: crate::TextShaping,
         /// Clip rectangle.
         clip: Rect,
         /// The box the text was laid out in — the emitting widget's, so an
@@ -638,6 +642,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip,
                 bounds,
                 owner,
@@ -656,6 +661,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing: letter_spacing * sx,
+                shaping,
                 clip: clip.scale_xy(sx, sy),
                 bounds: bounds.scale_xy(sx, sy),
                 owner,
@@ -792,6 +798,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip,
                 bounds,
                 owner,
@@ -810,6 +817,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip: clip.translate(dx, dy),
                 bounds: bounds.translate(dx, dy),
                 owner,
@@ -989,6 +997,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 bounds,
                 owner,
                 ..
@@ -1007,6 +1016,7 @@ impl Primitive {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip,
                 bounds,
                 owner,
@@ -1241,6 +1251,7 @@ impl Scene {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip,
                 bounds,
                 owner,
@@ -1259,6 +1270,7 @@ impl Scene {
                 height,
                 family,
                 letter_spacing,
+                shaping,
                 clip,
                 bounds,
                 owner,
@@ -1896,6 +1908,7 @@ impl Scene {
             height: style.height,
             family: style.family,
             letter_spacing: style.letter_spacing,
+            shaping: style.shaping,
             clip: self.current_clip,
             bounds: self.current_bounds,
             owner: self.current_owner,
@@ -1927,6 +1940,7 @@ impl Scene {
             height: style.height,
             family: style.family,
             letter_spacing: style.letter_spacing,
+            shaping: style.shaping,
             clip: self.current_clip,
             bounds: self.current_bounds,
             owner: self.current_owner,
@@ -1963,6 +1977,7 @@ impl Scene {
             height: style.height,
             family: style.family,
             letter_spacing: style.letter_spacing,
+            shaping: style.shaping,
             clip: self.current_clip,
             bounds: self.current_bounds,
             owner: self.current_owner,
@@ -2423,6 +2438,7 @@ mod tests {
             decoration: TextDecoration::NONE,
             decoration_color: None,
             letter_spacing: 0.25,
+            shaping: crate::TextShaping::NONE,
         };
         let mut scene = Scene::new();
         scene.rich_text(Point::new(1.0, 2.0), vec![run]);

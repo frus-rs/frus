@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 783 so far, each documenting the objective, the alternatives
+> record — one per step, 784 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **OpenType features, variable font axes, a language per span, Thai line breaking, platform
+  fallback fonts** (J784). `TextStyle::font_feature("smcp", 1)`, `.font_variation("wdth", 75.0)`
+  and `.locale("ja")`, and the same on `TextSpan`, carried as a four-byte `TextShaping`
+  (new `FontTag`, `TextShaping`; new field `shaping` on `TextStyle`, `ResolvedTextStyle`,
+  `TextRun` and `Primitive::Text`). Every axis of a variable font is shaped and drawn, and a
+  `wght` axis becomes the weight. The language selects a font's localized forms and, for Han
+  characters, the platform face of that language; unset, it is the application's resolved
+  locale. Thai, Lao, Khmer and Myanmar wrap between words with ICU4X dictionaries (feature
+  `dictionary-line-breaks`, on by default). On Android a character no loaded face has is drawn
+  by the face the system's `fonts.xml` names, loaded the first time its script is shown. frus
+  now carries a copy of cosmic-text, `frus-cosmic-text`, as it does of glyphon. New
+  `frus_text::shaped`, `set_default_locale`, `default_locale`.
 - **The desktop window comes back as it was left; decoration at its own frame rate** (J783).
   The window's size, place and maximized state are kept in `window.json` in the application's
   data folder and restored before it is shown, fitted to the screens there are now (a window

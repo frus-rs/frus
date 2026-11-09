@@ -1,0 +1,74 @@
+[package]
+name = "frus-cosmic-text"
+description = "frus's copy of cosmic-text (multi-line text shaping and layout), with variable font axes, per-span language and dictionary line breaking"
+edition = "2021"
+rust-version.workspace = true
+version.workspace = true
+# cosmic-text's own licence, kept as it is.
+license = "MIT OR Apache-2.0"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/frus-cosmic-text"
+keywords = ["text", "shaping", "fonts", "gui"]
+categories = ["text-processing", "gui"]
+
+[lib]
+# Imported as `cosmic_text`, so the code that uses it reads as it would with the original.
+name = "cosmic_text"
+
+[dependencies]
+bitflags = "2.10.0"
+core_maths = { version = "0.1.1", optional = true }
+fontdb = { version = "0.23", default-features = false }
+harfrust = { version = "0.5.0", default-features = false }
+hashbrown = { version = "0.17", optional = true, default-features = false }
+libm = { version = "0.2.16", optional = true }
+linebender_resource_handle = { version = "0.1.1", default-features = false }
+log = "0.4.29"
+rangemap = "1.7.1"
+rustc-hash = { version = "2.1.1", default-features = false }
+self_cell = "1.2.2"
+skrifa = { version = "0.40.0", default-features = false }
+smol_str = { version = "0.3.2", default-features = false }
+sys-locale = { version = "0.3.2", optional = true }
+unicode-linebreak = "0.1.5"
+unicode-script = "0.5.8"
+unicode-segmentation = "1.12.0"
+# Dictionary line breaking for Thai, Lao, Khmer and Myanmar (see the feature below).
+icu_segmenter = { version = "2.1", optional = true, default-features = false, features = ["compiled_data"] }
+
+[dependencies.swash]
+version = "0.2.6"
+default-features = false
+features = ["render", "scale"]
+optional = true
+
+[dependencies.unicode-bidi]
+version = "0.3.18"
+default-features = false
+features = ["hardcoded-data"]
+
+[features]
+default = ["std", "swash", "fontconfig"]
+fontconfig = ["fontdb/fontconfig", "std"]
+monospace_fallback = []
+no_std = ["hashbrown", "dep:libm", "skrifa/libm", "core_maths", "swash?/libm"]
+peniko = []
+shape-run-cache = []
+std = [
+    "fontdb/memmap",
+    "fontdb/std",
+    "harfrust/std",
+    "linebender_resource_handle/std",
+    "skrifa/std",
+    "swash?/std",
+    "sys-locale",
+    "unicode-bidi/std",
+]
+wasm-web = ["sys-locale?/js"]
+warn_on_missing_glyphs = []
+# Break lines between the words of Thai, Lao, Khmer and Myanmar, which put no space between
+# them, with the dictionaries of the Unicode ICU4X project. Without it those scripts break
+# only at spaces and punctuation, as the Unicode line breaking algorithm alone does.
+dictionary-line-breaks = ["dep:icu_segmenter", "std"]
