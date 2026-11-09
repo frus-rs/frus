@@ -1177,6 +1177,7 @@ pub struct SliverAppBar<Msg = crate::callback::Callback> {
     scrolled_under_elevation: Option<f32>,
     shadow_color: Option<Color>,
     automatically_imply_leading: bool,
+    size: crate::AppBarSize,
 }
 
 impl<Msg: Clone + 'static> Default for SliverAppBar<Msg> {
@@ -1209,7 +1210,37 @@ impl<Msg: Clone + 'static> SliverAppBar<Msg> {
             scrolled_under_elevation: None,
             shadow_color: None,
             automatically_imply_leading: true,
+            size: crate::AppBarSize::Small,
         }
+    }
+
+    /// A **medium** bar: 112 tall at rest, its title in `headline_small` under the toolbar,
+    /// collapsing to the 64 toolbar as the content scrolls; once the big title has gone
+    /// under the toolbar, the toolbar's own title fades in. Pinned unless told.
+    ///
+    /// ```
+    /// use frus_widgets::{CustomScrollView, SliverAppBar, SliverList, Text};
+    /// let _page: CustomScrollView = CustomScrollView::new()
+    ///     .sliver(SliverAppBar::medium().title(Text::new("Inbox")))
+    ///     .sliver(SliverList::new(50, 56.0, |i| Text::new(format!("Mail {i}"))));
+    /// ```
+    pub fn medium() -> Self {
+        let mut bar = Self::new().pinned(true);
+        bar.size = crate::AppBarSize::Medium;
+        bar
+    }
+
+    /// A **large** bar: 152 tall at rest, its title in `headline_medium`; otherwise as
+    /// [`medium`](Self::medium).
+    ///
+    /// ```
+    /// use frus_widgets::{SliverAppBar, Text};
+    /// let _bar: SliverAppBar = SliverAppBar::large().title(Text::new("Library"));
+    /// ```
+    pub fn large() -> Self {
+        let mut bar = Self::new().pinned(true);
+        bar.size = crate::AppBarSize::Large;
+        bar
     }
 
     /// The title in the toolbar. For a title that shrinks into the toolbar as an
@@ -1487,6 +1518,7 @@ impl<Msg: Clone + 'static> SliverAppBar<Msg> {
         collapsed: Option<f32>,
         expanded: Option<f32>,
         primary: bool,
+        size: crate::AppBarSize,
         theme: &Theme,
     ) -> (f32, f32) {
         let top = if primary {
@@ -1496,7 +1528,12 @@ impl<Msg: Clone + 'static> SliverAppBar<Msg> {
         };
         let toolbar = Self::toolbar_of(toolbar, theme);
         let min = collapsed.unwrap_or(toolbar + top).max(toolbar + top);
-        let max = expanded.unwrap_or(toolbar + top).max(min);
+        // A medium or large bar opens to its own height unless told.
+        let open = match size {
+            crate::AppBarSize::Small => toolbar + top,
+            size => size.expanded_height() - size.toolbar_height() + toolbar + top,
+        };
+        let max = expanded.unwrap_or(open).max(min);
         (min, max)
     }
 }
@@ -1520,6 +1557,7 @@ struct BarParts<Msg> {
     scrolled_under_elevation: Option<f32>,
     shadow_color: Option<Color>,
     automatically_imply_leading: bool,
+    size: crate::AppBarSize,
 }
 
 impl<Msg: Clone + 'static> BarParts<Msg> {
@@ -1556,6 +1594,7 @@ impl<Msg: Clone + 'static> BarParts<Msg> {
             scrolled_under_elevation: self.scrolled_under_elevation,
             shadow_color: self.shadow_color,
             automatically_imply_leading: self.automatically_imply_leading,
+            size: self.size,
         };
         Box::new(crate::themebuilder::ThemeBuilder::boxed(move |theme| {
             parts.compose(theme)
@@ -1583,6 +1622,7 @@ struct BarFrame<Msg> {
     scrolled_under_elevation: Option<f32>,
     shadow_color: Option<Color>,
     automatically_imply_leading: bool,
+    size: crate::AppBarSize,
 }
 
 /// What a bar's surface looks like at `state`: its colour and its elevation. Pure, so the
@@ -1658,7 +1698,34 @@ impl<Msg: Clone + 'static> BarFrame<Msg> {
         // Behind the toolbar: the flexible space, at the bar's current extent.
         let mut flexible_title: Option<Box<dyn Widget<Msg>>> = None;
         match self.space {
-            Space::None => {}
+            Space::None => {
+                // A medium or large bar: the big title in the band under the toolbar, at the
+                // bottom of what is left of it, clipped as the band closes.
+                let band = extent - state.min_extent;
+                if let (Some(title), true) = (&self.title, self.size != crate::AppBarSize::Small) {
+                    if band > 0.0 {
+                        let style = self.size.title_style(theme, foreground);
+                        let big = crate::appbar::big_title(
+                            Box::new(shared(title)),
+                            style,
+                            band,
+                            self.size.title_bottom_padding(),
+                            rtl,
+                        );
+                        let clipped = crate::Container::new()
+                            .width(width)
+                            .height(band)
+                            .clip()
+                            .child(big);
+                        flexible_title = Some(Box::new(
+                            crate::Positioned::new(clipped)
+                                .top(state.min_extent)
+                                .left(0.0)
+                                .height(band),
+                        ));
+                    }
+                }
+            }
             Space::Custom(widget) => {
                 stack = stack.layer(crate::Positioned::fill(shared(&widget)));
             }
@@ -1780,7 +1847,27 @@ impl<Msg: Clone + 'static> BarFrame<Msg> {
             .foreground(foreground)
             .toolbar_opacity(toolbar_opacity(self.pinned, state, top, toolbar_h));
         if let Some(title) = &self.title {
-            bar = bar.title(shared(title));
+            if self.size == crate::AppBarSize::Small {
+                bar = bar.title(shared(title));
+            } else {
+                // The toolbar's own title shows only once the big one has gone under it.
+                let shown = if state.shrink_offset >= state.max_extent - state.min_extent - 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+                bar = bar.title(crate::AnimatedOpacity::new(
+                    shown,
+                    0.5,
+                    frus_core::Curve::Cubic {
+                        x1: 0.2,
+                        y1: 0.0,
+                        x2: 0.0,
+                        y2: 1.0,
+                    },
+                    shared(title),
+                ));
+            }
         }
         if let Some(leading) = &self.leading {
             bar = bar.leading(shared(leading));
@@ -1818,6 +1905,7 @@ impl<Msg: Clone + 'static> BarFrame<Msg> {
 
 impl<Msg: Clone + 'static> From<SliverAppBar<Msg>> for Sliver<Msg> {
     fn from(bar: SliverAppBar<Msg>) -> Self {
+        let size = bar.size;
         let (toolbar, collapsed, expanded, primary) = (
             bar.toolbar_height,
             bar.collapsed_height,
@@ -1843,11 +1931,14 @@ impl<Msg: Clone + 'static> From<SliverAppBar<Msg>> for Sliver<Msg> {
             scrolled_under_elevation: bar.scrolled_under_elevation,
             shadow_color: bar.shadow_color,
             automatically_imply_leading: bar.automatically_imply_leading,
+            size: bar.size,
         };
         Sliver {
             kind: SliverKind::Header(HeaderSpec {
                 extents: Box::new(move |theme| {
-                    SliverAppBar::<Msg>::extents_of(toolbar, collapsed, expanded, primary, theme)
+                    SliverAppBar::<Msg>::extents_of(
+                        toolbar, collapsed, expanded, primary, size, theme,
+                    )
                 }),
                 pinned,
                 floating,

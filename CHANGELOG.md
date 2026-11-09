@@ -8,11 +8,29 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 784 so far, each documenting the objective, the alternatives
+> record — one per step, 787 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Material 3 expressive widgets, second batch** (J787). `LinearWavyProgressIndicator` and
+  `CircularWavyProgressIndicator` (determinate and indeterminate; the wave flattens near the
+  start and the end and flows at the decorative frame rate) and `WavySliderTrackShape` for
+  `Slider`. `Carousel::multi_browse`, `::hero`, `::uncontained` and `::full_screen`: items that
+  change size as they scroll and are masked rather than squeezed at the edges, snapping to an
+  item, arrow keys / Home / End when controlled (`index`, `on_index_changed`); the layout is the
+  pure `CarouselSizing::layout`. `AppBar::medium()` / `::large()` (`AppBarSize`) and the
+  collapsing `SliverAppBar::medium()` / `::large()`, whose big title scrolls under the toolbar
+  before the toolbar's own fades in. `DatePickerDialog` over `DatePickerModel`: calendar and text
+  modes, a date range, the list of years, the reader's first day of the week and date order,
+  keyboard navigation; `CalendarDate` with exact Gregorian arithmetic, `parse_date`,
+  `format_date`, and new localized strings in English and French. `ExpandableNavigationRail`
+  (96 to 220 wide, menu button, action button). `GlassSurface`, a frosted panel over the
+  existing GPU backdrop blur. `RoundedPolygon`, the thirty `MaterialShapes`, `Morph` and
+  `MorphingShape`, and `LoadingIndicator`, which morphs through them on a spring. Each has a
+  theme struct in `theme.widgets` (`wavy_progress`, `carousel`, `date_picker_dialog`,
+  `expandable_rail`, `glass`, `loading_indicator`; `AppBarTheme` gains `medium_title_style`
+  and `large_title_style`).
 - **OpenType features, variable font axes, a language per span, Thai line breaking, platform
   fallback fonts** (J784). `TextStyle::font_feature("smcp", 1)`, `.font_variation("wdth", 75.0)`
   and `.locale("ja")`, and the same on `TextSpan`, carried as a four-byte `TextShaping`

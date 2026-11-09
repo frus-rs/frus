@@ -171,6 +171,126 @@ struct AppBarParts<Msg> {
     actions_icon_theme: Option<IconTheme>,
     toolbar_text_style: Option<TextStyle>,
     exclude_header_semantics: bool,
+    /// Small, medium or large: the two taller ones carry their title in big type under
+    /// the toolbar.
+    size: AppBarSize,
+}
+
+/// **How tall an app bar is**, and where its title goes.
+///
+/// A small bar has its title in the toolbar. A medium (112 tall) and a large (152 tall) one
+/// keep the toolbar for the navigation and the actions and set the title under it, in
+/// `headline_small` and `headline_medium` — the place a page's name goes at the top of a
+/// list. As a piece of a scroll view ([`SliverAppBar::medium`](crate::SliverAppBar::medium),
+/// [`SliverAppBar::large`](crate::SliverAppBar::large)) the big title scrolls under the
+/// toolbar and the toolbar's own title fades in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AppBarSize {
+    /// The title in the toolbar.
+    #[default]
+    Small,
+    /// A 64 toolbar over a 48 band holding the title in `headline_small`.
+    Medium,
+    /// A 64 toolbar over an 88 band holding the title in `headline_medium`.
+    Large,
+}
+
+impl AppBarSize {
+    /// The whole bar's height at rest, status bar excluded.
+    pub fn expanded_height(self) -> f32 {
+        match self {
+            AppBarSize::Small => APP_BAR_HEIGHT,
+            AppBarSize::Medium => 112.0,
+            AppBarSize::Large => 152.0,
+        }
+    }
+
+    /// The toolbar's height.
+    pub fn toolbar_height(self) -> f32 {
+        match self {
+            AppBarSize::Small => APP_BAR_HEIGHT,
+            _ => 64.0,
+        }
+    }
+
+    /// The room under the big title.
+    pub fn title_bottom_padding(self) -> f32 {
+        match self {
+            AppBarSize::Small => 0.0,
+            AppBarSize::Medium => 20.0,
+            AppBarSize::Large => 28.0,
+        }
+    }
+
+    /// The big title's type, the theme's or the default, in `foreground`.
+    pub(crate) fn title_style(self, theme: &Theme, foreground: Color) -> TextStyle {
+        let t = theme.widgets.app_bar;
+        let mut style = match self {
+            AppBarSize::Large => t.large_title_style.unwrap_or(theme.text.headline_medium),
+            _ => t.medium_title_style.unwrap_or(theme.text.headline_small),
+        };
+        if style.color.is_none() {
+            style.color = Some(foreground);
+        }
+        style
+    }
+}
+
+/// The big title of a medium or large bar: `title` in `style`, on one line, at the bottom
+/// start of a band `height` tall.
+pub(crate) fn big_title<Msg: Clone + 'static>(
+    title: Box<dyn Widget<Msg>>,
+    style: TextStyle,
+    height: f32,
+    bottom: f32,
+    rtl: bool,
+) -> Container<Msg> {
+    let words = crate::DefaultTextStyle {
+        soft_wrap: Some(false),
+        overflow: Some(frus_core::TextOverflow::Ellipsis),
+        ..crate::DefaultTextStyle::from_text_style(style)
+    };
+    let dressed = crate::Themed::tweak(
+        move |t| t.widgets.text = t.widgets.text.merge(words),
+        BoxedTitle(title),
+    );
+    // The title stands `bottom` above the band's bottom edge and may reach up past the
+    // band's top, into the toolbar's room (a medium bar's 48 band is shorter than a
+    // headline line and the 20 under it; a collapsing band ends shorter than the line).
+    // It is laid out on its own at its natural height, anchored to the bottom start, and
+    // drawn moved up: the band keeps its size and never reports an overflow.
+    let align = if rtl {
+        frus_core::Alignment::BOTTOM_RIGHT
+    } else {
+        frus_core::Alignment::BOTTOM_LEFT
+    };
+    Container::new()
+        .height(height.max(0.0))
+        .padding_each(0.0, 16.0, 0.0, 16.0)
+        .child(
+            crate::OverflowBox::new(Container::new().translated(0.0, -bottom).child(dressed))
+                .natural_height()
+                .alignment(align),
+        )
+}
+
+/// A boxed title as a widget, the box being the title's.
+struct BoxedTitle<Msg>(Box<dyn Widget<Msg>>);
+
+impl<Msg: 'static> Widget<Msg> for BoxedTitle<Msg> {
+    fn style(&self) -> frus_layout::Style {
+        self.0.style()
+    }
+    fn style_themed(&self, theme: &Theme) -> frus_layout::Style {
+        self.0.style_themed(theme)
+    }
+    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
+        std::slice::from_ref(&self.0)
+    }
+    fn paint(&self, _: Rect, _: crate::interaction::Status, _: &Theme, _: &mut frus_core::Scene) {}
+    fn on_click(&self) -> Option<Msg> {
+        None
+    }
 }
 
 impl<Msg: Clone + 'static> Default for AppBar<Msg> {
@@ -256,7 +376,40 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             actions_icon_theme: None,
             toolbar_text_style: None,
             exclude_header_semantics: false,
+            size: AppBarSize::Small,
         })
+    }
+
+    /// A **medium** bar: the toolbar for the navigation and the actions, and under it the
+    /// title in `headline_small` — 112 tall in all.
+    ///
+    /// ```
+    /// use frus_widgets::{AppBar, Text};
+    /// let _bar = AppBar::<()>::medium().title(Text::new("Photos")).build();
+    /// ```
+    pub fn medium() -> Self {
+        Self::new().size(AppBarSize::Medium)
+    }
+
+    /// A **large** bar: the title in `headline_medium` under the toolbar, 152 tall in all.
+    ///
+    /// ```
+    /// use frus_widgets::{AppBar, Text};
+    /// let _bar = AppBar::<()>::large().title(Text::new("Library")).build();
+    /// ```
+    pub fn large() -> Self {
+        Self::new().size(AppBarSize::Large)
+    }
+
+    /// Small, medium or large.
+    ///
+    /// ```
+    /// use frus_widgets::{AppBar, AppBarSize};
+    /// let _bar = AppBar::<()>::new().size(AppBarSize::Large).build();
+    /// ```
+    pub fn size(mut self, size: AppBarSize) -> Self {
+        self.p().size = size;
+        self
     }
 
     /// The **available width** for the bar, in logical pixels: what drives the
@@ -702,8 +855,43 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
     /// The parts, composed once the theme is known.
     fn build_parts(parts: AppBarParts<Msg>) -> Box<dyn Widget<Msg>> {
         Box::new(crate::themebuilder::ThemeBuilder::boxed(move |theme| {
-            Self::build_with(parts, theme)
+            Self::build_with(Self::grow(parts, theme), theme)
         }))
+    }
+
+    /// A medium or large bar as a small one: its title moved out of the toolbar into a band
+    /// under it, above whatever `bottom` the caller gave.
+    fn grow(mut parts: AppBarParts<Msg>, theme: &Theme) -> AppBarParts<Msg> {
+        let size = parts.size;
+        if size == AppBarSize::Small {
+            return parts;
+        }
+        let toolbar = parts
+            .height
+            .or(theme.widgets.app_bar.height)
+            .unwrap_or(size.toolbar_height());
+        parts.height = Some(toolbar);
+        if let Some(title) = parts.title.take() {
+            let foreground = parts
+                .foreground
+                .or(theme.widgets.app_bar.foreground)
+                .unwrap_or(theme.scheme.on_surface);
+            let style = parts
+                .title_style
+                .unwrap_or_else(|| size.title_style(theme, foreground));
+            let band = big_title(
+                title,
+                style,
+                size.expanded_height() - size.toolbar_height(),
+                size.title_bottom_padding(),
+                theme.direction.is_rtl(),
+            );
+            parts.bottom = Some(match parts.bottom.take() {
+                Some(bottom) => Box::new(Flex::column().child(band).child(BoxedTitle(bottom))),
+                None => Box::new(band),
+            });
+        }
+        parts
     }
 
     /// The composition proper, against a known theme.
@@ -742,6 +930,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             actions_icon_theme,
             toolbar_text_style,
             exclude_header_semantics,
+            size: _,
         } = parts;
 
         // **Is that width a measurement or a sentinel?** `AppBar::new` takes the surface's
