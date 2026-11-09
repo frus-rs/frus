@@ -135,6 +135,10 @@ scripts and the segmenter. That is a third of what the bundled fonts weigh, so i
 like they are: on by default, because a Thai reader's paragraph cut through words is a defect,
 and droppable by an application that never shows those scripts.
 
+The Android size budget (`ci/size-budget.toml`) measured `frus-hello` at 14,163,432 bytes with
+the feature, 1,163,432 over the 13,000,000 budget. The budget is raised to 14,500,000 in this
+change, with the reason written next to it.
+
 ### Smaller fixes found on the way
 
 - cosmic-text's fast path for an ASCII word checked the spans inside it but not the default
