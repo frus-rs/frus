@@ -31,6 +31,21 @@ any release may break.
   theme struct in `theme.widgets` (`wavy_progress`, `carousel`, `date_picker_dialog`,
   `expandable_rail`, `glass`, `loading_indicator`; `AppBarTheme` gains `medium_title_style`
   and `large_title_style`).
+- **Material 3 widgets, batch 1** (J786). `SplitButton` (a leading action and a trailing menu
+  toggle, five `ButtonSize`s, filled / tonal / elevated / outlined, inner corners that tighten
+  when pressed, a pill with an upward chevron while open); `ButtonGroup` (standard or
+  connected, `single` or `multiple` choice, the shape morph on press, read as radio or toggle
+  buttons); `FabMenu` (a floating action button opening labelled actions over a scrim, its
+  close button over the button, primary / secondary / tertiary); `Toolbar` (docked or
+  floating, horizontal or vertical, vibrant, `hidden` slides it away) with `HideOnScroll`;
+  `SideSheet` (standard beside the page or modal from the end edge, RTL aware, dragged away);
+  `FullScreenDialog` (close, title, confirming action); `RichTooltip` (title, text, actions,
+  hovered or `persistent`); and selection mode — `SelectionController`, `SelectableItem`,
+  `SelectionAppBar` ("3 selected", Back leaves the mode). Each has a `*Theme` in
+  `WidgetThemes`. New in the framework: `SemanticsProperties::expanded` (AccessKit, web
+  `aria-expanded`, Android expand / collapse actions), `Widget::back_dismiss`,
+  `Widget::overlay_pinned`, `Placement::Covering`, `Drawer::drag_to_dismiss` and
+  `Localizations::more_options_label`.
 - **OpenType features, variable font axes, a language per span, Thai line breaking, platform
   fallback fonts** (J784). `TextStyle::font_feature("smcp", 1)`, `.font_variation("wdth", 75.0)`
   and `.locale("ja")`, and the same on `TextSpan`, carried as a four-byte `TextShaping`

@@ -1194,6 +1194,23 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// If `true`, this widget's [`Placement::Tooltip`](crate::Placement::Tooltip) overlay
+    /// is **pinned**: shown whether or not the anchor is hovered, and only while the widget
+    /// says so — a persistent rich tooltip, opened by a press and closed by its own action,
+    /// an outside press or Escape. Default: `false` (a tooltip shows while hovered).
+    fn overlay_pinned(&self) -> bool {
+        false
+    }
+
+    /// What the system's **Back** — and Escape, when nothing focused answers it — sends
+    /// while this widget is on screen, before the router is asked to go back: a mode the
+    /// page is in, such as a list in multi-select, that Back should leave first. Ranked
+    /// like an overlay's dismissal: the last one built wins, and an open overlay is built
+    /// after the page under it. Default: `None`.
+    fn back_dismiss(&self) -> Option<Msg> {
+        None
+    }
+
     /// If `true`, this widget's **anchored** overlay (a menu…) **traps focus**: Tab and the
     /// arrow keys cycle within its focusables while it is open (the keyboard pattern of menus).
     /// Modal (scrimmed) overlays already trap by default; a tooltip or an autocomplete list
@@ -2449,6 +2466,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn overlay_traps_focus(&self) -> bool {
         (**self).overlay_traps_focus()
+    }
+    fn overlay_pinned(&self) -> bool {
+        (**self).overlay_pinned()
+    }
+    fn back_dismiss(&self) -> Option<Msg> {
+        (**self).back_dismiss()
     }
     fn overlay_follows_anchor_width(&self) -> bool {
         (**self).overlay_follows_anchor_width()

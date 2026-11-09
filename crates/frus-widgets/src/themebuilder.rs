@@ -61,6 +61,9 @@ pub struct ThemeBuilder<Msg = crate::callback::Callback> {
     build: RefCell<Option<Deferred<Msg>>>,
     /// The built child, as the one-element slice [`Widget::children`] has to hand back.
     built: OnceCell<Vec<Box<dyn Widget<Msg>>>>,
+    /// The axes it asks to fill on its child's behalf — for a page-level widget whose
+    /// child sizes itself as a share of its parent (milestone 786).
+    fill: crate::widget::FillAxes,
 }
 
 impl<Msg: 'static> ThemeBuilder<Msg> {
@@ -71,6 +74,7 @@ impl<Msg: 'static> ThemeBuilder<Msg> {
                 Box::new(build(theme)) as Box<dyn Widget<Msg>>
             }))),
             built: OnceCell::new(),
+            fill: crate::widget::FillAxes::NONE,
         }
     }
 
@@ -79,7 +83,15 @@ impl<Msg: 'static> ThemeBuilder<Msg> {
         Self {
             build: RefCell::new(Some(Box::new(build))),
             built: OnceCell::new(),
+            fill: crate::widget::FillAxes::NONE,
         }
+    }
+
+    /// Asks to fill `fill` of the room offered, for a child that sizes itself as a share
+    /// of its parent — a page-level dialog or sheet (milestone 786).
+    pub(crate) fn filling(mut self, fill: crate::widget::FillAxes) -> Self {
+        self.fill = fill;
+        self
     }
 
     /// The child, building it if the layout pass has not already.
@@ -112,10 +124,20 @@ impl<Msg: Clone + 'static> Widget<Msg> for ThemeBuilder<Msg> {
     fn style_themed(&self, theme: &Theme) -> Style {
         // The builder is **transparent**: it takes the child's box, so putting one around
         // a widget does not change where that widget lands.
-        self.child(theme)
+        let mut style = self
+            .child(theme)
             .first()
             .map(|c| c.style_themed(theme))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // A builder asked to fill takes the room it is given, not a share of a parent
+        // that may have none to give (milestone 786).
+        if self.fill.horizontal {
+            style.width = frus_layout::Dimension::Auto;
+        }
+        if self.fill.vertical {
+            style.height = frus_layout::Dimension::Auto;
+        }
+        style
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
@@ -148,6 +170,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for ThemeBuilder<Msg> {
 
     fn debug_name(&self) -> &'static str {
         "ThemeBuilder"
+    }
+
+    fn fill_axes(&self, _theme: &Theme) -> crate::widget::FillAxes {
+        self.fill
     }
 }
 

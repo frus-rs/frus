@@ -83,6 +83,10 @@ pub struct SemanticsProperties {
     /// must not read it out either: it is told the field is a password and given only as
     /// many dots as there are characters.
     pub obscured: bool,
+    /// Whether what this control opens — a menu, a sheet, a list of actions — is
+    /// **showing**: `Some(true)` expanded, `Some(false)` collapsed, `None` for a control
+    /// that opens nothing. A reader says "expanded" or "collapsed" after the name.
+    pub expanded: Option<bool>,
 }
 
 impl SemanticsProperties {
@@ -154,6 +158,19 @@ impl SemanticsProperties {
         self
     }
 
+    /// Marks a control that opens something as **expanded** (`true`) or **collapsed**.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let toggle = SemanticsProperties::new(Role::Button).label("More").expanded(false);
+    /// assert_eq!(toggle.expanded, Some(false));
+    /// ```
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
+        self
+    }
+
     /// The value as an assistive technology may read it out: the value itself, or, when it
     /// is [`obscured`](Self::obscured), one dot per character, so the length is known and
     /// the characters are not.
@@ -218,6 +235,7 @@ impl SemanticsProperties {
             disabled: self.disabled || under.disabled,
             range: self.range.or(under.range),
             obscured: self.obscured || under.obscured,
+            expanded: self.expanded.or(under.expanded),
         }
     }
 }

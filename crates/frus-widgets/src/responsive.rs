@@ -510,6 +510,14 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().is_some_and(|w| w.overlay_traps_focus())
     }
 
+    fn overlay_pinned(&self) -> bool {
+        self.inner.as_ref().is_some_and(|w| w.overlay_pinned())
+    }
+
+    fn back_dismiss(&self) -> Option<Msg> {
+        self.inner.as_ref().and_then(|w| w.back_dismiss())
+    }
+
     fn overlay_follows_anchor_width(&self) -> bool {
         self.inner
             .as_ref()

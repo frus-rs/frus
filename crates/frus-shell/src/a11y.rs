@@ -98,6 +98,10 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         Toggled::True => node.set_toggled(AkToggled::True),
         Toggled::Mixed => node.set_toggled(AkToggled::Mixed),
     }
+    if let Some(expanded) = sem.expanded {
+        // A control that opens something says whether it is open (milestone 786).
+        node.set_expanded(expanded);
+    }
     if let Some((min, value, max)) = sem.range {
         node.set_numeric_value(value as f64);
         node.set_min_numeric_value(min as f64);

@@ -125,6 +125,12 @@ pub trait Localizations {
         "Clear"
     }
 
+    /// **What a reader hears on a control that opens more actions** — a split button's
+    /// trailing half, a menu toggle (milestone 786).
+    fn more_options_label(&self) -> &str {
+        "More options"
+    }
+
     /// The word on a confirming button (`okButtonLabel`).
     fn ok_button_label(&self) -> &str {
         "OK"
@@ -434,6 +440,10 @@ impl Localizations for French {
 
     fn open_drawer_label(&self) -> &str {
         "Ouvrir le menu de navigation"
+    }
+
+    fn more_options_label(&self) -> &str {
+        "Plus d'options"
     }
 
     fn tab_label(&self, index: usize, count: usize) -> String {

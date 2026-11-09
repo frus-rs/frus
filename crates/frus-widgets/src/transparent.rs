@@ -656,6 +656,14 @@ macro_rules! forward_transparent {
                 self.inner.overlay_traps_focus()
             }
 
+            fn overlay_pinned(&self) -> bool {
+                self.inner.overlay_pinned()
+            }
+
+            fn back_dismiss(&self) -> Option<Msg> {
+                self.inner.back_dismiss()
+            }
+
             fn overlay_follows_anchor_width(&self) -> bool {
                 self.inner.overlay_follows_anchor_width()
             }
