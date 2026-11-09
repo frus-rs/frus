@@ -46,6 +46,26 @@ any release may break.
   `aria-expanded`, Android expand / collapse actions), `Widget::back_dismiss`,
   `Widget::overlay_pinned`, `Placement::Covering`, `Drawer::drag_to_dismiss` and
   `Localizations::more_options_label`.
+- **The Material motion system: patterns, presence and presets** (J785). New
+  `MotionPattern::{FadeThrough, SharedAxis(SharedAxis::X | Y | Z), FadeScale}` with
+  `pose(progress, entering, forward)`, timed from `theme.motion` (300 ms, fade scale 150/75 ms),
+  the shared X axis turning round in right-to-left layouts; `container_transform` for the
+  container transform. They are page transitions — `PageTransitionsBuilder::FadeThrough`,
+  `SharedAxis(..)`, `FadeScale`, per route with `GoRoute::transition`, as the theme's default
+  with `PageTransitionsTheme::all`, between a shell's tabs with `GoRoute::branch_transition`
+  (tabs still switch at once without it) — and switches between two children with
+  `AnimatedSwitcher::patterned` / `.pattern` / `.reverse` / `.fill_color`. `OpenContainer`
+  grows a card into a page and back (`OpenContainer::builder` keeps its own state,
+  `OpenContainer::new(open, ..).on_open(..).on_close(..)` is controlled), styled by
+  `OpenContainerTheme` on `theme.widgets.open_container`. Presence: `AnimatedPresence::new` /
+  `::of` plays an exit before a removed child goes, then lets it go with its state and its taps;
+  `PresenceList` does it per keyed item, with a staggered entrance; `Staggered` brings children
+  in one after another. `MotionPreset` names the specification's duration and easing pairs and
+  `Transition` is a reusable enter/exit value (`Transition::preset(MotionPreset::EmphasizedEnter)
+  .slide(0.0, 16.0)`). Under reduced motion all of them, and the router's page transitions, are
+  instant. `PagePose` gains `shift_x`/`shift_y` and `PageTransitionsBuilder` three variants
+  (a breaking change for exhaustive matches and struct literals). New `Navigator::transition`,
+  `Widget::navigator_transition`. Example: `cargo run -p frus-demo --example motion`.
 - **OpenType features, variable font axes, a language per span, Thai line breaking, platform
   fallback fonts** (J784). `TextStyle::font_feature("smcp", 1)`, `.font_variation("wdth", 75.0)`
   and `.locale("ja")`, and the same on `TextSpan`, carried as a four-byte `TextShaping`

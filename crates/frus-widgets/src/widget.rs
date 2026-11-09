@@ -1926,6 +1926,12 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// The transition a [`navigator`](Self::navigator) plays, when it is not the one the
+    /// theme gives its platform (milestone 785). `None`, the default, is the theme's.
+    fn navigator_transition(&self) -> Option<crate::PageTransitionsBuilder> {
+        None
+    }
+
     /// Whether a [`navigator`](Self::navigator) **clips its pages to its own box**.
     /// `true`, which is the reference's default (`Clip.hardEdge`) and the only sane one:
     /// a screen sliding in comes from outside the box and has to stop at its edge.
@@ -2644,6 +2650,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn navigator_gesture(&self) -> bool {
         (**self).navigator_gesture()
+    }
+    fn navigator_transition(&self) -> Option<crate::PageTransitionsBuilder> {
+        (**self).navigator_transition()
     }
     fn navigator_clips(&self) -> bool {
         (**self).navigator_clips()

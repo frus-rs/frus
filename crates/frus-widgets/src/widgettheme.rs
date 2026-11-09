@@ -189,6 +189,8 @@ pub struct WidgetThemes {
     pub tooltip: TooltipTheme,
     /// Defaults for [`Tree`](crate::Tree).
     pub tree: TreeTheme,
+    /// Defaults for [`OpenContainer`](crate::OpenContainer) (milestone 785).
+    pub open_container: crate::OpenContainerTheme,
     // Milestone 786.
     /// Defaults for [`SplitButton`](crate::SplitButton).
     pub split_button: crate::SplitButtonTheme,

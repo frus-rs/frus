@@ -836,6 +836,10 @@ pub struct Runtime {
     /// of, per widget. Interior mutability, like the caches below: a switcher meets a new
     /// value while the tree is being **built**, which is the only time it has one.
     pub(crate) switchers: RefCell<HashMap<WidgetId, crate::switcher::Switch>>,
+    /// What a widget with a switch keeps beside it — where an
+    /// [`OpenContainer`](crate::OpenContainer) was painted (milestone 785). Let go with the
+    /// switch.
+    pub(crate) memos: RefCell<HashMap<WidgetId, std::rc::Rc<dyn std::any::Any>>>,
     /// What each list of items of any extent has measured of them (milestone 716).
     /// Interior mutability: an item is measured while the tree is walked.
     pub(crate) item_extents: RefCell<HashMap<WidgetId, crate::list::ItemExtents>>,

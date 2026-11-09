@@ -87,6 +87,8 @@ pub struct Navigator<Msg = crate::callback::Callback> {
     hidden: usize,
     /// Whether it takes its parent's room rather than its own size.
     fills: bool,
+    /// The transition it plays, when not the theme's (milestone 785).
+    transition: Option<crate::PageTransitionsBuilder>,
 }
 
 impl<Msg: 'static> Navigator<Msg> {
@@ -110,6 +112,7 @@ impl<Msg: 'static> Navigator<Msg> {
             children: vec![Box::new(Keyed::new(key, screen))],
             hidden: 0,
             fills: false,
+            transition: None,
         }
     }
 
@@ -197,6 +200,23 @@ impl<Msg: 'static> Navigator<Msg> {
         self.gesture = gesture;
         self
     }
+
+    /// Plays `transition` between its pages instead of the one the theme's
+    /// [`page_transitions`](crate::Theme::page_transitions) gives its platform — what a
+    /// route with a transition of its own asks for (milestone 785).
+    ///
+    /// ```
+    /// use frus_widgets::{Navigator, PageTransitionsBuilder, Text};
+    ///
+    /// let _fading: Navigator<()> = Navigator::new("two", Text::new("Two"))
+    ///     .from("one", Text::new("One"), 0.5, true)
+    ///     .transition(PageTransitionsBuilder::FadeThrough);
+    /// ```
+    #[must_use]
+    pub fn transition(mut self, transition: crate::PageTransitionsBuilder) -> Self {
+        self.transition = Some(transition);
+        self
+    }
 }
 
 impl<Msg> Widget<Msg> for Navigator<Msg> {
@@ -232,6 +252,10 @@ impl<Msg> Widget<Msg> for Navigator<Msg> {
 
     fn navigator_gesture(&self) -> bool {
         self.gesture
+    }
+
+    fn navigator_transition(&self) -> Option<crate::PageTransitionsBuilder> {
+        self.transition
     }
 
     fn navigator_clips(&self) -> bool {
@@ -735,5 +759,54 @@ mod retained_tests {
         let shown = Navigator::new("page", screen(RED));
         let key = |nav: &Navigator<()>, at: usize| Widget::<()>::children(nav)[at].key();
         assert_eq!(key(&kept, 0), key(&shown, 0));
+    }
+
+    /// Where the page of colour `c` is drawn, and at what opacity, through its layer.
+    fn page_of(ui: &crate::Ui<()>, c: Color) -> Option<(Rect, f32)> {
+        fn walk(primitives: &[Primitive], opacity: f32, c: Color) -> Option<(Rect, f32)> {
+            primitives.iter().find_map(|p| match p {
+                Primitive::Rect { rect, color, .. } if *color == c => Some((*rect, opacity)),
+                Primitive::Layer {
+                    primitives,
+                    opacity: layer,
+                    ..
+                } => walk(primitives, opacity * layer, c),
+                _ => None,
+            })
+        }
+        walk(ui.scene().primitives(), 1.0, c)
+    }
+
+    /// **A navigator told a shared X axis plays it, whatever the theme** (milestone 785):
+    /// halfway through a push the page arriving is still a few pixels towards the end edge,
+    /// the page leaving gone; in a right-to-left layout the arriving page comes from the
+    /// other side.
+    #[test]
+    fn a_shared_x_axis_moves_pages_towards_the_reading_direction() {
+        let red = Color::rgb(1.0, 0.0, 0.0);
+        let blue = Color::rgb(0.0, 0.0, 1.0);
+        let nav = || {
+            Navigator::new("blue", screen(blue))
+                .size(400.0, 300.0)
+                .from("red", screen(red), 0.5, true)
+                .transition(crate::PageTransitionsBuilder::SharedAxis(
+                    crate::SharedAxis::X,
+                ))
+        };
+        let pose = crate::MotionPattern::SharedAxis(crate::SharedAxis::X).pose(0.5, true, true);
+        for (theme, sign) in [(slide_theme(), 1.0), (slide_theme().rtl(), -1.0)] {
+            let ui = build_ui(&nav(), Size::new(400.0, 300.0), &Runtime::default(), &theme);
+            let (rect, opacity) = page_of(&ui, blue).expect("the page arriving is drawn");
+            assert!(
+                (rect.x - sign * pose.dx).abs() < 0.01,
+                "at {} for {}",
+                rect.x,
+                sign * pose.dx
+            );
+            assert!(pose.dx > 1.0, "still on its way: {}", pose.dx);
+            assert!((opacity - pose.opacity).abs() < 1e-3, "{opacity}");
+            let leaving = page_of(&ui, red).map_or(0.0, |(_, o)| o);
+            assert_eq!(leaving, 0.0, "the page leaving is gone by 30 %");
+        }
     }
 }

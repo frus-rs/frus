@@ -100,7 +100,10 @@ mod grid;
 mod gridtile;
 mod hero;
 mod motion;
+mod motionpatterns;
 mod mouseregion;
+mod opencontainer;
+mod presence;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
 mod animationhandle;
@@ -465,6 +468,10 @@ pub use mediascope::MediaScope;
 pub use menu::{MenuItem, PopupMenuButton};
 pub use menubar::{MenuBar, MenuPath, SubmenuButton};
 pub use motion::MotionTheme;
+pub use motionpatterns::{
+    container_transform, ContainerColors, ContainerFrame, ContainerTransitionType, MotionPattern,
+    MotionPose, MotionPreset, SharedAxis, Transition, TransitionTiming, SHARED_AXIS_SLIDE,
+};
 pub use mouseregion::{HoverEvent, HoverRegion, MouseRegion};
 pub use navbar::NavigationBar;
 pub use navdrawer::NavigationDrawer;
@@ -472,6 +479,7 @@ pub use navigator::Navigator;
 pub use navrail::{BottomBar, DestinationIcon, NavigationDestination, NavigationRail, RailLabels};
 pub use navscaffold::NavScaffold;
 pub use notifier::{ChangeNotifier, Listenable, Subscription, ValueNotifier};
+pub use opencontainer::{OpenContainer, OpenContainerTheme};
 pub use overflowbar::OverflowBar;
 pub use overscroll::{
     cross_axis as glow_cross_axis, edge_for, GlowEdge, OverscrollGlow, ScrollGlows,
@@ -499,6 +507,7 @@ pub use prefs::{
     PrefsChange, PrefsMap, PrefsStorage,
 };
 pub use prefs::{prefs, Prefs, PrefsError, UsePref};
+pub use presence::{AnimatedPresence, PresenceList, Staggered};
 pub use progressbar::LinearProgressIndicator;
 pub use radio::{Radio, RadioGroup};
 pub use rating::Rating;
