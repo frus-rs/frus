@@ -158,7 +158,12 @@ turn per morph over a steady spin of 4.666 s a turn. 48 px box, 38 px shape, `pr
   large bars, a large sliver bar open and collapsed, the date picker (single and range), the rail
   collapsed and expanded, glass over stripes (with pixel assertions that the panel blurred and
   tinted what was under it and left the rest alone), the shapes and loading indicator.
-- A real Windows window: `cargo run -p frus-demo --example m3_expressive`, one page per widget.
+- A real Windows window: `cargo run -p frus-demo --example m3_expressive`, one page per widget
+  (`FRUS_M3_PAGE`, `FRUS_M3_PICKER`, `FRUS_M3_RAIL` open a page, the picker or the rail
+  directly), each page captured from the screen: the waves flowing, the three carousels, the
+  medium and large bars and a large sliver bar collapsed with its toolbar title shown, the
+  single and range pickers, the rail collapsed and expanded, glass over stripes, the thirty
+  shapes and the loading indicators.
 
 ## Not done
 
@@ -182,4 +187,8 @@ turn per morph over a steady spin of 4.666 s a turn. 48 px box, 38 px shape, `pr
   start edge, as the specification has it).
 - **The carousel** has no infinite mode, and its keyboard works only when it is controlled
   (`index` + `on_index_changed`). Items cannot be focused one by one.
+- **Not driven by input in the real window**: the screenshots show each widget drawn in a
+  live window, but no drag, fling, click or key was sent to it (the desktop was in use); the
+  scrolling, snapping, keyboard and picking are covered by the unit tests and the model
+  only.
 - **Not checked on Android, iOS or the Web**; only Windows and the goldens.

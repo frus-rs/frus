@@ -183,7 +183,7 @@ impl<Msg: Clone + 'static> ExpandableNavigationRail<Msg> {
     ///
     /// ```
     /// # use frus_widgets::ExpandableNavigationRail;
-    /// let _r = ExpandableNavigationRail::<usize>::new(0, |i| i).on_toggle(99);
+    /// let _r = ExpandableNavigationRail::<usize>::new(0, |i| i).on_toggle(99usize);
     /// ```
     pub fn on_toggle(mut self, message: impl Into<Msg>) -> Self {
         self.on_toggle = Some(message.into());
@@ -195,7 +195,7 @@ impl<Msg: Clone + 'static> ExpandableNavigationRail<Msg> {
     ///
     /// ```
     /// # use frus_widgets::{ExpandableNavigationRail, Icons};
-    /// let _r = ExpandableNavigationRail::<usize>::new(0, |i| i).fab(Icons::ADD, "New", 7);
+    /// let _r = ExpandableNavigationRail::<usize>::new(0, |i| i).fab(Icons::ADD, "New", 7usize);
     /// ```
     pub fn fab(
         mut self,
