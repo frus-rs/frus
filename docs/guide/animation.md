@@ -128,6 +128,103 @@ fn reveal() -> Box<dyn Widget> {
 
 `Theme::with_motion(MotionTheme { .. })` retimes an application in one place.
 
+## Motion patterns: fade through, shared axis, fade scale
+
+Four named transitions cover most of what moves between two states of a screen:
+
+- **Fade through** (`MotionPattern::FadeThrough`) between things that are not related: the
+  old one fades out, then the new one fades in as it grows from 92 %.
+- **Shared axis** (`MotionPattern::SharedAxis(SharedAxis::X | Y | Z)`) between steps of one
+  flow: both slide 30 px along the axis (or scale, along Z) as one fades out and the other in.
+  Along X, "next" always comes from the end edge, also in right-to-left layouts.
+- **Fade scale** (`MotionPattern::FadeScale`) for something appearing over the page — a menu,
+  a dialog: it fades in as it grows from 80 %, and simply fades out.
+- **Container transform** (`OpenContainer`): a card that grows into a page.
+
+A switcher plays a pattern between its children, for as long as the theme's motion tokens say:
+
+```rust
+use frus::{text, AnimatedSwitcher, MotionPattern, SharedAxis};
+
+fn step_view(step: u32, forward: bool) -> AnimatedSwitcher {
+    AnimatedSwitcher::patterned(MotionPattern::SharedAxis(SharedAxis::X), step, |n: &u32| {
+        text(format!("Step {n}"))
+    })
+    // Going back moves the other way.
+    .reverse(!forward)
+}
+```
+
+The same patterns are page transitions. A route can have its own, the theme can make one the
+default everywhere, and a shell can move between its tabs with one:
+
+```rust
+use frus::{text, GoRoute, PageTransitionsBuilder, PageTransitionsTheme, SharedAxis, Theme};
+
+let details = GoRoute::new("/album/:id", |_, _| text("Album"))
+    .transition(PageTransitionsBuilder::SharedAxis(SharedAxis::Z));
+
+let mut theme = Theme::light();
+theme.page_transitions = PageTransitionsTheme::default().all(PageTransitionsBuilder::FadeThrough);
+# let _ = (details, theme);
+```
+
+On a shell route, `.branch_transition(PageTransitionsBuilder::FadeThrough)` fades through
+between the tabs of a navigation bar (they switch at once otherwise).
+
+```rust
+use frus::{text, Button, OpenContainer};
+
+// Keeps whether it is open itself; each builder is handed what opens or closes it.
+let album = OpenContainer::builder(
+    |_open| text("Album"),
+    |close| Button::new("Back to the albums").on_press(close),
+);
+# let _ = album;
+```
+
+`OpenContainer::new(open, closed, opened).on_open(..).on_close(..)` is the same container for
+an application that keeps the answer in its own state. Its colours, elevations, corners and
+scrim come from `theme.widgets.open_container`.
+
+## Things that leave: presence
+
+A child the state no longer has is not in the next tree, so nothing is left to animate. An
+`AnimatedPresence` keeps it — or the value it was built from — for as long as its exit lasts,
+then lets it go with everything it held. While it leaves it takes no taps and is not announced.
+
+```rust
+use frus::{text, AnimatedPresence, MotionPreset, Transition};
+
+fn saved_note(saved: bool) -> AnimatedPresence {
+    AnimatedPresence::new(saved, text("Saved"))
+        .enter(Transition::preset(MotionPreset::EmphasizedEnter).slide(0.0, 16.0))
+        .exit(Transition::preset(MotionPreset::EmphasizedExit).scale(0.9))
+}
+```
+
+`AnimatedPresence::of(option, build)` is for a value that is gone the moment it is removed. A
+`PresenceList` does the same for each item of a keyed list — a removed item leaves where it
+was, the items under it closing up — and `Staggered` brings children in one after another:
+
+```rust
+use frus::{text, PresenceList, Staggered};
+
+let tasks = vec![(1, "Write"), (2, "Ship")];
+let list: PresenceList = PresenceList::new(tasks, |task| task.0, |task| text(task.1)).stagger(0.05);
+let intro: Staggered = Staggered::column().child(text("Welcome")).child(text("Let's start"));
+# let _ = (list, intro);
+```
+
+## Presets instead of numbers
+
+`MotionPreset` names the specification's pairs of a duration and an easing, read from
+`theme.motion` where they play: `Emphasized` (500 ms), `EmphasizedEnter` (400 ms, decelerating),
+`EmphasizedExit` (200 ms, accelerating), `Standard` (300 ms), `StandardEnter` (250 ms) and
+`StandardExit` (200 ms). A `Transition` is a value — what something fades, grows and slides
+from, and on which preset — so an application names its own once and reuses them. Every pattern
+and preset respects reduced motion: with it on, things are simply there, or simply gone.
+
 ## What frus animates for you
 
 Several movements need no code: the page transition when the router pushes or pops a screen

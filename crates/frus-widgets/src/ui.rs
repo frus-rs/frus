@@ -4428,7 +4428,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 // **A transition, as the theme's platform draws it** (milestone 620): the
                 // builder the theme maps the platform to says where each page is, how big,
                 // how opaque, and what lies between them, `progress` of the way through.
-                let builder = self.theme.page_transitions.builder_for(self.theme.platform);
+                // A navigator told its own transition (a route's, milestone 785) plays
+                // that one instead.
+                let builder = widget.navigator_transition().unwrap_or_else(|| {
+                    self.theme.page_transitions.builder_for(self.theme.platform)
+                });
                 let frame = builder.frame(progress, forward, widget.navigator_gesture());
                 // `Navigator::from` inserts the screen being left at index 0, so
                 // `shown[1]` is always the destination: the page on top on a push, the one
@@ -4500,7 +4504,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     screen.as_ref(),
                     child_id(id, hidden, screen.as_ref()),
                     bounds,
-                    0.0,
+                    (0.0, 0.0),
                     clip,
                 );
             }
@@ -6080,21 +6084,24 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         mirror: f32,
         clip: Rect,
     ) {
-        let off_x = pose.dx * bounds.width * mirror;
+        // A fraction of the page's width and, for the motion patterns, logical pixels
+        // (milestone 785): both along the reading direction, turned round by `mirror`.
+        let off_x = (pose.dx * bounds.width + pose.shift_x) * mirror;
+        let off_y = pose.shift_y;
         let plain = (pose.scale - 1.0).abs() < 1e-4 && pose.opacity > 0.999;
         if plain {
-            self.render_screen(screen, id, bounds, off_x, clip);
+            self.render_screen(screen, id, bounds, (off_x, off_y), clip);
             return;
         }
         let mark = (self.scene.primitives().len(), self.xform_base());
-        self.render_screen(screen, id, bounds, off_x, clip);
+        self.render_screen(screen, id, bounds, (off_x, off_y), clip);
         let (p0, base) = mark;
         let group = self.scene.split_off(p0);
         // A page not yet faded in is still a layer, at nothing: a hero on it is about to
         // fly from it, and the flight takes it out of here.
         let centre = Point::new(
             bounds.x + off_x + bounds.width * 0.5,
-            bounds.y + bounds.height * 0.5,
+            bounds.y + off_y + bounds.height * 0.5,
         );
         let matrix = Affine::scale(pose.scale, pose.scale).about(centre);
         self.scene.push_primitive(Primitive::Layer {
@@ -6152,7 +6159,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         screen: &'a dyn Widget<Msg>,
         id: WidgetId,
         bounds: Rect,
-        off_x: f32,
+        (off_x, off_y): (f32, f32),
         clip: Rect,
     ) {
         let rects = self.cached_rects(
@@ -6165,7 +6172,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         self.walk(
             screen,
             id,
-            (bounds.x + off_x, bounds.y),
+            (bounds.x + off_x, bounds.y + off_y),
             screen_clip,
             &rects,
             &mut index,

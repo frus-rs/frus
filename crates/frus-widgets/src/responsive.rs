@@ -699,6 +699,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().is_some_and(|w| w.navigator_gesture())
     }
 
+    fn navigator_transition(&self) -> Option<crate::PageTransitionsBuilder> {
+        self.inner.as_ref().and_then(|w| w.navigator_transition())
+    }
+
     fn navigator_retained(&self) -> usize {
         self.inner.as_ref().map_or(0, |w| w.navigator_retained())
     }

@@ -68,6 +68,8 @@ use std::rc::{Rc, Weak};
 
 use frus_core::{AnimationController, Curve, SpringDescription};
 
+use crate::PageTransitionsBuilder;
+
 use crate::component::{request_rebuild, BuildContext};
 use crate::navigator::Navigator;
 use crate::notifier::{Listenable, Subscription};
@@ -277,12 +279,14 @@ pub struct GoRoute {
     routes: Vec<GoRoute>,
     redirect: Option<Redirect>,
     shell: Option<ShellParts>,
+    transition: Option<PageTransitionsBuilder>,
 }
 
 struct ShellParts {
     builder: ShellBuilder,
     branches: Vec<ShellBranch>,
     back: ShellBack,
+    branch_transition: Option<PageTransitionsBuilder>,
 }
 
 /// One branch of a [shell](GoRoute::shell): the routes of one tab, and where the tab opens
@@ -359,6 +363,7 @@ impl GoRoute {
             routes: Vec::new(),
             redirect: None,
             shell: None,
+            transition: None,
         }
     }
 
@@ -421,8 +426,53 @@ impl GoRoute {
                 builder: Rc::new(move |cx, shell, body| Box::new(builder(cx, shell, body))),
                 branches,
                 back: ShellBack::default(),
+                branch_transition: None,
             }),
+            transition: None,
         }
+    }
+
+    /// How a [shell](Self::shell) moves from one branch to another — a tab to another tab.
+    /// By default it does not: tabs switch at once, as they do on most phones. A
+    /// [`PageTransitionsBuilder::FadeThrough`] is the Material choice for the destinations
+    /// of a navigation bar; a [`PageTransitionsBuilder::SharedAxis`] along X moves towards
+    /// the tab chosen, forwards to a later one and backwards to an earlier one.
+    ///
+    /// ```
+    /// use frus_widgets::{text, GoRoute, PageTransitionsBuilder, ShellBranch};
+    ///
+    /// let tabs = GoRoute::shell(|_, _, body| body, vec![
+    ///     ShellBranch::new(vec![GoRoute::new("/a", |_, _| text("a"))]),
+    ///     ShellBranch::new(vec![GoRoute::new("/b", |_, _| text("b"))]),
+    /// ])
+    /// .branch_transition(PageTransitionsBuilder::FadeThrough);
+    /// # let _ = tabs;
+    /// ```
+    pub fn branch_transition(mut self, transition: PageTransitionsBuilder) -> Self {
+        match self.shell.as_mut() {
+            Some(shell) => shell.branch_transition = Some(transition),
+            None => debug_assert!(
+                false,
+                "`branch_transition` is for a route made with `GoRoute::shell`"
+            ),
+        }
+        self
+    }
+
+    /// How this route's page arrives and leaves, instead of the transition the theme's
+    /// [`page_transitions`](crate::Theme::page_transitions) gives its platform. A push
+    /// plays the arriving page's transition, a pop the leaving page's.
+    ///
+    /// ```
+    /// use frus_widgets::{text, GoRoute, PageTransitionsBuilder, SharedAxis};
+    ///
+    /// let step = GoRoute::new("/signup/2", |_, _| text("step two"))
+    ///     .transition(PageTransitionsBuilder::SharedAxis(SharedAxis::X));
+    /// # let _ = step;
+    /// ```
+    pub fn transition(mut self, transition: PageTransitionsBuilder) -> Self {
+        self.transition = Some(transition);
+        self
     }
 
     /// What the system's Back does on the first page of a branch that is not the first, for
@@ -480,6 +530,8 @@ struct Node {
     member: Option<(u64, usize)>,
     /// When this route is itself a shell: what it is.
     spec: Option<Rc<ShellSpec>>,
+    /// The route's own transition, if it has one.
+    transition: Option<PageTransitionsBuilder>,
 }
 
 /// A shell, as the router keeps it.
@@ -488,6 +540,8 @@ struct ShellSpec {
     /// Where each branch opens the first time.
     initial: Vec<String>,
     back: ShellBack,
+    /// How it moves between branches, if it does.
+    branch_transition: Option<PageTransitionsBuilder>,
 }
 
 /// What building the route tree collects on the way.
@@ -532,6 +586,7 @@ fn build_node(
             builder: parts.builder,
             initial,
             back: parts.back,
+            branch_transition: parts.branch_transition,
         });
         building.shells.insert(id, spec.clone());
         return Rc::new(Node {
@@ -543,6 +598,7 @@ fn build_node(
             children,
             member: None,
             spec: Some(spec),
+            transition: route.transition,
         });
     }
     let full_path = match parent {
@@ -590,6 +646,7 @@ fn build_node(
         children,
         member,
         spec: None,
+        transition: route.transition,
     });
     if let Some(name) = route.name {
         let clash = building.names.insert(name.clone(), node.clone());
@@ -728,6 +785,10 @@ struct Transition {
     from_shell: Option<ShellStacks>,
     controller: AnimationController,
     forward: bool,
+    /// What it plays: the route's own, or the theme's (milestone 785).
+    builder: PageTransitionsBuilder,
+    /// Whether it is a shell moving between two of its branches.
+    branch: bool,
 }
 
 struct PopShared<T> {
@@ -933,6 +994,11 @@ struct Inner {
     /// push or pop runs for (milestone 620). The zoom, the reference's fallback, until a
     /// theme has said.
     transitions: Cell<crate::PageTransitionsBuilder>,
+    /// The motion tokens of that theme: how long a motion pattern runs (milestone 785).
+    motion: RefCell<std::sync::Arc<crate::MotionTheme>>,
+    /// Whether the motion is turned down where the router was last built: a move then
+    /// shows its page at once.
+    still: Cell<bool>,
     unique: Cell<u64>,
     refresh: RefCell<Option<Subscription>>,
     /// Whether the stack restored for this router has been looked for (milestone 753).
@@ -998,6 +1064,8 @@ impl GoRouter {
                 started: Cell::new(false),
                 built: Cell::new(false),
                 transitions: Cell::new(crate::PageTransitionsBuilder::Zoom),
+                motion: RefCell::new(std::sync::Arc::new(crate::MotionTheme::M3)),
+                still: Cell::new(false),
                 replaced: Cell::new(false),
                 unique: Cell::new(0),
                 refresh: RefCell::new(None),
@@ -1869,7 +1937,8 @@ impl GoRouter {
     /// `slide` says so — and then keeps the shells' branches, settles the results of the
     /// pages that left, and tells the observers.
     fn install(&self, pages: Vec<Page>, kind: RouteChangeKind, slide: bool) {
-        let animate = slide && self.inner.config.borrow().animate;
+        // With the motion turned down, a page is simply there (milestone 785).
+        let animate = slide && self.inner.config.borrow().animate && !self.inner.still.get();
         let keep = self.inner.config.borrow().keep_popped;
         let shells_before = self.inner.shells.borrow().clone();
         let mut stack = self.inner.stack.borrow_mut();
@@ -1891,28 +1960,48 @@ impl GoRouter {
         }
         let old_top = stack.pages.last().cloned();
         let new_top = pages.last().cloned();
-        // Another branch of the same shell: tabs switch at once, as they do on phones.
-        let switches_branch = match (
+        // Another branch of the same shell: tabs switch at once, as they do on phones —
+        // unless the shell has a transition between its branches (milestone 785), which
+        // goes forwards to a later branch and backwards to an earlier one.
+        let switch = match (
             old_top.as_ref().and_then(|p| p.shell),
             new_top.as_ref().and_then(|p| p.shell),
         ) {
-            (Some((a, x)), Some((b, y))) => a == b && x != y,
-            _ => false,
+            (Some((a, x)), Some((b, y))) if a == b && x != y => Some((a, y > x)),
+            _ => None,
         };
-        if switches_branch {
+        let branch_transition = switch.and_then(|(shell, _)| {
+            self.inner
+                .config
+                .borrow()
+                .shells
+                .get(&shell)
+                .and_then(|spec| spec.branch_transition)
+        });
+        if switch.is_some() && branch_transition.is_none() {
             stack.transition = None;
         }
-        if let (true, false, Some(old), Some(new)) = (animate, switches_branch, &old_top, &new_top)
-        {
+        let plays = switch.is_none() || branch_transition.is_some();
+        if let (true, true, Some(old), Some(new)) = (animate, plays, &old_top, &new_top) {
             if old.key != new.key {
-                let forward = !stack.pages.iter().any(|page| page.key == new.key);
+                let forward = match switch {
+                    Some((_, later)) => later,
+                    None => !stack.pages.iter().any(|page| page.key == new.key),
+                };
+                // A push plays the arriving page's own transition, a pop the leaving
+                // page's; a page with none plays the theme's.
+                let builder = match (branch_transition, forward) {
+                    (Some(builder), _) => builder,
+                    (None, true) => self.transition_of(new),
+                    (None, false) => self.transition_of(old),
+                };
                 // **Linear, over the transition's own duration** (milestone 620): the
                 // reference's route animation runs at a constant pace, and each transition
                 // shapes it with its own curves. It was a spring, shaped by nobody.
                 let mut controller = AnimationController::unit();
                 controller.set_value(0.0);
                 controller.forward(
-                    self.inner.transitions.get().transition_duration(),
+                    builder.transition_duration_in(&self.inner.motion.borrow(), forward),
                     Curve::Linear,
                 );
                 stack.transition = Some(Transition {
@@ -1922,6 +2011,8 @@ impl GoRouter {
                         .and_then(|(shell, _)| shells_before.get(&shell).cloned()),
                     controller,
                     forward,
+                    builder,
+                    branch: switch.is_some(),
                 });
             }
         }
@@ -1950,6 +2041,14 @@ impl GoRouter {
             }
         }
         self.settle_results(&before, &shells_before);
+    }
+
+    /// The transition a page arrives and leaves with: its route's own, else the theme's.
+    fn transition_of(&self, page: &Page) -> PageTransitionsBuilder {
+        page.node
+            .as_ref()
+            .and_then(|node| node.transition)
+            .unwrap_or_else(|| self.inner.transitions.get())
     }
 
     /// Keeps each shell's branches in step with the stack: the run of a shell's pages is its
@@ -2101,8 +2200,11 @@ impl GoRouter {
     /// stays, whichever the momentum and the position say.
     pub fn back_gesture_end(&self, velocity: f32) {
         let deep_enough = self.back_action() == BackAction::Page;
+        let top = self.inner.stack.borrow().pages.last().cloned();
         let mut stack = self.inner.stack.borrow_mut();
-        let cupertino = self.inner.transitions.get() == crate::PageTransitionsBuilder::Cupertino;
+        let cupertino = top.map_or(self.inner.transitions.get(), |page| {
+            self.transition_of(&page)
+        }) == crate::PageTransitionsBuilder::Cupertino;
         if let Some(back) = stack.back.as_mut() {
             let mut settle = AnimationController::unit();
             settle.set_value(back.progress);
@@ -2203,6 +2305,12 @@ impl GoRouter {
         self.inner
             .transitions
             .set(theme.page_transitions.builder_for(theme.platform));
+        if !std::sync::Arc::ptr_eq(&self.inner.motion.borrow(), &theme.motion) {
+            *self.inner.motion.borrow_mut() = theme.motion.clone();
+        }
+        self.inner
+            .still
+            .set(cx.runtime().still || crate::MediaQuery::reduce_motion());
         cx.runtime().states.provide(Rc::new(self.clone()));
         let error_builder = self.inner.config.borrow().error.clone();
         // What is on the stack is copied out, so that a page's builder can ask the router
@@ -2217,6 +2325,8 @@ impl GoRouter {
                         t.from_shell.clone(),
                         t.controller.value(),
                         t.forward,
+                        t.builder,
+                        t.branch,
                     )
                 }),
                 stack.back.as_ref().map(|b| b.progress),
@@ -2333,24 +2443,34 @@ impl GoRouter {
             }
         };
         let top = pages.last().expect("a router has at least one page");
+        // A back gesture takes the page on top away with that page's own transition.
+        let top_transition = self.transition_of(top);
         let gesture = back
             .filter(|_| depth >= 2)
             .and_then(|progress| Some((progress, play(top, &pages[depth - 2])?)));
-        let slide = transition
-            .as_ref()
-            .and_then(|(from, snapshot, progress, forward)| {
-                Some((from, snapshot, *progress, *forward, play(from, top)?))
-            });
+        let slide =
+            transition
+                .as_ref()
+                .and_then(|(from, snapshot, progress, forward, builder, branch)| {
+                    // A move between two branches plays in the shell's own navigator.
+                    let at = if *branch {
+                        top.shell.map(|(shell, _)| Some(shell))
+                    } else {
+                        play(from, top)
+                    };
+                    Some((from, snapshot, *progress, *forward, *builder, at?))
+                });
         let gesture_in = |scope: Option<u64>| {
             gesture
                 .filter(|(_, at)| *at == scope)
                 .map(|(progress, _)| progress)
         };
         let slide_in = |scope: Option<u64>| {
-            slide
-                .as_ref()
-                .filter(|(.., at)| *at == scope)
-                .map(|(from, _, progress, forward, _)| ((*from).clone(), *progress, *forward))
+            slide.as_ref().filter(|(.., at)| *at == scope).map(
+                |(from, _, progress, forward, builder, _)| {
+                    ((*from).clone(), *progress, *forward, *builder)
+                },
+            )
         };
 
         // A shell: its frame, around a navigator of its own holding every branch's pages —
@@ -2398,8 +2518,8 @@ impl GoRouter {
                 live.then(|| gesture_in(Some(shell))).flatten(),
                 live.then(|| slide_in(Some(shell))).flatten(),
             ) {
-                (Some(progress), _) => Motion::Gesture(progress),
-                (None, Some((from, progress, forward))) => {
+                (Some(progress), _) => Motion::Gesture(progress, top_transition),
+                (None, Some((from, progress, forward, builder))) => {
                     let at = match slots.iter().position(|slot| slot.page == from.key) {
                         Some(at) => at,
                         None => {
@@ -2415,6 +2535,7 @@ impl GoRouter {
                         from: at,
                         progress,
                         forward,
+                        builder,
                     }
                 }
                 _ => Motion::Still,
@@ -2492,8 +2613,8 @@ impl GoRouter {
             });
         }
         let motion = match (gesture_in(None), slide_in(None)) {
-            (Some(progress), _) if units.len() >= 2 => Motion::Gesture(progress),
-            (_, Some((from, progress, forward))) => {
+            (Some(progress), _) if units.len() >= 2 => Motion::Gesture(progress, top_transition),
+            (_, Some((from, progress, forward, builder))) => {
                 let key = page_unit_key(&from);
                 let at = match slots.iter().position(|slot| slot.page == key) {
                     Some(at) => Some(at),
@@ -2526,6 +2647,7 @@ impl GoRouter {
                         from: at,
                         progress,
                         forward,
+                        builder,
                     },
                     None => Motion::Still,
                 }
@@ -2553,13 +2675,15 @@ enum Unit {
 /// What a navigator plays.
 enum Motion {
     Still,
-    /// A back gesture, `progress` of the way: the top page leaving for the one beneath.
-    Gesture(f32),
+    /// A back gesture, `progress` of the way: the top page leaving for the one beneath,
+    /// with its transition.
+    Gesture(f32, PageTransitionsBuilder),
     /// A transition, from the page at `from` to the one on top.
     Slide {
         from: usize,
         progress: f32,
         forward: bool,
+        builder: PageTransitionsBuilder,
     },
 }
 
@@ -2568,7 +2692,7 @@ enum Motion {
 fn assemble(slots: Vec<Slot>, depth: usize, motion: Motion) -> Navigator {
     let top = depth - 1;
     let (shown, mut navigator) = match motion {
-        Motion::Gesture(progress) if depth >= 2 => {
+        Motion::Gesture(progress, builder) if depth >= 2 => {
             let below = depth - 2;
             let navigator = Navigator::new(slots[below].key, (slots[below].make)(progress))
                 .from(
@@ -2578,22 +2702,26 @@ fn assemble(slots: Vec<Slot>, depth: usize, motion: Motion) -> Navigator {
                     false,
                 )
                 // The finger drives it: the pages follow linearly.
-                .gesture(true);
+                .gesture(true)
+                .transition(builder);
             ([top, below], navigator)
         }
         Motion::Slide {
             from,
             progress,
             forward,
+            builder,
         } if from != top => {
             // The page leaving is either still in the stack (a push left it one entry down)
             // or gone from it (a pop took it off the top), kept or not.
-            let navigator = Navigator::new(slots[top].key, (slots[top].make)(progress)).from(
-                slots[from].key,
-                (slots[from].make)(1.0 - progress),
-                progress,
-                forward,
-            );
+            let navigator = Navigator::new(slots[top].key, (slots[top].make)(progress))
+                .from(
+                    slots[from].key,
+                    (slots[from].make)(1.0 - progress),
+                    progress,
+                    forward,
+                )
+                .transition(builder);
             ([top, from], navigator)
         }
         _ => (
@@ -3819,5 +3947,165 @@ mod shell_tests {
             "/b shown, /a and /a/details kept"
         );
         assert_eq!(inner.navigator_retained(), 2);
+    }
+}
+
+/// Milestone 785: a route's own transition, a shell's transition between its branches,
+/// and reduced motion.
+#[cfg(test)]
+mod motion_patterns {
+    use super::*;
+    use crate::{Container, SharedAxis};
+
+    fn page(_: &BuildContext, _: &GoRouterState) -> Container {
+        Container::new()
+    }
+
+    fn built(r: &GoRouter, runtime: &crate::Runtime) -> Box<dyn Widget> {
+        let theme = crate::Theme::default().with_platform(frus_core::TargetPlatform::Linux);
+        r.build(&BuildContext::for_test(runtime, &theme))
+    }
+
+    /// A navigator found: its motion, its transition, and how many pages it shows.
+    type Found = (Option<(f32, bool)>, Option<PageTransitionsBuilder>, usize);
+
+    fn navigators(widget: &dyn Widget, out: &mut Vec<Found>) {
+        if widget.navigator().is_some() {
+            out.push((
+                widget.navigator(),
+                widget.navigator_transition(),
+                widget.children().len() - widget.navigator_retained(),
+            ));
+        }
+        for child in widget.children() {
+            navigators(child.as_ref(), out);
+        }
+    }
+
+    fn builder_of(r: &GoRouter) -> Option<(PageTransitionsBuilder, bool, bool)> {
+        r.inner
+            .stack
+            .borrow()
+            .transition
+            .as_ref()
+            .map(|t| (t.builder, t.forward, t.branch))
+    }
+
+    /// **A route with a transition of its own plays it**: on its push and on its pop,
+    /// under a theme whose platform would zoom; a route without one plays the theme's.
+    /// Its duration is the pattern's, from the theme's tokens.
+    #[test]
+    fn a_route_s_own_transition_is_played_both_ways() {
+        let r = GoRouter::new(vec![
+            GoRoute::new("/", page),
+            GoRoute::new("/step", page)
+                .transition(PageTransitionsBuilder::SharedAxis(SharedAxis::X)),
+            GoRoute::new("/plain", page),
+        ]);
+        let runtime = crate::Runtime::default();
+        let _ = built(&r, &runtime);
+        r.push("/step");
+        assert_eq!(
+            builder_of(&r),
+            Some((
+                PageTransitionsBuilder::SharedAxis(SharedAxis::X),
+                true,
+                false
+            ))
+        );
+        let mut found = Vec::new();
+        navigators(built(&r, &runtime).as_ref(), &mut found);
+        assert_eq!(
+            found[0].1,
+            Some(PageTransitionsBuilder::SharedAxis(SharedAxis::X)),
+            "the navigator is told"
+        );
+        let mut frames = 0;
+        while r.tick(0.01) {
+            frames += 1;
+            assert!(frames < 1000);
+        }
+        assert!((29..=31).contains(&frames), "300 ms, medium2: {frames}");
+
+        r.pop();
+        assert_eq!(
+            builder_of(&r),
+            Some((
+                PageTransitionsBuilder::SharedAxis(SharedAxis::X),
+                false,
+                false
+            )),
+            "the leaving page's"
+        );
+        while r.tick(0.01) {}
+        r.push("/plain");
+        assert_eq!(
+            builder_of(&r).map(|b| b.0),
+            Some(PageTransitionsBuilder::Zoom),
+            "the theme's"
+        );
+    }
+
+    fn tabs(transition: Option<PageTransitionsBuilder>) -> GoRouter {
+        let shell = GoRoute::shell(
+            |_, _, body| body,
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/a", page)]),
+                ShellBranch::new(vec![GoRoute::new("/b", page)]),
+            ],
+        );
+        let shell = match transition {
+            Some(t) => shell.branch_transition(t),
+            None => shell,
+        };
+        GoRouter::new(vec![shell]).initial_location("/a")
+    }
+
+    /// **A shell with a branch transition fades through between its tabs**, in its own
+    /// navigator, both tabs drawn; forwards to a later tab and backwards to an earlier.
+    /// Without one, tabs switch at once, as before.
+    #[test]
+    fn a_shell_s_branch_transition_plays_between_tabs() {
+        let r = tabs(Some(PageTransitionsBuilder::FadeThrough));
+        let runtime = crate::Runtime::default();
+        let _ = built(&r, &runtime);
+        r.go_branch(1);
+        assert_eq!(
+            builder_of(&r),
+            Some((PageTransitionsBuilder::FadeThrough, true, true))
+        );
+        r.tick(0.1);
+        let mut found = Vec::new();
+        navigators(built(&r, &runtime).as_ref(), &mut found);
+        let inner = found
+            .iter()
+            .find(|(motion, ..)| motion.is_some_and(|(p, _)| p < 1.0))
+            .expect("a navigator plays it");
+        assert_eq!(inner.1, Some(PageTransitionsBuilder::FadeThrough));
+        assert_eq!(inner.2, 2, "both tabs drawn");
+        while r.tick(0.01) {}
+        r.go_branch(0);
+        assert_eq!(
+            builder_of(&r).map(|b| b.1),
+            Some(false),
+            "back to an earlier tab"
+        );
+
+        let plain = tabs(None);
+        let _ = built(&plain, &runtime);
+        plain.go_branch(1);
+        assert_eq!(builder_of(&plain), None, "at once");
+    }
+
+    /// **With the motion turned down, a move shows its page at once.**
+    #[test]
+    fn with_reduced_motion_a_page_is_simply_there() {
+        let r = GoRouter::new(vec![GoRoute::new("/", page), GoRoute::new("/b", page)]);
+        let mut runtime = crate::Runtime::default();
+        runtime.still = true;
+        let _ = built(&r, &runtime);
+        r.push("/b");
+        assert!(builder_of(&r).is_none());
+        assert_eq!(r.location(), "/b");
     }
 }

@@ -8,11 +8,31 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 783 so far, each documenting the objective, the alternatives
+> record — one per step, 785 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The Material motion system: patterns, presence and presets** (J785). New
+  `MotionPattern::{FadeThrough, SharedAxis(SharedAxis::X | Y | Z), FadeScale}` with
+  `pose(progress, entering, forward)`, timed from `theme.motion` (300 ms, fade scale 150/75 ms),
+  the shared X axis turning round in right-to-left layouts; `container_transform` for the
+  container transform. They are page transitions — `PageTransitionsBuilder::FadeThrough`,
+  `SharedAxis(..)`, `FadeScale`, per route with `GoRoute::transition`, as the theme's default
+  with `PageTransitionsTheme::all`, between a shell's tabs with `GoRoute::branch_transition`
+  (tabs still switch at once without it) — and switches between two children with
+  `AnimatedSwitcher::patterned` / `.pattern` / `.reverse` / `.fill_color`. `OpenContainer`
+  grows a card into a page and back (`OpenContainer::builder` keeps its own state,
+  `OpenContainer::new(open, ..).on_open(..).on_close(..)` is controlled), styled by
+  `OpenContainerTheme` on `theme.widgets.open_container`. Presence: `AnimatedPresence::new` /
+  `::of` plays an exit before a removed child goes, then lets it go with its state and its taps;
+  `PresenceList` does it per keyed item, with a staggered entrance; `Staggered` brings children
+  in one after another. `MotionPreset` names the specification's duration and easing pairs and
+  `Transition` is a reusable enter/exit value (`Transition::preset(MotionPreset::EmphasizedEnter)
+  .slide(0.0, 16.0)`). Under reduced motion all of them, and the router's page transitions, are
+  instant. `PagePose` gains `shift_x`/`shift_y` and `PageTransitionsBuilder` three variants
+  (a breaking change for exhaustive matches and struct literals). New `Navigator::transition`,
+  `Widget::navigator_transition`. Example: `cargo run -p frus-demo --example motion`.
 - **The desktop window comes back as it was left; decoration at its own frame rate** (J783).
   The window's size, place and maximized state are kept in `window.json` in the application's
   data folder and restored before it is shown, fitted to the screens there are now (a window

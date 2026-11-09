@@ -874,6 +874,9 @@ macro_rules! forward_transparent {
             fn navigator_gesture(&self) -> bool {
                 self.inner.navigator_gesture()
             }
+            fn navigator_transition(&self) -> Option<$crate::PageTransitionsBuilder> {
+                self.inner.navigator_transition()
+            }
             fn navigator_retained(&self) -> usize {
                 self.inner.navigator_retained()
             }

@@ -177,6 +177,8 @@ pub struct WidgetThemes {
     pub tooltip: TooltipTheme,
     /// Defaults for [`Tree`](crate::Tree).
     pub tree: TreeTheme,
+    /// Defaults for [`OpenContainer`](crate::OpenContainer) (milestone 785).
+    pub open_container: crate::OpenContainerTheme,
 }
 
 /// How a selection in text that is not a field looks — a

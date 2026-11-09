@@ -16,6 +16,9 @@
 
 use frus_core::{Curve, TargetPlatform};
 
+use crate::motion::MotionTheme;
+use crate::motionpatterns::{MotionPattern, MotionPose, SharedAxis};
+
 /// One of the reference's page transitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PageTransitionsBuilder {
@@ -31,6 +34,29 @@ pub enum PageTransitionsBuilder {
     /// (`FadeForwardsPageTransitionsBuilder`). What Android uses when no back gesture is
     /// under way.
     FadeForwards,
+    /// **Fade through** (milestone 785): the page leaving fades out, then the page
+    /// arriving fades in as it grows from 92 %, over the surface. For pages that are not
+    /// related to each other. See [`MotionPattern::FadeThrough`].
+    FadeThrough,
+    /// **Shared axis** (milestone 785): the pages move 30 px along the axis — or scale, in
+    /// depth — as one fades out and the other in. For pages that are steps of one flow.
+    /// See [`MotionPattern::SharedAxis`].
+    SharedAxis(SharedAxis),
+    /// **Fade scale** (milestone 785): the page arriving fades in as it grows from 80 %
+    /// over the page under it, which does not move; leaving, it fades out. For a page that
+    /// stands over the one under it, as a full-screen dialog does. See
+    /// [`MotionPattern::FadeScale`].
+    FadeScale,
+}
+
+impl From<MotionPattern> for PageTransitionsBuilder {
+    fn from(pattern: MotionPattern) -> Self {
+        match pattern {
+            MotionPattern::FadeThrough => PageTransitionsBuilder::FadeThrough,
+            MotionPattern::SharedAxis(axis) => PageTransitionsBuilder::SharedAxis(axis),
+            MotionPattern::FadeScale => PageTransitionsBuilder::FadeScale,
+        }
+    }
 }
 
 /// How the theme's platform chooses a [`PageTransitionsBuilder`]: the reference's
@@ -77,6 +103,24 @@ impl PageTransitionsTheme {
         self
     }
 
+    /// The same theme, with `builder` for **every** platform: the one transition an
+    /// application uses wherever it runs.
+    ///
+    /// ```
+    /// use frus_widgets::{PageTransitionsBuilder, PageTransitionsTheme, TargetPlatform};
+    ///
+    /// let theme = PageTransitionsTheme::default().all(PageTransitionsBuilder::FadeThrough);
+    /// assert_eq!(
+    ///     theme.builder_for(TargetPlatform::Ios),
+    ///     PageTransitionsBuilder::FadeThrough
+    /// );
+    /// ```
+    #[must_use]
+    pub fn all(mut self, builder: PageTransitionsBuilder) -> Self {
+        self.builders = [Some(builder); 6];
+        self
+    }
+
     /// The builder for `platform`: its own, else the zoom, as the reference falls back
     /// (`page_transitions_theme.dart:881`) — except iOS, which slides whatever.
     pub fn builder_for(&self, platform: TargetPlatform) -> PageTransitionsBuilder {
@@ -97,6 +141,11 @@ pub struct PagePose {
     pub scale: f32,
     /// Its opacity.
     pub opacity: f32,
+    /// How far it is moved along the reading direction **in logical pixels**, on top of
+    /// `dx`: positive towards the end edge. The shared axis's 30 px (milestone 785).
+    pub shift_x: f32,
+    /// How far it is moved down, in logical pixels.
+    pub shift_y: f32,
 }
 
 impl PagePose {
@@ -105,7 +154,21 @@ impl PagePose {
         dx: 0.0,
         scale: 1.0,
         opacity: 1.0,
+        shift_x: 0.0,
+        shift_y: 0.0,
     };
+}
+
+impl From<MotionPose> for PagePose {
+    fn from(pose: MotionPose) -> Self {
+        PagePose {
+            dx: 0.0,
+            scale: pose.scale,
+            opacity: pose.opacity,
+            shift_x: pose.dx,
+            shift_y: pose.dy,
+        }
+    }
 }
 
 /// What a transition paints at one moment: the two pages, and what lies between them.
@@ -139,11 +202,40 @@ impl PageTransitionsBuilder {
     /// How long a push or a pop takes, in seconds: 300 ms for the zoom, 500 for the iOS
     /// slide, 450 for the fade (`page_transitions_builder.dart:66`, `route.dart:155`,
     /// `page_transitions_theme.dart:470`).
+    ///
+    /// The motion patterns take theirs from the default motion tokens here; see
+    /// [`transition_duration_in`](Self::transition_duration_in) for a theme's.
     pub fn transition_duration(self) -> f32 {
+        self.transition_duration_in(&MotionTheme::M3, true)
+    }
+
+    /// How long a push (`forward`) or a pop takes under `motion`, in seconds. The
+    /// platforms' own transitions keep their platform's numbers; the motion patterns
+    /// read the tokens — 300 ms (`medium2`) for fade through and shared axis, 150 ms
+    /// (`short3`) for a fade scale arriving and 75 ms for one leaving.
+    pub fn transition_duration_in(self, motion: &MotionTheme, forward: bool) -> f32 {
         match self {
             PageTransitionsBuilder::Zoom => 0.3,
             PageTransitionsBuilder::Cupertino => 0.5,
             PageTransitionsBuilder::FadeForwards => 0.45,
+            _ => {
+                let pattern = self.pattern().unwrap_or(MotionPattern::FadeThrough);
+                if forward {
+                    pattern.duration(motion)
+                } else {
+                    pattern.reverse_duration(motion)
+                }
+            }
+        }
+    }
+
+    /// The motion pattern this transition is, if it is one.
+    pub fn pattern(self) -> Option<MotionPattern> {
+        match self {
+            PageTransitionsBuilder::FadeThrough => Some(MotionPattern::FadeThrough),
+            PageTransitionsBuilder::SharedAxis(axis) => Some(MotionPattern::SharedAxis(axis)),
+            PageTransitionsBuilder::FadeScale => Some(MotionPattern::FadeScale),
+            _ => None,
         }
     }
 
@@ -157,7 +249,33 @@ impl PageTransitionsBuilder {
             PageTransitionsBuilder::Zoom => zoom(p, forward),
             PageTransitionsBuilder::Cupertino => cupertino(p, forward, gesture),
             PageTransitionsBuilder::FadeForwards => fade_forwards(p, forward),
+            PageTransitionsBuilder::FadeThrough => pattern(MotionPattern::FadeThrough, p, forward),
+            PageTransitionsBuilder::SharedAxis(axis) => {
+                pattern(MotionPattern::SharedAxis(axis), p, forward)
+            }
+            PageTransitionsBuilder::FadeScale => pattern(MotionPattern::FadeScale, p, forward),
         }
+    }
+}
+
+/// A motion pattern between two pages: the page arriving and the page leaving, posed by
+/// the pattern. On a push the page on top arrives; on a pop the page on top leaves and
+/// the one under it arrives. A fade scale moves the page on top only, as a dialog does
+/// over what it covers. The patterns that fill stand the pages on the surface.
+fn pattern(pattern: MotionPattern, p: f32, forward: bool) -> TransitionFrame {
+    let (top, below) = match (pattern, forward) {
+        (MotionPattern::FadeScale, _) => (pattern.pose(p, forward, forward), MotionPose::REST),
+        (_, true) => (pattern.pose(p, true, true), pattern.pose(p, false, true)),
+        (_, false) => (pattern.pose(p, false, false), pattern.pose(p, true, false)),
+    };
+    TransitionFrame {
+        top: top.into(),
+        below: below.into(),
+        backdrop: if pattern.fills() && p < 1.0 { 1.0 } else { 0.0 },
+        scrim: 0.0,
+        barrier: 0.0,
+        edge_shadow: 0.0,
+        mirrored: pattern.mirrored(),
     }
 }
 
@@ -183,9 +301,9 @@ fn zoom(p: f32, forward: bool) -> TransitionFrame {
     if forward {
         TransitionFrame {
             top: PagePose {
-                dx: 0.0,
                 scale: scale(0.85, 1.0),
                 opacity: interval(0.125, 0.25, p),
+                ..PagePose::REST
             },
             below: PagePose {
                 scale: scale(1.0, 1.05),
@@ -205,9 +323,9 @@ fn zoom(p: f32, forward: bool) -> TransitionFrame {
     } else {
         TransitionFrame {
             top: PagePose {
-                dx: 0.0,
                 scale: scale(1.0, 0.9),
                 opacity: 1.0 - interval(0.0825, 0.2075, p),
+                ..PagePose::REST
             },
             below: PagePose {
                 scale: scale(1.1, 1.0),
@@ -269,26 +387,26 @@ fn fade_forwards(p: f32, forward: bool) -> TransitionFrame {
         (
             PagePose {
                 dx: 0.25 * (1.0 - slide),
-                scale: 1.0,
                 opacity: interval(0.0, 0.75, p),
+                ..PagePose::REST
             },
             PagePose {
                 dx: -0.25 * slide,
-                scale: 1.0,
                 opacity: 1.0 - interval(0.0, 0.25, p),
+                ..PagePose::REST
             },
         )
     } else {
         (
             PagePose {
                 dx: 0.25 * slide,
-                scale: 1.0,
                 opacity: 1.0 - interval(0.0, 0.25, p),
+                ..PagePose::REST
             },
             PagePose {
                 dx: -0.25 * (1.0 - slide),
-                scale: 1.0,
                 opacity: interval(0.0, 0.75, p),
+                ..PagePose::REST
             },
         )
     };
@@ -333,7 +451,16 @@ mod tests {
     /// rest**, push or pop, with nothing left between them.
     #[test]
     fn every_transition_begins_and_ends_at_rest() {
-        for builder in [B::Zoom, B::Cupertino, B::FadeForwards] {
+        for builder in [
+            B::Zoom,
+            B::Cupertino,
+            B::FadeForwards,
+            B::FadeThrough,
+            B::SharedAxis(SharedAxis::X),
+            B::SharedAxis(SharedAxis::Y),
+            B::SharedAxis(SharedAxis::Z),
+            B::FadeScale,
+        ] {
             for forward in [true, false] {
                 let start = builder.frame(0.0, forward, false);
                 let end = builder.frame(1.0, forward, false);
@@ -346,6 +473,8 @@ mod tests {
                 for (pose, what) in [(was, "start"), (will, "end")] {
                     assert!(
                         pose.dx.abs() < 1e-4
+                            && pose.shift_x.abs() < 1e-4
+                            && pose.shift_y.abs() < 1e-4
                             && (pose.scale - 1.0).abs() < 1e-4
                             && (pose.opacity - 1.0).abs() < 1e-4,
                         "{builder:?} forward={forward} {what}: {pose:?}"
@@ -430,5 +559,63 @@ mod tests {
         assert!(!end.mirrored);
         let pop = B::FadeForwards.frame(0.0, false, false);
         assert_eq!(pop.below.dx, -0.25);
+    }
+
+    /// **The motion patterns as page transitions**: on a push the page on top is the
+    /// arriving one, on a pop the leaving one — posed by the same function as a switcher's
+    /// children — over the surface; the shared X axis turns round in right-to-left.
+    #[test]
+    fn the_motion_patterns_pose_the_two_pages() {
+        let axis = MotionPattern::SharedAxis(SharedAxis::X);
+        let push = B::SharedAxis(SharedAxis::X).frame(0.4, true, false);
+        assert_eq!(push.top, PagePose::from(axis.pose(0.4, true, true)));
+        assert_eq!(push.below, PagePose::from(axis.pose(0.4, false, true)));
+        assert!(push.top.shift_x > 0.0 && push.below.shift_x < 0.0);
+        assert!(push.mirrored);
+        assert_eq!(push.backdrop, 1.0, "over the surface");
+        let pop = B::SharedAxis(SharedAxis::X).frame(0.4, false, false);
+        assert_eq!(pop.top, PagePose::from(axis.pose(0.4, false, false)));
+        assert_eq!(pop.below, PagePose::from(axis.pose(0.4, true, false)));
+        assert!(
+            pop.top.shift_x > 0.0,
+            "the page popped goes towards the end edge"
+        );
+        let through = B::FadeThrough.frame(0.65, true, false);
+        let posed = MotionPattern::FadeThrough.pose(0.65, true, true);
+        assert!((through.top.scale - posed.scale).abs() < 1e-6);
+        assert!(!through.mirrored);
+    }
+
+    /// **A fade scale moves the page on top only**; it arrives in 150 ms and leaves in 75.
+    #[test]
+    fn a_fade_scale_page_leaves_the_page_under_it_alone() {
+        let push = B::FadeScale.frame(0.5, true, false);
+        assert_eq!(push.below, PagePose::REST);
+        assert!(push.top.scale < 1.0 && push.top.opacity == 1.0);
+        assert_eq!(push.backdrop, 0.0);
+        let pop = B::FadeScale.frame(0.5, false, false);
+        assert_eq!(pop.below, PagePose::REST);
+        assert!((pop.top.opacity - 0.5).abs() < 1e-6);
+        let m = MotionTheme::M3;
+        assert!((B::FadeScale.transition_duration_in(&m, true) - 0.15).abs() < 1e-6);
+        assert!((B::FadeScale.transition_duration_in(&m, false) - 0.075).abs() < 1e-6);
+        assert!((B::FadeThrough.transition_duration() - 0.3).abs() < 1e-6);
+        let slow = MotionTheme {
+            medium2: 0.5,
+            ..MotionTheme::M3
+        };
+        assert_eq!(
+            B::SharedAxis(SharedAxis::Y).transition_duration_in(&slow, true),
+            0.5
+        );
+        assert_eq!(
+            B::Zoom.transition_duration_in(&slow, true),
+            0.3,
+            "the platform's own"
+        );
+        let theme = PageTransitionsTheme::default().all(B::FadeScale);
+        for platform in TargetPlatform::ALL {
+            assert_eq!(theme.builder_for(platform), B::FadeScale);
+        }
     }
 }
