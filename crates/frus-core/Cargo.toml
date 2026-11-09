@@ -14,3 +14,5 @@ categories = ["gui", "graphics"]
 
 [dependencies]
 bytemuck.workspace = true
+# An invalid OpenType tag or language tag in a text style is ignored, and the console is told.
+log.workspace = true

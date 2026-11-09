@@ -288,6 +288,7 @@ impl RichText {
                 // fade-out applies to the decorations too.
                 decoration_color: style.decoration_color.map(|c| c.fade(opacity)),
                 letter_spacing: style.letter_spacing,
+                shaping: style.shaping,
             })
             .collect()
     }
