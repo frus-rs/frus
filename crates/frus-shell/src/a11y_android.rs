@@ -65,6 +65,10 @@ pub(crate) mod action {
     pub const SCROLL_FORWARD: i32 = 0x0000_1000;
     /// `ACTION_SCROLL_BACKWARD`.
     pub const SCROLL_BACKWARD: i32 = 0x0000_2000;
+    /// `ACTION_EXPAND`.
+    pub const EXPAND: i32 = 0x0004_0000;
+    /// `ACTION_COLLAPSE`.
+    pub const COLLAPSE: i32 = 0x0008_0000;
     /// `ACTION_SET_TEXT`.
     pub const SET_TEXT: i32 = 0x0020_0000;
     /// `AccessibilityAction.ACTION_SET_PROGRESS`'s id, `android.R.id.accessibilityActionSetProgress`:
@@ -346,6 +350,13 @@ fn to_row(
     if sem.clickable && enabled {
         flags |= flag::CLICKABLE | flag::FOCUSABLE;
         actions |= action::CLICK;
+        // A control that opens something offers to open or to close it, which is how
+        // TalkBack says "expanded" or "collapsed" (milestone 786). Either is a press.
+        match sem.expanded {
+            Some(true) => actions |= action::COLLAPSE,
+            Some(false) => actions |= action::EXPAND,
+            None => {}
+        }
     }
     AndroidNode {
         id,
@@ -669,7 +680,7 @@ pub(crate) fn to_action(
     }
     let forward = request.action == action::SCROLL_FORWARD;
     Some(match request.action {
-        action::CLICK => A11yAction::Click(widget),
+        action::CLICK | action::EXPAND | action::COLLAPSE => A11yAction::Click(widget),
         action::FOCUS => A11yAction::Focus(widget),
         action::CLEAR_FOCUS => A11yAction::ClearFocus(widget),
         action::SET_TEXT => A11yAction::SetValue(widget, request.text.clone().unwrap_or_default()),
@@ -781,6 +792,39 @@ mod tests {
         // An empty field has no text: its hint is what is read.
         let empty = one(sem(Role::TextInput).label("Name").value(""));
         assert_eq!(empty.text, None);
+    }
+
+    /// **A control that opens something offers the other state** (milestone 786): a
+    /// collapsed one can be expanded, an expanded one collapsed, which is what TalkBack
+    /// reads as "collapsed" or "expanded" — and either action is the press it stands for.
+    #[test]
+    fn an_opening_control_offers_to_expand_or_collapse() {
+        let shut = one(sem(Role::Button).label("More").clickable().expanded(false));
+        assert_ne!(shut.actions & action::EXPAND, 0);
+        assert_eq!(shut.actions & action::COLLAPSE, 0);
+        let open = one(sem(Role::Button).label("More").clickable().expanded(true));
+        assert_ne!(open.actions & action::COLLAPSE, 0);
+        assert_eq!(open.actions & action::EXPAND, 0);
+        let plain = one(sem(Role::Button).label("Save").clickable());
+        assert_eq!(plain.actions & (action::EXPAND | action::COLLAPSE), 0);
+
+        let mut ids = VirtualIds::default();
+        let nodes = [(
+            wid(1),
+            Rect::new(0.0, 0.0, 50.0, 50.0),
+            sem(Role::Button).label("More").clickable().expanded(false),
+        )];
+        let tree = build(&nodes, &[], None, 1.0, &mut ids);
+        let request = Request {
+            id: ids.by_widget[&wid(1)],
+            action: action::EXPAND,
+            text: None,
+            value: 0.0,
+        };
+        assert_eq!(
+            to_action(&request, &tree, &ids),
+            Some(A11yAction::Click(wid(1)))
+        );
     }
 
     /// **States and actions**: a box is checkable and checked, a tab selected, a button

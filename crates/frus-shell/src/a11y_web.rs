@@ -364,6 +364,16 @@ fn apply(el: &HtmlElement, sem: &SemanticsProperties) {
             element.set_attribute("aria-checked", "mixed").ok();
         }
     }
+    match sem.expanded {
+        Some(expanded) => {
+            element
+                .set_attribute("aria-expanded", if expanded { "true" } else { "false" })
+                .ok();
+        }
+        None => {
+            element.remove_attribute("aria-expanded").ok();
+        }
+    }
     if sem.disabled {
         element.set_attribute("aria-disabled", "true").ok();
         if sem.clickable {

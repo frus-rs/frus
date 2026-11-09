@@ -264,6 +264,8 @@ pub struct Drawer<Msg = crate::callback::Callback> {
     open: bool,
     right: bool,
     permanent: bool,
+    /// Whether a sideways drag moves an open modal panel and, past half way, dismisses it.
+    drag_to_dismiss: bool,
     on_dismiss: Option<Msg>,
     /// The drawer's content, supplied by the caller (before `DrawerPanel` wrapping).
     panel_content: Cell<Option<Box<dyn Widget<Msg>>>>,
@@ -295,6 +297,7 @@ impl<Msg: Clone + 'static> Drawer<Msg> {
             open,
             right: false,
             permanent: false,
+            drag_to_dismiss: false,
             on_dismiss: None,
             panel_content: Cell::new(None),
             body_content: Cell::new(None),
@@ -396,6 +399,15 @@ impl<Msg: Clone + 'static> Drawer<Msg> {
     /// Docks the drawer to the **right** edge (left by default).
     pub fn right(mut self) -> Self {
         self.right = true;
+        self
+    }
+
+    /// Lets a sideways drag **move the open modal panel** with the finger, towards the
+    /// edge it lives on; let go past half way it is dismissed with
+    /// [`on_dismiss`](Self::on_dismiss), short of that it settles back (milestone 786).
+    /// Off by default.
+    pub fn drag_to_dismiss(mut self, drag: bool) -> Self {
+        self.drag_to_dismiss = drag;
         self
     }
 
@@ -516,6 +528,41 @@ impl<Msg: Clone + 'static> Widget<Msg> for Drawer<Msg> {
 
     fn overlay_dismiss(&self) -> Option<Msg> {
         self.on_dismiss.clone()
+    }
+
+    /// An open modal panel that may be dragged away takes a sideways drag.
+    fn pan_axis(&self) -> Option<crate::PanAxis> {
+        (self.drag_to_dismiss && self.open && !self.permanent && self.on_dismiss.is_some())
+            .then_some(crate::PanAxis::Horizontal)
+    }
+
+    /// The panel follows the finger: its progress falls by the distance dragged towards
+    /// the edge it lives on, over its width.
+    fn pan_value(&self, event: crate::PanEvent, value: f32, rtl: bool) -> Option<f32> {
+        match event {
+            crate::PanEvent::Start { .. } => Some(value.clamp(0.0, 1.0)),
+            crate::PanEvent::Update { delta, .. } => {
+                let width = self.width.unwrap_or(DRAWER_WIDTH).max(1.0);
+                let along = delta.x / width;
+                let on_right = self.right != rtl;
+                let next = if on_right {
+                    value - along
+                } else {
+                    value + along
+                };
+                Some(next.clamp(0.0, 1.0))
+            }
+            crate::PanEvent::End { .. } => None,
+        }
+    }
+
+    /// Let go with less than half of it showing, it is dismissed.
+    fn on_value_release(&self, value: f32) -> Option<Msg> {
+        if value < 0.5 {
+            self.on_dismiss.clone()
+        } else {
+            None
+        }
     }
 
     fn overlay_scrim(&self, theme: &Theme) -> Option<Color> {
