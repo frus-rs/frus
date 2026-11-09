@@ -227,7 +227,7 @@ impl LinearProgressIndicator {
 
 /// The four ends of the two indeterminate lines, as the reference times them
 /// (`progress_indicator.dart:189`): each an interval of the 1800 ms run on its own cubic.
-fn indeterminate_ends(t: f32) -> [f32; 4] {
+pub(crate) fn indeterminate_ends(t: f32) -> [f32; 4] {
     let ms = |ms: f32| ms / (INDETERMINATE_PERIOD * 1000.0);
     let curve = |begin: f32, len: f32, x1: f32, y1: f32, x2: f32, y2: f32| Curve::Interval {
         begin: ms(begin),
