@@ -19,18 +19,30 @@ const MINIMUM_MACOS: &str = "10.15";
 
 /// The bundle's `Info.plist`, for a program called `executable`.
 pub(crate) fn info_plist(project: &Project, executable: &str, declared: &[Declared]) -> String {
-    let version = project.version.as_deref().unwrap_or("0.1.0");
+    // The version people see and the build's number, `--build-name` and `--build-number`
+    // when given (milestone 790); the name, a flavor's when it has one.
+    let version = project.version_name();
+    let build = project
+        .build_number()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| version.clone());
+    let name = project
+        .variant
+        .flavor
+        .as_ref()
+        .and_then(|f| f.app_name.clone())
+        .unwrap_or_else(|| project.package.clone());
     let identifier = project.bundle_identifier();
     let mut entries: Vec<(&str, Entry)> = vec![
         ("CFBundleDevelopmentRegion", Entry::Text("en")),
         ("CFBundleExecutable", Entry::Text(executable)),
         ("CFBundleIdentifier", Entry::Text(&identifier)),
         ("CFBundleInfoDictionaryVersion", Entry::Text("6.0")),
-        ("CFBundleName", Entry::Text(&project.package)),
-        ("CFBundleDisplayName", Entry::Text(&project.package)),
+        ("CFBundleName", Entry::Text(&name)),
+        ("CFBundleDisplayName", Entry::Text(&name)),
         ("CFBundlePackageType", Entry::Text("APPL")),
-        ("CFBundleShortVersionString", Entry::Text(version)),
-        ("CFBundleVersion", Entry::Text(version)),
+        ("CFBundleShortVersionString", Entry::Text(&version)),
+        ("CFBundleVersion", Entry::Text(&build)),
         ("LSMinimumSystemVersion", Entry::Text(MINIMUM_MACOS)),
         ("NSPrincipalClass", Entry::Text("NSApplication")),
         ("NSHighResolutionCapable", Entry::True),

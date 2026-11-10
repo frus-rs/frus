@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! `frus build <target>`: what you ship, for one platform, in release.
+//! `frus build <target>`: what you ship, for one platform, in release (or `--profile`,
+//! `--debug`), as a flavor and a version when asked (milestone 790).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -9,11 +10,27 @@ use std::process::ExitCode;
 use crate::cargo::{self, Mode};
 use crate::project::Project;
 
+/// What `frus build` was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Request {
+    pub target: Target,
+    pub mode: Mode,
+    /// `--split-per-abi`: one APK per processor.
+    pub split_per_abi: bool,
+    /// `--flavor`, `--define`, `--build-name`, `--build-number` (milestone 790).
+    pub variant: crate::variant::Variant,
+}
+
 /// What `frus build` makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Target {
     /// The Android package.
     Apk,
+    /// The Android App Bundle a store takes.
+    AppBundle,
+    /// The desktop program in the system's installer: a setup program on Windows, a `.deb`
+    /// on Linux, a disk image on macOS.
+    Installer,
     /// The site: `web/`, with the release build in `web/pkg/`.
     Web,
     /// The desktop program, for the system this runs on.
@@ -24,6 +41,8 @@ impl Target {
     pub(crate) fn parse(word: &str) -> Result<Target, String> {
         match word {
             "apk" | "android" => Ok(Target::Apk),
+            "appbundle" | "aab" => Ok(Target::AppBundle),
+            "installer" => Ok(Target::Installer),
             "web" => Ok(Target::Web),
             "desktop" => Ok(Target::Desktop),
             "windows" | "linux" | "macos" if word == std::env::consts::OS => Ok(Target::Desktop),
@@ -32,17 +51,54 @@ impl Target {
                 std::env::consts::OS
             )),
             other => Err(format!(
-                "frus build makes `apk`, `web` or `{}`, not `{other}`",
+                "frus build makes `apk`, `appbundle`, `web`, `{}` or `installer`, not `{other}`",
                 std::env::consts::OS
             )),
         }
     }
 }
 
-pub(crate) fn build(target: Target, mode: Mode) -> Result<ExitCode, String> {
+pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
+    let Request {
+        target,
+        mode,
+        split_per_abi,
+        variant,
+    } = request;
+    if split_per_abi && target != Target::Apk {
+        return Err("--split-per-abi goes with `frus build apk`".into());
+    }
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
-    let project = Project::find(&here)?;
+    let mut project = Project::find(&here)?;
+    variant.apply(mode, &mut project, &here)?;
+    crate::variant::export(&project);
+    say_variant(&project, mode);
     match target {
+        Target::Apk if split_per_abi => {
+            let apk = cargo::cargo_apk(&project, mode, None)?;
+            let apks = crate::android_pack::split_per_abi(&project, mode, &apk)?;
+            println!();
+            for apk in &apks {
+                println!("Built {} ({}).", apk.display(), size(apk));
+            }
+            println!("One per processor: a store, or a device's own, installs the one it runs.");
+        }
+        Target::AppBundle => {
+            let apk = cargo::cargo_apk(&project, mode, None)?;
+            let bundle = crate::android_pack::app_bundle(&project, mode, &apk)?;
+            println!(
+                "\nBuilt {} ({}): the App Bundle to upload to a store, version {} ({}).",
+                bundle.display(),
+                size(&bundle),
+                project.version_name(),
+                project.version_code()
+            );
+        }
+        Target::Installer => {
+            let exe = cargo::build_desktop(&project, mode)?;
+            let installer = crate::installer::make(&project, mode, &exe)?;
+            println!("\nBuilt {} ({}).", installer.display(), size(&installer));
+        }
         Target::Apk => {
             let apk = cargo::build_apk(&project, mode, None)?;
             println!("\nBuilt {} ({}).", apk.display(), size(&apk));
@@ -99,6 +155,32 @@ pub(crate) fn build(target: Target, mode: Mode) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// What is built, when it is more than the plain build: the mode, the flavor, the version.
+fn say_variant(project: &Project, mode: Mode) {
+    let variant = &project.variant;
+    let mut parts = vec![format!("{} build", mode.name())];
+    if let Some(flavor) = &variant.flavor {
+        parts.push(format!("flavor {}", flavor.name));
+    }
+    if variant.build_name.is_some() || variant.build_number.is_some() {
+        parts.push(format!(
+            "version {}{}",
+            project.version_name(),
+            project
+                .build_number()
+                .map(|n| format!(" ({n})"))
+                .unwrap_or_default()
+        ));
+    }
+    if !variant.defines.is_empty() {
+        let keys: Vec<_> = variant.defines.iter().map(|(k, _)| k.as_str()).collect();
+        parts.push(format!("defines {}", keys.join(", ")));
+    }
+    if parts.len() > 1 || mode == Mode::Profile {
+        crate::report::say(&format!("Building: {}.", parts.join("; ")));
+    }
+}
+
 fn size(path: &Path) -> String {
     match std::fs::metadata(path) {
         Ok(meta) => format!("{:.1} MB", meta.len() as f64 / 1_048_576.0),
@@ -115,6 +197,9 @@ mod tests {
         assert_eq!(Target::parse("apk"), Ok(Target::Apk));
         assert_eq!(Target::parse("android"), Ok(Target::Apk));
         assert_eq!(Target::parse("web"), Ok(Target::Web));
+        assert_eq!(Target::parse("appbundle"), Ok(Target::AppBundle));
+        assert_eq!(Target::parse("aab"), Ok(Target::AppBundle));
+        assert_eq!(Target::parse("installer"), Ok(Target::Installer));
         assert_eq!(Target::parse("desktop"), Ok(Target::Desktop));
         assert_eq!(Target::parse(std::env::consts::OS), Ok(Target::Desktop));
         assert!(Target::parse("ios").unwrap_err().contains("not `ios`"));

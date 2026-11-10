@@ -83,6 +83,25 @@ target_sdk_version = 34
 # [package.metadata.android.signing.release]
 # path = "/absolute/path/to/release.keystore"
 # keystore_password = "..."
+#
+# The same key signs `frus build apk` and the App Bundle a store takes, `frus build appbundle`.
+
+# --- Flavors ---
+#
+# Versions of the application built from the same code: `frus run --flavor dev`,
+# `frus build appbundle --flavor prod`. Each may have its own name, Android id (to install
+# beside the others), resources laid over `res/` (another icon), cargo features and values
+# for the code, read with `frus::flavor()` and `frus::define!("API_URL")`.
+#
+# [package.metadata.frus.flavors.dev]
+# app_name = "{{project-name}} dev"
+# application_id_suffix = ".dev"
+# resources = "flavors/dev/res"
+#
+# [package.metadata.frus.flavors.dev.defines]
+# API_URL = "https://dev.example.com"
+#
+# [package.metadata.frus.flavors.prod]
 
 # --- Permissions ---
 #
@@ -122,6 +141,14 @@ lto = "fat"          # cross-crate inlining, and the dead code goes out with it
 codegen-units = 1    # a single unit: better optimisation, slower build
 panic = "abort"      # no unwinding tables (cargo ignores this for tests)
 strip = true         # symbols and debuginfo out of the shipped binary
+
+# `frus run --profile` and `frus build --profile`: optimised as the release is, so what is
+# measured is what ships, with the symbols a profiler reads kept and the frames timed in the
+# log.
+[profile.profile]
+inherits = "release"
+strip = false
+debug = "line-tables-only"
 
 # The web's release profile: the `.wasm` is **downloaded**, so here size comes first.
 # `frus build web` uses it; by hand:

@@ -40,6 +40,23 @@ pub(crate) struct Project {
     /// The lines of `[package.metadata.frus.permissions]`, `(key, value as written)`: read by
     /// [`Project::permissions`] (milestone 744).
     pub permission_lines: Vec<(String, String)>,
+    /// The flavors the manifest declares, `[package.metadata.frus.flavors.<name>]`
+    /// (milestone 790).
+    pub flavors: Vec<crate::variant::Flavor>,
+    /// The names of the package's `[features]`.
+    pub features: Vec<String>,
+    /// Whether the manifest declares the `profile` profile `frus run --profile` builds with.
+    pub has_profile_profile: bool,
+    /// `[package.metadata.android.signing.<profile>]`: `(profile, path, keystore_password)`.
+    pub signing: Vec<(String, String, String)>,
+    /// `[package.metadata.android.application] label`: the name people see.
+    pub label: Option<String>,
+    /// `[package.metadata.android] resources` and `assets`, relative to the root.
+    pub android_resources: Option<String>,
+    pub android_assets: Option<String>,
+    /// What `--flavor`, `--define`, `--build-name` and `--build-number` resolved to, once
+    /// applied (see `variant::Variant::apply`); the plain build's otherwise.
+    pub variant: crate::variant::Resolved,
 }
 
 impl Project {
@@ -90,6 +107,13 @@ impl Project {
         let mut devices: Vec<Vec<String>> = Vec::new();
         let mut version = None;
         let mut permission_lines = Vec::new();
+        let mut flavors: Vec<crate::variant::Flavor> = Vec::new();
+        let mut features = Vec::new();
+        let mut has_profile_profile = false;
+        let mut signing: Vec<(String, String, String)> = Vec::new();
+        let mut label = None;
+        let mut android_resources = None;
+        let mut android_assets = None;
         for line in text.lines() {
             let line = line.trim();
             if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -101,7 +125,16 @@ impl Project {
                 match section.as_str() {
                     "lib" => has_lib_section = true,
                     "profile.web-release" => has_web_release = true,
+                    "profile.profile" => has_profile_profile = true,
                     _ => {}
+                }
+                if let Some(name) = flavor_of(&section) {
+                    if !flavors.iter().any(|f| f.name == name) {
+                        flavors.push(crate::variant::Flavor::named(name));
+                    }
+                }
+                if let Some(profile) = section.strip_prefix("package.metadata.android.signing.") {
+                    signing.push((profile.to_string(), String::new(), String::new()));
                 }
                 continue;
             }
@@ -126,8 +159,32 @@ impl Project {
                 }
                 _ => {}
             }
+            if section == "features" {
+                features.push(key.trim_matches('"').to_string());
+            }
+            if let Some(name) = flavor_of(&section) {
+                if let Some(flavor) = flavors.iter_mut().find(|f| f.name == name) {
+                    flavor.read(section.ends_with(".defines"), key, value);
+                }
+            }
+            if section.starts_with("package.metadata.android.signing.") {
+                if let (Some(entry), Some(text)) = (signing.last_mut(), string_value(value)) {
+                    match key {
+                        "path" => entry.1 = text,
+                        "keystore_password" => entry.2 = text,
+                        _ => {}
+                    }
+                }
+            }
             let value = string_value(value);
             match (section.as_str(), key, value) {
+                ("package.metadata.android.application", "label", Some(value)) => {
+                    label = Some(value)
+                }
+                ("package.metadata.android", "resources", Some(value)) => {
+                    android_resources = Some(value)
+                }
+                ("package.metadata.android", "assets", Some(value)) => android_assets = Some(value),
                 ("package", "name", Some(value)) => package = Some(value),
                 ("lib", "name", Some(value)) => lib_name = Some(value),
                 ("package", "version", Some(value)) => version = Some(value),
@@ -155,6 +212,14 @@ impl Project {
             devices: devices.into_iter().map(|pairs| pairs.join(";")).collect(),
             version,
             permission_lines,
+            flavors,
+            features,
+            has_profile_profile,
+            signing,
+            label,
+            android_resources,
+            android_assets,
+            variant: crate::variant::Resolved::default(),
         })
     }
 
@@ -218,6 +283,17 @@ impl Project {
     }
 }
 
+/// The flavor a `[package.metadata.frus.flavors.<name>]` header (or its `.defines` table)
+/// belongs to.
+fn flavor_of(section: &str) -> Option<&str> {
+    let rest = section.strip_prefix("package.metadata.frus.flavors.")?;
+    let name = rest
+        .strip_suffix(".defines")
+        .unwrap_or(rest)
+        .trim_matches('"');
+    (!name.is_empty() && !name.contains('.')).then_some(name)
+}
+
 /// The header of a project's own devices, as `from_manifest` sees `[[package.metadata.frus.devices]]`.
 const DEVICES: &str = "[package.metadata.frus.devices]";
 
@@ -241,7 +317,7 @@ fn spec_value(raw: &str) -> Option<String> {
 }
 
 /// `["a", "b"]` → `[a, b]`, on one line.
-fn string_list(raw: &str) -> Vec<String> {
+pub(crate) fn string_list(raw: &str) -> Vec<String> {
     raw.trim()
         .trim_start_matches('[')
         .split(']')
@@ -301,7 +377,7 @@ fn is_frus_application(root: &Path, text: &str) -> bool {
 }
 
 /// `"value"` → `value`; anything else (a table, a number) is not a string.
-fn string_value(raw: &str) -> Option<String> {
+pub(crate) fn string_value(raw: &str) -> Option<String> {
     let raw = raw.trim();
     let raw = raw.split(" #").next().unwrap_or(raw).trim();
     raw.strip_prefix('"')

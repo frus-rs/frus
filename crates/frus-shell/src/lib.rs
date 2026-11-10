@@ -62,9 +62,11 @@ mod app;
 mod application;
 #[cfg(any(android, test))]
 mod autofill;
+// The build mode, the flavor, the version and the build-time values (milestone 790).
 /// A field's caret through text that mixes directions, through the shell (milestone 747).
 #[cfg(all(test, desktop))]
 mod bidi_caret_tests;
+mod build_info;
 mod cache_dir;
 mod caret;
 mod command;
@@ -179,6 +181,9 @@ pub use app::testing;
 mod tester;
 pub use app::App;
 pub use application::{Application, Lifecycle, LocationStrategy};
+#[doc(hidden)]
+pub use build_info::{__BuildInfo, __register_build};
+pub use build_info::{app_version, build_mode, flavor, AppVersion, BuildMode};
 pub use command::Command;
 pub use data_dir::app_data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
@@ -308,6 +313,7 @@ macro_rules! main {
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         pub fn run() -> $crate::anyhow::Result<()> {
             $crate::__name_app(::core::module_path!());
+            $crate::__register_build($crate::__build_info!());
             $crate::__install_storage();
             $crate::run($app)
         }
@@ -321,6 +327,7 @@ macro_rules! main {
         #[no_mangle]
         fn android_main(android_app: $crate::AndroidApp) {
             $crate::__name_app(::core::module_path!());
+            $crate::__register_build($crate::__build_info!());
             $crate::__android_started(&android_app);
             if let ::core::result::Result::Err(err) = $crate::run_android($app, android_app) {
                 $crate::log::error!("frus (android) stopped: {:#}", err);
@@ -333,6 +340,7 @@ macro_rules! main {
         #[::wasm_bindgen::prelude::wasm_bindgen(start)]
         pub fn start() {
             $crate::__name_app(::core::module_path!());
+            $crate::__register_build($crate::__build_info!());
             $crate::__install_storage();
             if let ::core::result::Result::Err(err) = $crate::run_web($app) {
                 $crate::log::error!("frus (web) stopped: {:#}", err);

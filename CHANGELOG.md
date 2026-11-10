@@ -8,11 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 787 so far, each documenting the objective, the alternatives
+> record — one per step, 790 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Build modes, flavors, defines, versions and release artifacts** (J790). `frus run` and
+  `frus build` take `--debug` / `--profile` / `--release`, `--flavor <name>`, `--define K=V`
+  and `--define-from-file <file.json|.env>`, `--build-name` and `--build-number`. A profile
+  build is optimised like a release, keeps its symbols and logs its frame timings; `frus
+  create` writes its `[profile.profile]`, and older projects get it through cargo's
+  environment. Flavors are declared under `[package.metadata.frus.flavors.<name>]` (name,
+  Android id suffix, resource overlay, features, defines). The code reads `frus::build_mode()`,
+  `frus::flavor()`, `frus::app_version()` and `frus::define!("KEY")`, a compile-time constant
+  that rebuilds when its value changes. The version reaches Android's `versionName` /
+  `versionCode`, the macOS `Info.plist` and the installers. New artifacts: `frus build
+  appbundle` (an Android App Bundle made with bundletool, fetched on first use, signed with the
+  release key), `frus build apk --split-per-abi`, and `frus build installer` (a per-user NSIS
+  setup program on Windows, a `.deb` on Linux, a disk image on macOS). Guide page:
+  `docs/guide/build-variants.md`.
 - **Material 3 expressive widgets, second batch** (J787). `LinearWavyProgressIndicator` and
   `CircularWavyProgressIndicator` (determinate and indeterminate; the wave flattens near the
   start and the end and flows at the decorative frame rate) and `WavySliderTrackShape` for

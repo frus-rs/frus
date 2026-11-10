@@ -54,6 +54,9 @@ pub struct GuideNetwork;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/animation.md")]
 pub struct GuideAnimation;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/build-variants.md")]
+pub struct GuideBuildVariants;
 #[cfg(all(doctest, feature = "testing"))]
 #[doc = include_str!("../../../docs/guide/testing.md")]
 pub struct GuideTesting;
@@ -98,7 +101,24 @@ pub use frus_shell::log;
 
 // Macros: a glob (`frus_widgets::*`) does **not** re-export `#[macro_export]` macros, so we
 // name them explicitly — hence `frus::main!`, `frus::column!`, `frus::row!`.
+/// A value given at build time: `frus run --define API_URL=https://dev.example.com`, read with
+/// `frus::define!("API_URL")` (milestone 790).
+///
+/// ```
+/// const API_URL: &str = frus::define!("API_URL", "https://example.com");
+/// # let _ = API_URL;
+/// ```
+pub use frus_shell::define;
 pub use frus_shell::main;
+/// What was built: the mode (`--debug`, `--profile`, `--release`), the flavor (`--flavor`) and
+/// the version (`--build-name`, `--build-number`), milestone 790.
+///
+/// ```
+/// if frus::build_mode() == frus::BuildMode::Release {
+///     frus::log::info!("{:?} {:?}", frus::flavor(), frus::app_version());
+/// }
+/// ```
+pub use frus_shell::{app_version, build_mode, flavor, AppVersion, BuildMode};
 pub use frus_widgets::{asset, column, row};
 
 /// Registering the application's own faces, and naming the families text resolves
