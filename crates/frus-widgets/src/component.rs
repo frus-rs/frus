@@ -1559,6 +1559,7 @@ impl<Msg> LazyChild<Msg> {
                 let cx =
                     BuildContext::new((id, depth()), self.kind, runtime, theme, self.scope.clone());
                 let child = build(&cx);
+                crate::rebuilds::note(id);
                 let _ = self.built.set(child);
             }
         }

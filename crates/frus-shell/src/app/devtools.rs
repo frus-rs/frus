@@ -65,6 +65,7 @@ impl<A: Application> App<A> {
 
     /// Answers the requests taken at the start of the frame, against what it laid out.
     pub(super) fn answer_devtools(&mut self) {
+        let asked = !self.devtools.pending.is_empty();
         for request in std::mem::take(&mut self.devtools.pending) {
             let call = match dt::parse(&request.body) {
                 Ok(call) => call,
@@ -82,6 +83,12 @@ impl<A: Application> App<A> {
             let outcome = self.devtools_call(&call.method, &call.params);
             request.answer(dt::answer(&call.id, outcome));
         }
+        // The switches as this frame leaves them, for `state` to be answered without a
+        // frame — from the first request on.
+        self.devtools.active |= asked;
+        if self.devtools.active {
+            dt::publish_state(self.devtools_state());
+        }
     }
 
     /// The surface's logical size.
@@ -91,7 +98,7 @@ impl<A: Application> App<A> {
     }
 
     /// One method of the protocol, answered.
-    fn devtools_call(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+    pub(super) fn devtools_call(&mut self, method: &str, params: &Value) -> Result<Value, String> {
         match method {
             "hello" => Ok(json!({
                 "protocol": dt::PROTOCOL,
@@ -123,7 +130,25 @@ impl<A: Application> App<A> {
                     .iter()
                     .position(|n| n.id == id)
                     .ok_or("that widget is not on screen any more")?;
-                Ok(dt::details_json(&self.devtools.nodes, index, &extras))
+                // The axes each scroll area frees: its content is offered no bound there.
+                let scrolls = |id: WidgetId| {
+                    ui.scroll_regions()
+                        .iter()
+                        .find(|area| area.id == id)
+                        .map_or((false, false), |area| match area.axis {
+                            frus_widgets::Axis::Vertical => (false, true),
+                            frus_widgets::Axis::Horizontal => (true, false),
+                            _ => (true, true),
+                        })
+                };
+                let surface = self.last_size.unwrap_or((0.0, 0.0));
+                Ok(dt::details_json(
+                    &self.devtools.nodes,
+                    index,
+                    &extras,
+                    scrolls,
+                    surface,
+                ))
             }
             "find" => {
                 let finder = Finder::of(params)
@@ -181,6 +206,30 @@ impl<A: Application> App<A> {
                     .get("text")
                     .and_then(Value::as_str)
                     .ok_or("`type` takes the `text` to type")?;
+                // Into a field, straight through the field's editing, as an input method
+                // commits text: on Android the keys' own path is closed to typing while the
+                // input bridge is installed — editing goes through the input connection
+                // alone — and keys sent there were dropped (milestone 788).
+                let field = self.runtime.input.focused.filter(|&id| {
+                    self.tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))
+                        .is_some_and(wants_keyboard)
+                });
+                if let Some(id) = field {
+                    for c in text.chars() {
+                        let key = match c {
+                            '\n' => Key::Enter,
+                            c => Key::Text(c.to_string()),
+                        };
+                        self.apply_key(id, key);
+                    }
+                    self.request_redraw();
+                    return Ok(json!({
+                        "typed": text.chars().count(),
+                        "focused": dt::id_text(id),
+                    }));
+                }
                 for c in text.chars() {
                     let key = match c {
                         '\n' => frus_widgets::ShortcutKey::Enter,
@@ -228,13 +277,6 @@ impl<A: Application> App<A> {
                 let went = self.system_back_step();
                 self.request_redraw();
                 Ok(json!({ "wentBack": went }))
-            }
-            "frames" => {
-                self.devtools.frames.recording = true;
-                // The frames are measured from the next one on: draw it.
-                self.request_redraw();
-                let after = params.get("after").and_then(Value::as_u64);
-                Ok(self.devtools.frames.after(after))
             }
             "state" => Ok(self.devtools_state()),
             "set" => {
@@ -313,6 +355,7 @@ impl<A: Application> App<A> {
             "platform": platform,
             "textScale": self.debug.text_scale.unwrap_or(self.platform.text_scaler),
             "selectMode": self.devtools.select_mode,
+            "repaintRainbow": self.devtools.rainbow,
             "selected": self.devtools.selected.map(dt::id_text),
             "size": self.devtools_size(),
         })
@@ -374,6 +417,9 @@ impl<A: Application> App<A> {
         if let Some(on) = params.get("selectMode").and_then(Value::as_bool) {
             self.devtools.select_mode = on;
         }
+        if let Some(on) = params.get("repaintRainbow").and_then(Value::as_bool) {
+            self.devtools.rainbow = on;
+        }
         Ok(())
     }
 
@@ -413,6 +459,64 @@ impl<A: Application> App<A> {
         let selected = self.devtools.selected?;
         nodes.iter().find(|n| n.id == selected)
     }
+}
+
+/// A colour of the rainbow, the `n`th: hues a golden angle apart, so that two paints in a row
+/// never look alike.
+fn rainbow(n: u32) -> frus_widgets::Color {
+    let hue = (n as f32 * 0.618_034).fract() * 6.0;
+    let x = 1.0 - (hue % 2.0 - 1.0).abs();
+    let (r, g, b) = match hue as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    frus_widgets::Color::rgba(r, g, b, 0.9)
+}
+
+/// `frame` with the repaint rainbow over it: a border around the whole frame, coloured by
+/// how many frames have been drawn, and one around each repaint boundary, coloured by how
+/// many times it has been painted rather than replayed. A colour that stays put is a part of
+/// the screen that was not painted again. `frame` is in physical pixels, `scale` times the
+/// boundaries' logical ones.
+pub(super) fn paint_rainbow(
+    frame: &Scene,
+    boundaries: &[(Rect, u32)],
+    frames: u32,
+    surface: Size,
+    scale: f32,
+) -> Scene {
+    let mut scene = on_top_of(frame);
+    scene.set_clip(Rect::UNBOUNDED);
+    scene.set_owner(0);
+    let width = (3.0 * scale).max(2.0);
+    let whole = Rect::new(0.0, 0.0, surface.width * scale, surface.height * scale);
+    scene.draw_rect(
+        whole,
+        frus_widgets::Color::TRANSPARENT,
+        0.0,
+        width,
+        rainbow(frames),
+    );
+    for (rect, painted) in boundaries {
+        let rect = Rect::new(
+            rect.x * scale,
+            rect.y * scale,
+            rect.width * scale,
+            rect.height * scale,
+        );
+        scene.draw_rect(
+            rect,
+            rainbow(*painted).with_alpha(0.25),
+            0.0,
+            width,
+            rainbow(*painted),
+        );
+    }
+    scene
 }
 
 /// Answers the screenshots asked for with `frame`, the frame just drawn: `width` by `height`
@@ -482,5 +586,59 @@ pub(super) fn answer_screenshots(requests: Vec<dt::Request>) {
                     .into(),
             ),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use frus_widgets::__serde_json::json;
+    use frus_widgets::{component, Column, Text, TextField, Widget};
+
+    use crate::app::testing::Driver;
+    use crate::FrusApp;
+
+    /// `type` writes into the field with the focus through the field's own editing, not
+    /// through the keys: on Android the keys' path is closed to typing while the input
+    /// bridge is installed, and the characters sent there were dropped.
+    #[test]
+    fn typing_reaches_the_field_with_the_focus() {
+        let app = FrusApp::from_fn(|_| {
+            Box::new(component(|cx| {
+                let name = cx.use_state(String::new);
+                let typed = name.clone();
+                Box::new(
+                    Column::new()
+                        .child(
+                            TextField::new(name.get())
+                                .label("Name")
+                                .on_input(move |t: String| typed.set(t)),
+                        )
+                        .child(Text::new(format!("Hello {}", name.get()))),
+                ) as Box<dyn Widget>
+            }))
+        });
+        let mut driver = Driver::new(app, 400.0, 300.0);
+        driver.run(0.1);
+        // The field, found by its label and tapped, has the focus.
+        let field = {
+            let (ui, _) = driver.frame_parts().unwrap();
+            ui.semantics()
+                .iter()
+                .find(|(_, _, sem)| sem.label.as_deref() == Some("Name"))
+                .map(|(_, rect, _)| *rect)
+                .expect("the field")
+        };
+        let at = frus_widgets::Point::new(field.x + 10.0, field.y + field.height / 2.0);
+        driver.press(at);
+        driver.release(at);
+        driver.run(0.1);
+        assert!(driver.focused().is_some(), "the tap focused the field");
+        let answer = driver
+            .devtools_call("type", json!({ "text": "Ada" }))
+            .unwrap();
+        assert_eq!(answer["typed"], 3);
+        driver.run(0.1);
+        let texts: Vec<String> = driver.texts().into_iter().map(|(t, _)| t).collect();
+        assert!(texts.iter().any(|t| t == "Hello Ada"), "{texts:?}");
     }
 }

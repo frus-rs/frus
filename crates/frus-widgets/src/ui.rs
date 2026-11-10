@@ -3968,8 +3968,12 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                             .map(|d| (rc, d.clone()))
                     })
                 };
+                let drawn = sub
+                    .first()
+                    .map(|r| r.translate(translation.0, translation.1))
+                    .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
                 if let Some((rc, data)) = hit {
-                    self.runtime.paint_cache.borrow_mut().note_hit();
+                    self.runtime.paint_cache.borrow_mut().note_hit(id, drawn);
                     self.splice_boundary(data);
                     *index += rc;
                     return;
@@ -3979,7 +3983,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 // interaction maps) for the next frame.
                 let snap = self.snapshot();
                 self.walk_node(widget, id, translation, clip, rects, index);
-                self.runtime.paint_cache.borrow_mut().note_miss();
+                self.runtime.paint_cache.borrow_mut().note_miss(id, drawn);
                 if let Some(data) = self.capture_since(&snap) {
                     self.runtime
                         .paint_cache

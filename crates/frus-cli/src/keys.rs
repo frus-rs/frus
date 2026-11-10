@@ -140,6 +140,12 @@ pub(crate) fn restore() {
     terminal::restore();
 }
 
+/// Whether the application's log may keep its colours when `frus run` passes it on: the run's
+/// error output is a terminal that shows them (milestone 788).
+pub(crate) fn colours() -> bool {
+    std::io::stderr().is_terminal() && terminal::colours()
+}
+
 #[cfg(windows)]
 mod terminal {
     //! The Windows console, through kernel32 — which every Windows program links already.
@@ -160,6 +166,25 @@ mod terminal {
     }
 
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x4;
+
+    /// Lets the console show colours written as escape sequences, on both outputs: whether
+    /// it does now.
+    pub(super) fn colours() -> bool {
+        let mut all = true;
+        for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: plain console calls on this process's own output handles.
+            unsafe {
+                let output = GetStdHandle(which);
+                let mut mode = 0;
+                all &= GetConsoleMode(output, &mut mode) != 0
+                    && SetConsoleMode(output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+            }
+        }
+        all
+    }
     const ENABLE_LINE_INPUT: u32 = 0x2;
     const ENABLE_ECHO_INPUT: u32 = 0x4;
     /// No mode saved yet.
@@ -205,6 +230,11 @@ mod terminal {
 
     use std::process::{Command, Stdio};
     use std::sync::Mutex;
+
+    /// A Unix terminal shows colours as it is.
+    pub(super) fn colours() -> bool {
+        true
+    }
 
     static ORIGINAL: Mutex<Option<String>> = Mutex::new(None);
 

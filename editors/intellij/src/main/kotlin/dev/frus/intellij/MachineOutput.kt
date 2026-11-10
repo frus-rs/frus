@@ -7,7 +7,14 @@ package dev.frus.intellij
 enum class Shown { APP, APP_ERROR, TOOL, TOOL_ERROR }
 
 /** What one line of `frus run --machine` means for the console. */
-data class Said(val text: String?, val shown: Shown, val stopped: Boolean = false, val started: Boolean = false)
+data class Said(
+    val text: String?,
+    val shown: Shown,
+    val stopped: Boolean = false,
+    val started: Boolean = false,
+    /** Where the run serves DevTools, from its `app.devTools` event. */
+    val devTools: String? = null,
+)
 
 object MachineOutput {
     /** The console text for a line of standard output: an event, or a line that is not JSON
@@ -20,6 +27,9 @@ object MachineOutput {
             "app.progress" -> Said(params.str("message").orEmpty(), if (params.bool("error")) Shown.TOOL_ERROR else Shown.TOOL)
             "app.start" -> Said("Running on ${params.str("deviceName") ?: "the device"}…", Shown.TOOL)
             "app.started" -> Said("The application is running. Saving a Rust file reloads it.", Shown.TOOL, started = true)
+            "app.devTools" -> params.str("uri").let { uri ->
+                Said(uri?.let { "DevTools: $it (Tools > frus > Open DevTools)" }, Shown.TOOL, devTools = uri)
+            }
             "app.restarted" -> {
                 val what = if (params.bool("fullRestart")) "Restarted" else "Reloaded"
                 val seconds = (params["seconds"] as? Number)?.toDouble()

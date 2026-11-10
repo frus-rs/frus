@@ -45,6 +45,14 @@ any release may break.
   desktop, on Android (a local socket reached with `adb forward`, no permission needed) and on
   the web. Nothing of it is compiled into a release build. `InspectorNode` now carries the
   widget's key and layout style, and `paint_highlight` paints one designated widget.
+  Also in J788: each widget's **constraints** (the room it was offered) in the inspector and
+  `node`; **rebuild counts** per component (`rebuild_count`, `rebuild_counts`,
+  `take_frame_rebuilds`) in the inspector, per frame and as a "built most" list; a **repaint
+  rainbow** over the frame and its repaint boundaries (`PaintCache::last_frame_boundaries`);
+  `frames`, `state` and `rebuilds` answered without waking a frame, so an idle application
+  stays idle while DevTools polls; the desktop log in DevTools without hot reload too, its
+  colours kept in the terminal; with `-d all`, each device's DevTools address and `v` opening
+  each; **Open DevTools** in the Android Studio plugin; `Dimension` and `LayoutStyle` exported.
 
 - **Material 3 expressive widgets, second batch** (J787). `LinearWavyProgressIndicator` and
   `CircularWavyProgressIndicator` (determinate and indeterminate; the wave flattens near the

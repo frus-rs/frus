@@ -250,6 +250,26 @@ static LOG: Mutex<Log> = Mutex::new(Log {
     next: 0,
 });
 
+/// `line` without the escape sequences that colour it in a terminal.
+pub(crate) fn without_colours(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            // Parameters, then one final byte between `@` and `~`.
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Keeps a line of the application's log for DevTools' log view.
 pub(crate) fn remember(line: &str, error: bool) {
     if let Ok(mut log) = LOG.lock() {
@@ -386,6 +406,13 @@ pub(crate) fn open() {
         report::say("DevTools runs with a debug build: run without --release to have it");
         return;
     };
+    open_address(address, None);
+}
+
+/// Opens `address` in the default browser, saying so, with `whose` (a device) when there are
+/// several.
+pub(crate) fn open_address(address: &str, whose: Option<&str>) {
+    let of = whose.map(|w| format!(" of {w}")).unwrap_or_default();
     let opened = if cfg!(windows) {
         // `start` takes its first quoted argument as a title; the address goes after one.
         Command::new("cmd")
@@ -398,8 +425,8 @@ pub(crate) fn open() {
         Command::new("xdg-open").arg(address).spawn()
     };
     match opened {
-        Ok(_) => report::say(&format!("Opening DevTools: {address}")),
-        Err(_) => report::say(&format!("Open DevTools at {address}")),
+        Ok(_) => report::say(&format!("Opening DevTools{of}: {address}")),
+        Err(_) => report::say(&format!("Open DevTools{of} at {address}")),
     }
 }
 
@@ -684,6 +711,15 @@ mod tests {
             body.len()
         ));
         assert!(call.ends_with(r#"{"result":{"method":"hello"}}"#), "{call}");
+    }
+
+    #[test]
+    fn colours_are_taken_out_of_the_log() {
+        assert_eq!(
+            without_colours("[\u{1b}[2m2026\u{1b}[0m \u{1b}[32mINFO \u{1b}[0m app] hi"),
+            "[2026 INFO  app] hi"
+        );
+        assert_eq!(without_colours("plain"), "plain");
     }
 
     #[test]

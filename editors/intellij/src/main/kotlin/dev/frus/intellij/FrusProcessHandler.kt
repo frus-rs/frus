@@ -23,6 +23,10 @@ class FrusProcessHandler(commandLine: GeneralCommandLine) : KillableProcessHandl
     @Volatile var started = false
         private set
 
+    /** Where the run serves DevTools, once it has said (a debug build only). */
+    @Volatile var devTools: String? = null
+        private set
+
     init {
         setShouldKillProcessSoftly(false)
     }
@@ -39,6 +43,7 @@ class FrusProcessHandler(commandLine: GeneralCommandLine) : KillableProcessHandl
     private fun fromFrus(line: String) {
         val said = MachineOutput.translate(line)
         if (said.started) started = true
+        said.devTools?.let { devTools = it }
         ending.saw(said.text, said.shown, said.stopped)
         said.text?.let { show(it, said.shown) }
     }

@@ -167,6 +167,7 @@ mod prefs;
 mod progressbar;
 mod radio;
 mod rating;
+mod rebuilds;
 /// Pull-to-refresh: the [`refresh::RefreshIndicator`] widget and its retained pull.
 pub mod refresh;
 mod region;
@@ -513,6 +514,7 @@ pub use presence::{AnimatedPresence, PresenceList, Staggered};
 pub use progressbar::LinearProgressIndicator;
 pub use radio::{Radio, RadioGroup};
 pub use rating::Rating;
+pub use rebuilds::{rebuild_count, rebuild_counts, take_frame_rebuilds};
 pub use refresh::{RefreshIndicator, RefreshPhase, RefreshPull, RefreshSpec, Refreshable};
 pub use region::{
     merge_text_stops, region_copy, region_ranges, RegionPoint, RegionSelection, SelectableText,
@@ -748,5 +750,7 @@ pub use frus_core::{ResolvedTextStyle, TextRun, DEFAULT_LINE_HEIGHT, DEFAULT_TEX
 /// `images` feature, and the **fetcher** is registered by whoever has a network. See
 /// [`Image::network`].
 pub use frus_core::{image_fetcher, set_image_fetcher, ImageFetcher};
-pub use frus_layout::{Align, AlignContent, FlexDirection, Justify, Overflowing, Side};
+pub use frus_layout::{
+    Align, AlignContent, Dimension, FlexDirection, Justify, Overflowing, Side, Style as LayoutStyle,
+};
 pub use remote::images_in_flight;

@@ -116,6 +116,93 @@ occluded window now runs the frame when a request of DevTools' is waiting, and a
 answers from the last frame laid out. An agent driving the application must not need its
 window in front.
 
+## Second round: what the first one left
+
+The first version shipped with a list of what it did not do. This round does it.
+
+### Constraints
+
+A box-protocol layout hands each child a minimum and maximum width and height; frus lays out
+with flexbox (taffy), where a child is not handed bounds but is laid out in the room its
+container's content box gives it, then sized by its own size, minimum and maximum style. That
+room is what DevTools shows as the widget's **constraints**: `availableWidth`/`availableHeight`
+(the parent's box less its padding, unbounded along an axis the parent scrolls) and the
+`min`/`max` its style resolves to in it. They are worked out from what the inspector already
+collects (each node's box and style, and the frame's scroll areas), at the moment `node` is
+asked, so a frame pays nothing for them.
+
+Recording the bounds inside the layout itself was weighed and left: the layout runs taffy's
+high-level tree, whose recursion over the nodes is internal and only calls back for measured
+leaves (text, images). Recording what each node received would mean driving taffy through its
+low-level traits — replacing the layout's core for a debugging aid — and for every flex child
+the value recorded would be the same content box shown here. What this does not show is the
+min-content and max-content probes taffy makes while sizing; it shows the final pass.
+
+### Rebuild counts
+
+`frus-widgets` counts each component's builds (debug builds only; `note` is empty in a
+release): `rebuild_count(id)`, `rebuild_counts(limit)` and `take_frame_rebuilds()`. The
+inspector shows the count beside a component and in its details; each frame record carries
+how many components were built for it; the performance view lists the components built most.
+The root `view` of an Elm-style application is not a component and is not counted: the frame
+record's `build` (its time, or `null` when the frame reused the tree) says when it ran.
+
+### An idle application stays idle
+
+The first version answered every request on the next frame, so the performance view's polling
+woke two frames a second. `frames`, `state` and `rebuilds` are now answered on the thread the
+request arrives on, from what the last frame left (a frame publishes the switches once
+DevTools has spoken to the application). An idle application draws nothing while DevTools
+polls it, and the chart shows only frames the application drew for itself. Nothing of
+DevTools runs in an application nobody has opened DevTools on, beyond the socket waiting to be
+connected to (Android) — no thread polls, no frame is drawn.
+
+### Repaint rainbow
+
+frus draws a whole frame each time it draws; there are no compositor layers to colour. What it
+does skip is painting: a repaint boundary (`Widget::repaint_boundary`) replays its last output
+when nothing in it changed. The rainbow outlines the frame in a colour that moves on with each
+frame drawn, and each repaint boundary in a colour that moves on each time it is painted
+rather than replayed: a boundary whose colour stays put was reused. `PaintCache` records the
+boundaries of each frame for it (`last_frame_boundaries`). An application without repaint
+boundaries shows the frame's border only, which is the truth: everything was painted again.
+
+### The log without hot reload
+
+A desktop debug build's output is now read by `frus run` (it was handed the terminal), printed
+as before and kept for DevTools. Its colours survive: the run asks for them with
+`RUST_LOG_STYLE=always` when its own error output is a terminal, turns on escape sequences in
+the Windows console, and DevTools gets the lines without them. The shell's logger now reads
+`RUST_LOG_STYLE`.
+
+### Several devices
+
+With `frus run -d all`, each device has a run of its own, each with its DevTools on a port of
+its own (the first gets 9100, the others whatever port is free). Each run's address is printed
+under its device's tag, and `v` opens every one, named by its device.
+
+### Android Studio
+
+**Tools > frus > Open DevTools** opens the address of the run, which the plugin reads from the
+run's `app.devTools` event; the console says the address too.
+
+### Typing on Android
+
+`type` pressed each character as a key, through the shell's handling of a key. On Android,
+with the input bridge installed, that path is closed to typing on purpose — editing goes
+through the input connection alone, or each keystroke would arrive twice — so the characters
+were dropped while `setText` worked (found by the MCP milestone, on the phone). `type` now
+writes into the focused text field through the field's own editing, as an input method commits
+text, on every platform; with no field focused it still presses keys.
+
+### Hot reload
+
+`frus run` with hot reload (the default of a debug build) was run on Windows with DevTools:
+the engine starts the application with `FRUS_DEV` inherited, so it reports on the same socket
+and DevTools answers as without hot reload; a patch keeps the process and DevTools sees the
+patched widgets; a restart (`R`, or DevTools' `restart`) reconnects the new process on the
+same address. Nothing needed fixing there.
+
 ## How it was tested
 
 - **Unit tests.** `frus-shell`: requests read and answered, ids round-trip, each node's parent
@@ -151,20 +238,30 @@ window in front.
 - Clippy for Android (`aarch64-linux-android`) and the web (`wasm32-unknown-unknown`) on
   `frus-shell`.
 
+- **Second round, Windows** (`frus run`, hot reload, the counter made by `frus create`):
+  `hello`, `tap`, `logs` (the log came through the engine); a hot patch changed "Start auto"
+  to "Begin auto" in 68.9 s and `find` saw the new label; `rebuilds` (two components); `node`
+  of the button gave its constraints (125 by 40, tight, in a 140 by 88 content box);
+  eighteen polls of `frames`, `state` and `rebuilds` over seven seconds left the frame count
+  at 2 — an idle application stayed idle; the repaint rainbow's border changed colour from one
+  frame to the next (pixel read from two screenshots); the performance view with the frames of
+  "Start auto" and the "built most" list (headless Edge); `restart` came back on the same
+  address in 351 s (a machine shared with other builds).
+- **Second round, the phone** (Huawei STK-L21, `frus run -d XMJNW19B23011768 --no-hot`, the
+  counter with a "Name" field added): `type` with `{"target":{"label":"Name"},"text":"Ada
+  Lovelace"}` tapped the field, typed twelve characters, and the page read "Hello Ada
+  Lovelace"; the screenshot shows the text in the field, and the keyboard's suggestion strip
+  following it ("Lovelace"), so the input method saw the text too.
+- Unit tests for the second round: the room offered (content box, scrolled axis, root), the
+  constraints in `node`, frames carrying rebuilds, polling that queues nothing, the rebuild
+  counts, the paint cache's boundaries, the log's colours taken out, a run's `app.devTools`
+  kept per device, `type` reaching a focused field, the Android Studio event.
+
 ## Not done
 
-- **The constraints** a widget was given are not shown: the layout does not record them. The
-  inspector shows the style that asks for them and the box that resulted.
-- **Rebuild counts** per widget are not counted.
-- **Hot reload runs** (`frus run` without `--no-hot`, the default of a debug build) use the
-  same relays (the desktop's socket, the device's socket, the page's queue) but were not run
-  here: the engine's first build takes too long for this milestone's machine time.
-- **The log on the desktop without hot reload** goes straight to the terminal: the run does not
-  read it, so the Logs view is empty there. With hot reload (the default), on Android and on
-  the web, the log is there.
-- **The performance view draws frames itself**: each poll asks the application for its frames,
-  which wakes a frame. The chart shows them; an idle application shows about two frames a
-  second.
-- **Repaint rainbow and layer views**: frus paints one scene a frame, without layers to colour.
+- **Constraints recorded by the layout itself**: shown as the room the flexbox layout offers
+  (see "Constraints" above), not recorded inside taffy; the min-content and max-content probes
+  are not shown.
+- **Rebuilds of an Elm-style `view`**: not a component, not counted; the frame's `build` time
+  says when it ran.
 - **iOS**: no shell yet.
-- **Android Studio**: the plugin has no DevTools command yet.

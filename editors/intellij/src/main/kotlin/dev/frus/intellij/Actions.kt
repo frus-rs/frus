@@ -238,6 +238,18 @@ class PrintSemanticsTreeAction : KeyAction("S")
 class ScreenshotAction : KeyAction("s")
 class DetachAction : KeyAction("d")
 
+/** DevTools of the running application, in the browser: the address `frus run` serves it at. */
+class OpenDevToolsAction : RunAction() {
+    override fun perform(run: FrusProcessHandler) {
+        val address = run.devTools
+        if (address != null) {
+            com.intellij.ide.BrowserUtil.browse(address)
+        } else {
+            run.show("DevTools is not served yet: it comes with a debug build, once the application runs.", Shown.TOOL)
+        }
+    }
+}
+
 /** A `frus` or `cargo` command of its own, in the Run tool window. */
 private fun runTool(project: Project, title: String, command: (String) -> GeneralCommandLine) {
     ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Finding frus", true) {
