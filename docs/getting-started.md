@@ -330,6 +330,9 @@ letter. The directory is made if it is not there; `frus create` never writes ove
 |---|---|
 | `--name <name>` | names the package something other than the directory |
 | `--org <org>` | the reverse domain the Android package starts with: `--org com.acme` gives `com.acme.my_app` (default `com.example`) |
+| `--platforms <list>` | what it is made for: `android`, `web`, `windows`, `macos`, `linux`, or `desktop` for the three, comma-separated (default: all of them) |
+| `--deeplink <link>` | the links that open it: a scheme of its own (`myapp`, for `myapp://orders/42`) or a host whose `https` links it opens (`https://example.com`) |
+| `--description <text>` | one line saying what it is, for `Cargo.toml` and the web page |
 | `--frus-path <dir>` | builds against a checkout of frus rather than the published crates (see below) |
 | `--no-git` | no `git init` (it is skipped anyway inside an existing repository) |
 
@@ -344,6 +347,54 @@ also has:
   publishes a GitHub release with the Windows, Linux and macOS programs, the signed APK and
   the web site. The APK needs two repository secrets, `ANDROID_KEYSTORE` (base64) and
   `ANDROID_KEYSTORE_PASSWORD`; without them the release has no APK.
+
+### Choosing the platforms
+
+`--platforms android,web` writes only what those platforms need: no desktop program, no
+Android tables in `Cargo.toml` without Android, no `web/` without the web, and the README and
+the GitHub workflows without the others' sections and jobs. The choice is recorded in the
+manifest, and the tool reads it back:
+
+```toml
+[package.metadata.frus]
+platforms = ["android", "web"]
+```
+
+`frus run -d all` runs on the devices of those platforms, and `frus run` or `frus build` for
+another one stops with the command that adds it. Adding one later is `frus create` again, in the
+application:
+
+```sh
+frus create --platforms windows,linux .   # the desktop program
+frus create --platforms web .             # web/index.html, and the web's section of Cargo.toml
+```
+
+The files are written if they are missing, the platform's section is appended to `Cargo.toml`
+and the list grows; nothing that was there changes. A manifest without the list (an application
+made before it existed) is made for every platform.
+
+### Links that open the application
+
+`--deeplink myapp` declares the application's own scheme: `myapp://orders/42` opens it at the
+location `/orders/42`, which a router shows as its page and an `Application` hears in
+`open_location`. `--deeplink https://example.com` does the same for that host's `https` links.
+What is written:
+
+- **Android**: the intent filter in `Cargo.toml`
+  (`[[package.metadata.android.application.activity.intent_filter]]`). Try it with
+  `adb shell am start -a android.intent.action.VIEW -d "myapp://orders/42"`. For an `https`
+  host, Android opens the links in the application without asking once the site vouches for it:
+  `frus create` prints the `assetlinks.json` to serve at
+  `https://example.com/.well-known/assetlinks.json`, with your release key's SHA-256
+  fingerprint (`keytool -list -v -keystore release.keystore`).
+- **macOS**: the `.app` that `frus build` and `frus run` make declares the scheme
+  (`CFBundleURLTypes`).
+- **The web**: nothing to declare: the address is the location already.
+- `[package.metadata.frus] deeplink = "myapp"` records it for the rest. Windows and Linux learn a
+  scheme when the application is installed (a `HKCU\Software\Classes\myapp` key, a `.desktop`
+  file with `MimeType=x-scheme-handler/myapp`); see "Links from outside" above.
+
+`frus create --deeplink myapp .` adds the links to an application that has none.
 
 ### Building against a checkout
 
@@ -396,6 +447,21 @@ frus build apk            # what you ship: apk, web or desktop
 `desktop`. The log is the same on every platform: the desktop program's output, the phone's
 logcat filtered on the application, and the browser's console, which the page sends back to the
 terminal.
+
+**Several devices at once.** `-d` may be given more than once, and `-d all` is this computer
+and every connected phone (the browsers are a `-d web` away):
+
+```sh
+frus run -d all
+frus run -d windows -d android -d edge
+```
+
+Each device gets a run of its own — built for its platform, started, followed — and they share
+the terminal: every line comes with its device in front (`[Windows]`, `[STK L21]`), and every
+key goes to all of them. `r` reloads them all, `R` restarts them all, `q` quits them all, `p`
+outlines every widget on every screen. With hot reload, a saved file is patched into every device.
+For an editor, `frus run --machine -d all` passes each run's events through with its own
+`appId`, and a command goes to the run its `params.appId` names, or to every run.
 
 While it runs, `r` **reloads** the application with your change: it is built again and comes
 back on the same page, with the window where it was, and with the state of every component
@@ -519,6 +585,61 @@ releases](guide/build-variants.md).
 The generated project already carries the `[profile.release]` that gets you there:
 link-time optimisation, one codegen unit, no unwinding tables, and the symbols
 stripped. Keep it.
+
+### What the binary is made of (`frus size`)
+
+```sh
+frus build apk --analyze-size        # or desktop, web; the same as `frus size apk`
+frus size web --compare target/frus-size/web-01.json
+frus size path/to/libmy_app.so       # a binary already built: .so, .wasm, .exe with its .map
+```
+
+The release is built once more with its symbols kept, in `target/frus-size/` (the build you
+ship is left alone; the first analysis compiles everything once), and every byte of code and
+read-only data is put down to the crate it comes from. The fonts frus bundles and the files of
+your `assets/` that are inside the binary are listed with their sizes. A table is printed, and
+the whole analysis is written as JSON to `target/frus-size/<platform>-NN.json`, numbered so that
+the earlier ones stay: `--compare` with one says what grew and what shrank since.
+
+```text
+a_all.exe (pe): 14.90 MB as shipped, without its symbols
+
+  crate                                              size   share
+  [unattributed]                                  2.04 MB   13.7%
+  naga                                            1.46 MB    9.8%
+  core                                            1.29 MB    8.7%
+  frus_widgets                                   609.8 kB    4.0%
+  wgpu_hal                                       605.9 kB    4.0%
+  …
+  carried inside                                     size   share
+  frus-text/assets/DejaVuSans-Bold.ttf           692.3 kB    4.6%
+  frus-text/assets/DejaVuSans.ttf                741.9 kB    4.9%
+  …
+```
+
+(The template's counter, a Windows release build: the shader translator, the standard library
+and the renderer weigh more than frus's widgets, and the seven bundled faces are 3.3 MB.)
+
+`[unattributed]` is what no symbol names: string literals, tables the compiler built, data
+whose owner the linker merged away. `[C/C++]` is code with no Rust name.
+
+What makes an application smaller, largest first:
+
+- **Build in release, with the template's profile.** A debug build is tens of times bigger.
+  `frus build` uses `[profile.release]` (link-time optimisation, one codegen unit,
+  `panic = "abort"`, `strip = true`), and the web's `[profile.web-release]` adds
+  `opt-level = "z"`.
+- **Bundle only the fonts you draw** (below): the four groups are about 3.4 MB.
+- **Drop the dictionaries if you do not show Thai, Lao, Khmer or Myanmar**: the
+  `dictionary-line-breaks` feature (on by default) is about 1.1 MB of word lists; without it,
+  text in those scripts breaks only at spaces and punctuation.
+
+```toml
+frus = { version = "0.5", default-features = false, features = ["bundled-sans", "images"] }
+```
+
+- **Leave out the optional features you do not use**: `svg`, `net`, `json`, the desktop ones.
+- **Look again after a dependency is added**: `frus size … --compare` names the crate that grew.
 
 ### Signing
 

@@ -40,6 +40,15 @@ pub(crate) enum Target {
 }
 
 impl Target {
+    /// The platform the target is built for (milestone 791).
+    pub(crate) fn platform(self) -> crate::platforms::AppPlatform {
+        match self {
+            Target::Apk | Target::AppBundle => crate::platforms::AppPlatform::Android,
+            Target::Web => crate::platforms::AppPlatform::Web,
+            Target::Desktop | Target::Installer => crate::platforms::AppPlatform::host(),
+        }
+    }
+
     pub(crate) fn parse(word: &str) -> Result<Target, String> {
         match word {
             "apk" | "android" => Ok(Target::Apk),
@@ -76,6 +85,7 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
     }
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut project = Project::find(&here)?;
+    project.check_platform(target.platform())?;
     variant.apply(mode, &mut project, &here)?;
     crate::variant::export(&project);
     say_variant(&project, mode);
