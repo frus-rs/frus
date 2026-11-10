@@ -1,0 +1,23 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2021"
+# `frus create --description` writes it.
+description = "Widgets for frus applications"
+# The oldest compiler frus builds with. Raise it when you need a newer one.
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+keywords = ["frus", "gui", "widget"]
+
+# A package of widgets for frus applications: a library, which an application adds with
+# `cargo add {{project-name}}` (or a path or git dependency while it is being written).
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+frus = "0.5"
+
+# `cargo run --example gallery` shows the widgets in a window. An example is not part of what
+# an application that depends on the package compiles.
+[[example]]
+name = "gallery"

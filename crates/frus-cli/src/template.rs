@@ -16,16 +16,16 @@ pub struct TemplateFile {
 }
 
 macro_rules! files {
-    ($($path:literal),* $(,)?) => {
+    ($dir:literal: $($path:literal),* $(,)?) => {
         &[$(TemplateFile {
             path: $path,
-            bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/template/", $path)),
+            bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/", $dir, "/", $path)),
         }),*]
     };
 }
 
 /// Every file of the template, in byte order of their paths.
-pub static FILES: &[TemplateFile] = files![
+pub static FILES: &[TemplateFile] = files!["template":
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     ".gitignore",
@@ -44,4 +44,28 @@ pub static FILES: &[TemplateFile] = files![
     "src/lib.rs",
     "tests/counter_test.rs",
     "web/index.html",
+];
+
+/// `frus create --template package`: a library of widgets for frus applications (milestone 791).
+pub static PACKAGE_FILES: &[TemplateFile] = files!["template-package":
+    ".gitignore",
+    "Cargo.toml.liquid",
+    "README.md",
+    "examples/gallery.rs",
+    "src/lib.rs",
+    "tests/tag_test.rs",
+];
+
+/// `frus create --template plugin`: something the platform does, called from Rust, with its
+/// Android side in Java (milestone 791).
+pub static PLUGIN_FILES: &[TemplateFile] = files!["template-plugin":
+    ".gitignore",
+    "Cargo.toml.liquid",
+    "README.md",
+    "android/java/{{org_path}}/{{crate_name}}/{{ClassName}}Plugin.java",
+    "build.rs",
+    "examples/demo.rs",
+    "src/android.rs",
+    "src/lib.rs",
+    "tests/plugin_test.rs",
 ];

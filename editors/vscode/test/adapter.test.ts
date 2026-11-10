@@ -124,6 +124,26 @@ test("reload, restart and stop become frus's commands", async () => {
   assert.equal(frus.sent.length, 3);
 });
 
+test("with several devices the session lasts until the last run stops", async () => {
+  const { frus, messages, request } = session();
+  request("launch", { frus: "frus", cwd: ".", deviceId: "all" });
+  frus.say({ event: "app.start", params: { appId: "a", deviceName: "Windows" } });
+  frus.say({ event: "app.start", params: { appId: "b", deviceName: "STK L21" } });
+  frus.say({ event: "app.stop", params: { appId: "a", error: null } });
+  await tick();
+  // One device stopped: nothing ends, and the other still takes commands.
+  assert.equal(messages.filter((m) => m.event === "terminated").length, 0);
+  request("hotReload");
+  await tick();
+  assert.equal(frus.sent.length, 1);
+  frus.say({ event: "app.stop", params: { appId: "b", error: null } });
+  await tick();
+  frus.process.emit("close", 0, null);
+  await tick();
+  assert.equal(messages.filter((m) => m.event === "terminated").length, 1);
+  assert.ok(outputs(messages, "console").includes("frus run ended (exit code 0).\n"));
+});
+
 test("a run that ends on its own ends the session", async () => {
   const { frus, messages, request } = session();
   request("launch", { frus: "frus", cwd: "." });

@@ -333,6 +333,7 @@ letter. The directory is made if it is not there; `frus create` never writes ove
 | `--platforms <list>` | what it is made for: `android`, `web`, `windows`, `macos`, `linux`, or `desktop` for the three, comma-separated (default: all of them) |
 | `--deeplink <link>` | the links that open it: a scheme of its own (`myapp`, for `myapp://orders/42`) or a host whose `https` links it opens (`https://example.com`) |
 | `--description <text>` | one line saying what it is, for `Cargo.toml` and the web page |
+| `--template <kind>` | `app` (the default), `package` or `plugin` (below) |
 | `--frus-path <dir>` | builds against a checkout of frus rather than the published crates (see below) |
 | `--no-git` | no `git init` (it is skipped anyway inside an existing repository) |
 
@@ -395,6 +396,22 @@ What is written:
   file with `MimeType=x-scheme-handler/myapp`); see "Links from outside" above.
 
 `frus create --deeplink myapp .` adds the links to an application that has none.
+
+### Packages and plugins
+
+`frus create my_widgets --template package` makes a library of widgets for applications: a
+`Tag` widget whose every visual comes from the theme unless it is given, its tests in `tests/`
+(`frus test`) and a window that shows it (`cargo run --example gallery`). An application adds it
+as a dependency and uses its widgets like frus's own.
+
+`frus create battery --template plugin --org com.acme` makes a plugin: something the platform
+does, called from Rust through one function, `battery::platform_version()`. Its Android side is
+Java, in `android/java/com/acme/battery/BatteryPlugin.java`; `build.rs` compiles it with the
+JDK's `javac` and the SDK's `d8` into a dex the library carries, and at run time the dex is
+loaded into the application's activity and called through JNI, the way frus's own Android
+bridges are: the application adds nothing to its manifest or its build. On the desktops and the
+web the function returns `PluginError::Unsupported` until their side is written, never a value
+that pretends to work.
 
 ### Building against a checkout
 
@@ -461,7 +478,12 @@ the terminal: every line comes with its device in front (`[Windows]`, `[STK L21]
 key goes to all of them. `r` reloads them all, `R` restarts them all, `q` quits them all, `p`
 outlines every widget on every screen. With hot reload, a saved file is patched into every device.
 For an editor, `frus run --machine -d all` passes each run's events through with its own
-`appId`, and a command goes to the run its `params.appId` names, or to every run.
+`appId`, and a command goes to the run its `params.appId` names, or to every run; the VS Code
+debug session lasts until the last device's run has stopped.
+
+`q` is heard from the moment `frus run` starts: pressed while the application is still being
+built, it stops the build (cargo and the compilers it started, or the hot-reload engine) and
+ends the run, on one device or on all of them.
 
 While it runs, `r` **reloads** the application with your change: it is built again and comes
 back on the same page, with the window where it was, and with the state of every component
@@ -622,7 +644,9 @@ a_all.exe (pe): 14.90 MB as shipped, without its symbols
 and the renderer weigh more than frus's widgets, and the seven bundled faces are 3.3 MB.)
 
 `[unattributed]` is what no symbol names: string literals, tables the compiler built, data
-whose owner the linker merged away. `[C/C++]` is code with no Rust name.
+whose owner the linker merged away. `[C/C++]` is code with no Rust name. The formats read are
+ELF (Android, Linux), WebAssembly (measured after wasm-bindgen, as `frus build web` ships it; frus
+runs no wasm-opt), Mach-O (macOS) and, on Windows, the linker's map.
 
 What makes an application smaller, largest first:
 

@@ -13,6 +13,14 @@ any release may break.
 
 ## [Unreleased]
 
+- **`frus create --template package|plugin`, verified links, `q` while building** (J791, second
+  part). A package of widgets (with tests and a gallery example) and a plugin (its Android side in
+  Java, compiled by its `build.rs` into a dex it loads into the activity; `Unsupported` elsewhere).
+  `frus build apk` marks the filters of `https` links `android:autoVerify`, which cargo-apk
+  cannot, by packaging again with the SDK's tools. `q` stops a build under way instead of waiting
+  for the application. A VS Code session with `deviceId: "all"` lasts until the last device
+  stops. `frus size` reads Mach-O, and measures the web after wasm-bindgen. A new application's
+  hot web build pins the wasm-bindgen the engine reads (0.2.130's output was refused).
 - **`frus mcp`: AI agents drive the application** (J789). A Model Context Protocol server on
   standard input and output, through which a coding agent runs the application (`launch_app`,
   which starts `frus run` on any device) or attaches to a `frus run` already going

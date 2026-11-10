@@ -97,6 +97,8 @@ export class FrusDebugAdapter {
   private nextCommandId = 1;
   private ended = false;
   private ending = new RunEnding();
+  /** The runs that started and have not stopped: one, or one per device with `-d all`. */
+  private live = new Set<string>();
   /** Where the run serves DevTools, once it says. */
   private devTools: string | undefined;
 
@@ -221,6 +223,7 @@ export class FrusDebugAdapter {
         this.output(params.message + "\n", params.error ? "stderr" : "console");
         break;
       case "app.start":
+        if (params.appId) this.live.add(String(params.appId));
         this.output(`Running on ${params.deviceName}…\n`, "console");
         break;
       case "app.started":
@@ -237,6 +240,13 @@ export class FrusDebugAdapter {
         break;
       }
       case "app.stop": {
+        if (params.appId) this.live.delete(String(params.appId));
+        // With several devices (`-d all`) each run stops on its own: the session goes on while
+        // another one is still running, and ends with the last.
+        if (this.live.size > 0) {
+          if (params.error) this.output(params.error + "\n", "stderr");
+          break;
+        }
         this.ending.saw(params.error, true, true);
         if (params.error) this.output(params.error + "\n", "stderr");
         // frus ends right after; its exit is reported then. If it lingers, the session ends.

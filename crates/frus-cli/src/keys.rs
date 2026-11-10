@@ -33,8 +33,35 @@ fn pressed_too(send: &Sender<char>) {
     }
 }
 
-/// Reads keys on a thread of its own; each arrives on the channel returned.
+/// The keys, heard from the start of a run (see [`start`]) and handed to it once its
+/// application is up.
+static EARLY: Mutex<Option<Receiver<char>>> = Mutex::new(None);
+
+/// Starts hearing the keys before anything is built, so that `q` stops a build (milestone 791):
+/// it is heard at once, and the keys the application is up for come afterwards from [`listen`].
+pub(crate) fn start() {
+    let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
+    if early.is_none() {
+        *early = Some(open());
+    }
+}
+
+/// Reads keys on a thread of its own; each arrives on the channel returned. The keys [`start`]
+/// began to hear, if it did.
 pub(crate) fn listen() -> Receiver<char> {
+    let early = EARLY.lock().unwrap_or_else(|e| e.into_inner()).take();
+    early.unwrap_or_else(open)
+}
+
+/// Passes a key on; `q` also stops whatever is being built.
+fn hand_on(send: &Sender<char>, key: char) -> bool {
+    if matches!(key, 'q' | 'Q') {
+        crate::cargo::cancel();
+    }
+    send.send(key).is_ok()
+}
+
+fn open() -> Receiver<char> {
     if crate::report::is_machine() {
         return commands();
     }
@@ -46,7 +73,7 @@ pub(crate) fn listen() -> Receiver<char> {
         if raw {
             let mut byte = [0u8; 1];
             while stdin.read(&mut byte).is_ok_and(|n| n == 1) {
-                if send.send(byte[0] as char).is_err() {
+                if !hand_on(&send, byte[0] as char) {
                     break;
                 }
             }
@@ -54,7 +81,7 @@ pub(crate) fn listen() -> Receiver<char> {
             let mut line = String::new();
             while std::io::BufRead::read_line(&mut stdin, &mut line).is_ok_and(|n| n > 0) {
                 if let Some(key) = line.trim().chars().next() {
-                    if send.send(key).is_err() {
+                    if !hand_on(&send, key) {
                         break;
                     }
                 }
@@ -77,7 +104,7 @@ fn commands() -> Receiver<char> {
             };
             crate::report::line(&answer);
             if let Some(key) = key {
-                if send.send(key).is_err() {
+                if !hand_on(&send, key) {
                     break;
                 }
             }

@@ -15,6 +15,7 @@
 
 mod analyze;
 mod android_pack;
+mod app_links;
 mod build;
 mod bundle;
 mod cargo;
@@ -270,6 +271,10 @@ Options:
       --deeplink <link>    the links that open it: a scheme of its own (`myapp`) or
                            a host whose https links it opens (`https://example.com`)
       --description <text> one line saying what it is (Cargo.toml, the web page)
+      --template <kind>    app (the default), package (a library of widgets for
+                           applications, with an example and tests) or plugin
+                           (something the platform does, called from Rust: its
+                           Android side in Java, the others in Rust)
       --frus-path <dir>    build against a checkout of frus, not the published crates
       --no-git             do not make the directory a git repository
   -h, --help               print this
@@ -279,6 +284,8 @@ Examples:
   frus create my_app --platforms android,web --deeplink myapp
   frus create .                        # in an application: restore missing files
   frus create --platforms web .        # in an application: add the web
+  frus create my_widgets --template package
+  frus create battery --template plugin --org com.acme
 ";
 
 /// What the command line asked for.
@@ -529,6 +536,7 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
     let mut platforms = None;
     let mut deeplink = None;
     let mut description = None;
+    let mut template = None;
 
     while let Some(arg) = args.next() {
         let Some(text) = arg.to_str() else {
@@ -560,6 +568,7 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
                 flag,
             )?,
             "--description" => set_once(&mut description, value(flag)?, flag)?,
+            "--template" => set_once(&mut template, create::Template::parse(&value(flag)?)?, flag)?,
             _ if flag.starts_with('-') && flag != "-" => {
                 return Err(format!("frus create has no option `{text}`"));
             }
@@ -577,6 +586,7 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
         platforms,
         deeplink,
         description,
+        template: template.unwrap_or_default(),
     }))
 }
 
@@ -825,6 +835,25 @@ fn report(created: &Created) -> String {
     let dir = created.dir.display();
     if created.existing {
         return report_existing(created);
+    }
+    // A package or a plugin: a library, with no platform of its own (milestone 791).
+    if created.platforms.is_empty() {
+        let cd = if created.dir == std::path::Path::new(".") {
+            String::new()
+        } else {
+            format!("  cd {}\n", quote(&dir.to_string()))
+        };
+        let example = if created.written.iter().any(|f| f.ends_with("gallery.rs")) {
+            "gallery"
+        } else {
+            "demo"
+        };
+        return format!(
+            "Created {} in {dir} ({} files).\n\nTo try it:\n\n{cd}  frus test\n  \
+             cargo run --example {example}\n\nREADME.md says how an application uses it.\n",
+            project.project_name,
+            created.written.len()
+        );
     }
     let mut out = format!(
         "Created {} in {dir} ({} files).\n",
@@ -1244,6 +1273,7 @@ mod tests {
                 platforms: None,
                 deeplink: None,
                 description: None,
+                template: create::Template::App,
             }
         );
     }
@@ -1371,6 +1401,53 @@ mod tests {
         on_disk.sort();
         let built_in: Vec<String> = FILES.iter().map(|file| file.path.to_string()).collect();
         assert_eq!(built_in, on_disk, "template.rs's list and template/ differ");
+    }
+
+    /// The package's and the plugin's templates are built in whole too (milestone 791).
+    #[test]
+    fn every_library_template_file_is_built_in() {
+        fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(root, &path, out);
+                } else {
+                    let relative = path.strip_prefix(root).unwrap();
+                    let parts: Vec<_> = relative
+                        .components()
+                        .map(|c| c.as_os_str().to_str().unwrap())
+                        .collect();
+                    out.push(parts.join("/"));
+                }
+            }
+        }
+        for (dir, files) in [
+            ("template-package", crate::template::PACKAGE_FILES),
+            ("template-plugin", crate::template::PLUGIN_FILES),
+        ] {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut on_disk = Vec::new();
+            walk(&root, &root, &mut on_disk);
+            on_disk.sort();
+            let built_in: Vec<String> = files.iter().map(|f| f.path.to_string()).collect();
+            assert_eq!(built_in, on_disk, "{dir}");
+        }
+    }
+
+    #[test]
+    fn the_template_is_read() {
+        assert_eq!(create_options("create a").template, create::Template::App);
+        assert_eq!(
+            create_options("create a --template package").template,
+            create::Template::Package
+        );
+        assert_eq!(
+            create_options("create a --template=plugin").template,
+            create::Template::Plugin
+        );
+        assert!(parse(args("create a --template game"))
+            .unwrap_err()
+            .contains("app, package or plugin"));
     }
 
     /// The files `frus create` copies untouched are the ones `cargo generate` is told to.

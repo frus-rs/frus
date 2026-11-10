@@ -209,30 +209,84 @@ projects made by the new `frus create` against this checkout:
   with the symbols), naga 958 kB, core 915 kB, wgpu_core 574 kB, frus_widgets 479 kB, the seven
   faces found inside, `[unattributed]` 2.14 MB.
 
+## Second part (after the first pull request)
+
+What the first part left, taken up again:
+
+- **`q` while building stops the build.** The keys are heard from the start of a run
+  (`keys::start`), not from the moment the application is up. `q` (or an editor's `app.stop`)
+  sets a flag that every build waits on: cargo, cargo-apk and wasm-bindgen are run through
+  `cargo::wait_or_cancel`, which ends the process tree (`taskkill /T` on Windows, an interrupt
+  elsewhere) and returns `CANCELLED`; the hot-reload loops stop their engine. The run then ends as
+  asked, not as a failure ("Stopped before the application was up."). The error check that
+  follows a failed patch (`cargo check` of the shadow package, minutes long) is waited on the
+  same way: it was the reason a stopped web run did not end.
+- **An editor's session with `deviceId: "all"`** keeps the `appId`s that started and ends with
+  the last `app.stop`, not the first.
+- **Verified https links in the APK.** cargo-apk 0.10 cannot write `android:autoVerify`, so once
+  it has made the package, frus makes it again around the same manifest with the attribute on
+  every intent filter of `https` links (`app_links.rs`), with the SDK's own tools as cargo-apk
+  does: `aapt package` (the manifest, the resources, and the libraries cargo-apk left, stored and
+  not compressed as cargo-apk stores them), `zipalign -p`, `apksigner` with the key cargo-apk
+  signed with. A package with no `https` filter is left exactly as cargo-apk made it; a failure
+  leaves cargo-apk's package and says so.
+- **`--template package` and `--template plugin`.** A package: a library with a `Tag` widget
+  (themed defaults, every visual overridable), its tests and a gallery example. A plugin: one
+  function (`platform_version()`), its Android side in Java under `android/java/<org path>/…`,
+  compiled by `build.rs` with `javac` and `d8` into a dex the library carries and loads with an
+  `InMemoryDexClassLoader` into the activity (as frus-shell's bridges do), reached through
+  `ndk-context` and JNI, every exception cleared; the desktops, the web and iOS return
+  `PluginError::Unsupported`. The templates are built in like the application's
+  (`template-package/`, `template-plugin/`), and exempt from the SPDX header like it.
+- **Mach-O sizes.** `parse_macho` reads the sections and the symbol table of a 64-bit Mach-O and
+  sizes each symbol up to the next one of its section (Mach-O has no symbol sizes); the
+  assembler's `ltmp` labels and the stabs are left out. Tested on a real object, cross-compiled
+  here with `rustc --target x86_64-apple-darwin --emit=obj` (`src/fixtures/`).
+- **The web's size after wasm-bindgen.** The analysis runs wasm-bindgen as `frus build web` does
+  (which runs no wasm-opt) and measures its `_bg.wasm`; the `name` section it keeps is read and
+  not counted as shipped.
+- **Hot reload of a new application on the web.** Found on the way: the engine refuses what
+  wasm-bindgen 0.2.130 writes (an imported exception tag: "exceptions proposal not enabled"),
+  and a new application resolves 0.2.130, so its first hot web build failed whatever the number
+  of devices. The shadow package now pins the versions the engine reads (`ENGINE_WASM_CRATES`:
+  wasm-bindgen 0.2.127, js-sys and web-sys 0.3.104, wasm-bindgen-futures 0.4.77, the ones frus's
+  own lockfile has) when the application asks for the template's `wasm-bindgen = "0.2"`.
+- **Desktop hot engine on its own port**, as before, and the shadow per device.
+
+How it was tested, second part (`cargo test -p frus-cli`: 172 pass with master merged in; the VS Code extension's
+tests: 30 pass, the new one included):
+
+- **Hot reload on two devices, end to end**: `frus run -d windows -d iphone-15` (hot reload by
+  default), each device with its own shadow package and build: both came up "running, with hot
+  reload"; one save of `src/counter.rs` was patched into both ("Patched in 131.4 s", "Patched in
+  173.8 s", the first patch of a fresh build on a loaded machine), both screens showed the edit,
+  and `r` said the hot devices had it already; `q` ended both.
+- `q` during the hot builds of `-d windows -d edge` stopped both runs ("Stopped before the
+  application was up", twice); `a_build_is_stopped_when_asked` ends a 60-second process within a
+  moment of the flag.
+- The APK of an application made with `--deeplink https://tides.example`: `aapt2 dump xmltree`
+  shows `android:autoVerify(0x010104ee)=true` on the `https` filter; `aapt list -v` shows the
+  library stored, as cargo-apk stored it; installed on the phone, `dumpsys package` reads
+  `AutoVerify=true` for `tides.example`.
+- The plugin, made with `--template plugin --org com.acme`: its tests and its example on Windows
+  (`battery_level does not work on Windows`), its Android build (javac and d8 in `build.rs`, a
+  1204-byte dex), and an application depending on it, installed on the phone: it shows
+  "Android 10 (API 29)", read from the Java side. The package: its tests and its example built.
+- On the phone, that debug build idles at 0.0 % CPU (no CPU time used over six seconds of
+  `top`), 137 MB PSS, of which 66 MB graphics.
+
 ## Not done
 
-- **`autoVerify` in the APK cargo-apk builds.** cargo-apk 0.10's intent filter has no field for
-  it, so an `https` filter in a `frus build apk` package is not verified: Android before 12 asks
-  which application opens the link, Android 12 and later opens it in the browser until the person
-  turns the link on in the application's settings ("Open by default"). The hot-reload engine's
-  manifest, which frus writes, has it.
-- **Windows and Linux scheme registration.** A scheme is registered when an application is
-  installed (a registry key, a `.desktop` file); frus records the scheme in the manifest for an
-  installer to read, and does not write to the registry itself.
-- **`--template package|plugin`.** frus has no plugin system for a template to start from, and a
-  package template would be a library crate with no platform files; left for when there is a
-  need.
-- **iOS** in `--platforms`: refused with the reason until the iOS shell exists.
-- **The size of a macOS program** is not broken down: Mach-O's symbol table has no sizes, and no
-  Mac was at hand to check a reader against; `frus size` says the format is not read.
-- **The web's size is the module before wasm-bindgen**, which trims a little more.
-- **Hot reload on several devices was not run end to end.** Each device's run keeps its own
-  shadow package and build (`FRUS_RUN_SESSION`), which is what lets one save patch every device,
-  but the checks above used `--no-hot` (reload by rebuilding): a first hot build per device in a
-  fresh directory was more than this machine could fit in the session. Hot reload on one device
-  is unchanged, apart from the desktop engine's own free port.
-- **`q` while a device's run is still building** is acted on once its application is up: a run
-  reads the commands sent to it only from then on. Ctrl+C ends everything at once.
-- **`-d all` leaves out the browsers**, as said above; `-d all -d edge` adds one.
-- **The editor extensions** start one run per debug session; a launch with `deviceId: "all"`
-  works through the parent run, but the session ends when the first device's run ends.
+- **Hot reload on the web beside another device.** One save patched into two desktop runs
+  (above), but the web run with the pinned wasm-bindgen failed its build ("cargo build finished
+  with errors") on a machine loaded by other builds, and the errors could not be read before the
+  check of them was itself cut off. The pin is unverified beyond the shadow's lockfile taking the
+  versions; the phone was not in a hot run.
+- **The web size after wasm-bindgen** was built into `frus size web` and not run on a real
+  application in this part.
+- **The phone numbers for a release build** (RAM, idle CPU) were not measured: the numbers above
+  are a debug build's; the guide's APK sizes per font feature are the release numbers measured
+  before.
+- **Windows and Linux scheme registration** belongs to the installers (#448) and is left to them.
+- **iOS**: `--platforms ios` refused, plugin side `Unsupported`.
+- **`-d all` leaves out the browsers** on purpose; `-d all -d edge` adds one.

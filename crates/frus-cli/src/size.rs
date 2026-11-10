@@ -226,10 +226,27 @@ fn build_web(project: &Project, dir: &Path) -> Result<PathBuf, String> {
             .env("CARGO_PROFILE_RELEASE_STRIP", "none")
             .env("CARGO_PROFILE_WEB_RELEASE_STRIP", "none"),
     )?;
-    Ok(dir
+    let module = dir
         .join("wasm32-unknown-unknown")
         .join(profile)
-        .join(format!("{}.wasm", project.lib)))
+        .join(format!("{}.wasm", project.lib));
+    // What ships is wasm-bindgen's output, as `frus build web` writes it (it runs no wasm-opt):
+    // the bindings' descriptors gone, the exports trimmed. It keeps the `name` section, which
+    // the analysis reads, and which does not count as shipped.
+    let wasm_bindgen = crate::setup::cargo_tool(
+        "wasm-bindgen",
+        "--version",
+        "wasm-bindgen-cli",
+        project.locked_wasm_bindgen().as_deref(),
+    )?;
+    let out = dir.join("web-pkg");
+    crate::cargo::run(
+        Command::new(wasm_bindgen)
+            .args(["--target", "web", "--no-typescript", "--out-dir"])
+            .arg(&out)
+            .arg(&module),
+    )?;
+    Ok(out.join(format!("{}_bg.wasm", project.lib)))
 }
 
 fn build_android(project: &Project, dir: &Path) -> Result<PathBuf, String> {
@@ -277,6 +294,8 @@ pub(crate) fn analyse(label: &str, file: &Path, root: Option<&Path>) -> Result<R
         parse_elf(&bytes)?
     } else if bytes.starts_with(b"\0asm") {
         parse_wasm(&bytes)?
+    } else if bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]) {
+        parse_macho(&bytes)?
     } else if bytes.starts_with(b"MZ") {
         let map = file.with_extension("map");
         let text = std::fs::read_to_string(&map).map_err(|_| {
@@ -292,7 +311,7 @@ pub(crate) fn analyse(label: &str, file: &Path, root: Option<&Path>) -> Result<R
         parsed
     } else {
         return Err(format!(
-            "{}: not a binary frus reads (an ELF .so or program, a .wasm, or a Windows .exe with \
+            "{}: not a binary frus reads (an ELF .so or program, a .wasm, a Mach-O program, or a Windows .exe with \
              its .map)",
             file.display()
         ));
@@ -743,8 +762,120 @@ fn demangle(symbol: &str) -> Option<String> {
 
 /// Whether a symbol names one of the compiler's anonymous constants.
 fn is_anonymous(symbol: &str) -> bool {
-    let symbol = symbol.trim_start_matches('.').trim_start_matches('L');
-    symbol.starts_with("anon.") || symbol.starts_with("__unnamed_") || symbol.starts_with("alloc_")
+    // `.Lanon.…` (ELF), `l_anon.…` and `l___unnamed_1` (Mach-O), `anon.…` (Windows).
+    let symbol = symbol.trim_start_matches(['.', 'L', 'l', '_']);
+    symbol.starts_with("anon.") || symbol.starts_with("unnamed_") || symbol.starts_with("alloc_")
+}
+
+/// A 64-bit Mach-O file (a macOS program, or an object): its sections, and each symbol defined
+/// in one, sized up to the next symbol of its section — Mach-O's symbol table has no sizes.
+pub(crate) fn parse_macho(b: &[u8]) -> Result<Parsed, String> {
+    let bad = || "a Mach-O file frus cannot read".to_string();
+    let ncmds = u32_at(b, 16).ok_or_else(bad)?;
+    struct Section {
+        name: String,
+        addr: u64,
+        size: u64,
+        covered: bool,
+    }
+    let mut sections: Vec<Section> = Vec::new();
+    let mut symtab = None;
+    let mut not_shipped = 0;
+    let mut at = 32;
+    for _ in 0..ncmds {
+        let cmd = u32_at(b, at).ok_or_else(bad)?;
+        let size = u32_at(b, at + 4).ok_or_else(bad)? as usize;
+        match cmd {
+            // LC_SEGMENT_64: its sections follow it.
+            0x19 => {
+                let nsects = u32_at(b, at + 64).ok_or_else(bad)?;
+                for i in 0..nsects as usize {
+                    let s = at + 72 + i * 80;
+                    let name = c_str(&b[..s + 16], s);
+                    let segment = c_str(&b[..s + 32], s + 16);
+                    let addr = u64_at(b, s + 32).ok_or_else(bad)?;
+                    let size = u64_at(b, s + 40).ok_or_else(bad)?;
+                    let flags = u32_at(b, s + 64).ok_or_else(bad)?;
+                    // Code, and the read-only data beside it: where the symbols are.
+                    let code = flags & 0x8000_0000 != 0 || name == "__text";
+                    let readonly = segment == "__TEXT" || segment == "__DATA_CONST";
+                    let zerofill = flags & 0xff == 1;
+                    sections.push(Section {
+                        name: format!("{segment},{name}"),
+                        addr,
+                        size,
+                        covered: (code || readonly) && !zerofill,
+                    });
+                }
+            }
+            // LC_SYMTAB.
+            0x2 => {
+                let symoff = u32_at(b, at + 8).ok_or_else(bad)? as usize;
+                let nsyms = u32_at(b, at + 12).ok_or_else(bad)? as usize;
+                let stroff = u32_at(b, at + 16).ok_or_else(bad)? as usize;
+                let strsize = u32_at(b, at + 20).ok_or_else(bad)?;
+                not_shipped += nsyms as u64 * 16 + strsize;
+                symtab = Some((symoff, nsyms, stroff));
+            }
+            _ => {}
+        }
+        at += size;
+    }
+    let mut parsed = Parsed {
+        format: "macho",
+        shipped: (b.len() as u64).saturating_sub(not_shipped),
+        ..Parsed::default()
+    };
+    for section in &sections {
+        parsed.sections.push((section.name.clone(), section.size));
+        if section.covered {
+            parsed.covered += section.size;
+        }
+    }
+    let Some((symoff, nsyms, stroff)) = symtab else {
+        return Ok(parsed);
+    };
+    // (section index, address, name) of every symbol defined in a section, stabs left out.
+    let mut defined: Vec<(usize, u64, String)> = Vec::new();
+    for i in 0..nsyms {
+        let s = symoff + i * 16;
+        let (Some(strx), Some(kind), Some(sect), Some(value)) =
+            (u32_at(b, s), b.get(s + 4), b.get(s + 5), u64_at(b, s + 8))
+        else {
+            break;
+        };
+        const N_STAB: u8 = 0xe0;
+        const N_TYPE: u8 = 0x0e;
+        const N_SECT: u8 = 0x0e;
+        if kind & N_STAB != 0 || kind & N_TYPE != N_SECT || *sect == 0 {
+            continue;
+        }
+        let name = c_str(b, stroff + strx as usize);
+        // The assembler's own labels: a section's start, not a piece of it.
+        if name.starts_with("ltmp") {
+            continue;
+        }
+        defined.push((*sect as usize - 1, value, name));
+    }
+    defined.sort_by_key(|(sect, addr, _)| (*sect, *addr));
+    defined.dedup_by_key(|(sect, addr, _)| (*sect, *addr));
+    for (i, (sect, addr, name)) in defined.iter().enumerate() {
+        let Some(section) = sections.get(*sect).filter(|s| s.covered) else {
+            continue;
+        };
+        let end = defined
+            .get(i + 1)
+            .filter(|(next, _, _)| next == sect)
+            .map_or(section.addr + section.size, |(_, next, _)| *next);
+        let size = end.saturating_sub(*addr);
+        if size > 0 {
+            parsed.symbols.push(Symbol {
+                name: name.clone(),
+                size,
+            });
+        }
+    }
+    Ok(parsed)
 }
 
 /// `4core3fmt5write17h0123E` → `core::fmt::write::h0123`, the escapes decoded.
@@ -1084,6 +1215,7 @@ pub(crate) fn from_json(text: &str) -> Result<Report, String> {
         "elf" => "elf",
         "wasm" => "wasm",
         "pe" => "pe",
+        "macho" => "macho",
         _ => "?",
     };
     Ok(Report {
@@ -1315,6 +1447,53 @@ mod tests {
             vec![],
         );
         assert_eq!(report.crates[0], (UNATTRIBUTED.to_string(), 15 + 20 - 14));
+    }
+
+    /// A real Mach-O object, compiled from `fixtures/size-fixture.rs.txt` with
+    /// `rustc --crate-type=lib --emit=obj --target x86_64-apple-darwin -C opt-level=2 -C panic=abort`:
+    /// no Mac is needed to make one, and none to read it.
+    #[test]
+    fn a_mach_o_symbol_table_is_read() {
+        let bytes = include_bytes!("fixtures/size-x86_64-apple-darwin.o");
+        let parsed = parse_macho(bytes).unwrap();
+        assert_eq!(parsed.format, "macho");
+        assert!(
+            parsed
+                .sections
+                .iter()
+                .any(|(name, size)| name == "__TEXT,__text" && *size > 0),
+            "{:?}",
+            parsed.sections
+        );
+        let names: Vec<&str> = parsed.symbols.iter().map(|s| s.name.as_str()).collect();
+        let add = parsed
+            .symbols
+            .iter()
+            .find(|s| s.name.contains("7fixture3add"))
+            .unwrap_or_else(|| panic!("{names:?}"));
+        assert!(add.size > 4 && add.size < 200, "{add:?}");
+        assert!(
+            names.iter().any(|n| n.contains("7fixture3sum")),
+            "{names:?}"
+        );
+        // The table of 64 words, in the read-only data.
+        let table = parsed
+            .symbols
+            .iter()
+            .find(|s| s.name.contains("7fixture5TABLE"))
+            .unwrap_or_else(|| panic!("{names:?}"));
+        assert_eq!(table.size, 256);
+        let report = attribute(
+            "macos",
+            Path::new("fixture.o"),
+            bytes.len() as u64,
+            parsed,
+            vec![],
+        );
+        assert_eq!(report.crates[0].0, "fixture", "{:?}", report.crates);
+        assert!(report.shipped_bytes < bytes.len() as u64);
+        assert_eq!(crate_of("l___unnamed_1"), UNATTRIBUTED);
+        assert_eq!(crate_of("l_anon.0123.4"), UNATTRIBUTED);
     }
 
     #[test]

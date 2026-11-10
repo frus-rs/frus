@@ -44,6 +44,8 @@ pub struct Options {
     pub deeplink: Option<Deeplink>,
     /// `--description`: a line saying what it is, for the manifest and the web page.
     pub description: Option<String>,
+    /// `--template`: an application, a package of widgets, or a plugin.
+    pub template: Template,
 }
 
 /// What an application is made of beyond its names (milestone 791): its platforms, the links
@@ -102,6 +104,56 @@ impl Project {
         text.replace("{{project-name}}", &self.project_name)
             .replace("{{crate_name}}", &self.crate_name)
             .replace("{{org}}", &self.org)
+            .replace("{{org_path}}", &self.org.replace('.', "/"))
+            .replace("{{ClassName}}", &self.class_name())
+    }
+
+    /// The crate's name as a Java class spells one: `my_plugin` → `MyPlugin`.
+    pub fn class_name(&self) -> String {
+        self.crate_name
+            .split('_')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+}
+
+/// What `frus create` makes (milestone 791).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Template {
+    /// An application, for the platforms it is made for.
+    #[default]
+    App,
+    /// A library of widgets for applications, with an example and tests.
+    Package,
+    /// Something the platform does, called from Rust: an Android side in Java, the others in Rust.
+    Plugin,
+}
+
+impl Template {
+    pub fn parse(word: &str) -> Result<Template, String> {
+        match word {
+            "app" => Ok(Template::App),
+            "package" => Ok(Template::Package),
+            "plugin" => Ok(Template::Plugin),
+            other => Err(format!(
+                "`{other}` is not a template: --template takes app, package or plugin"
+            )),
+        }
+    }
+
+    fn files(self) -> &'static [TemplateFile] {
+        match self {
+            Template::App => FILES,
+            Template::Package => crate::template::PACKAGE_FILES,
+            Template::Plugin => crate::template::PLUGIN_FILES,
+        }
     }
 }
 
@@ -534,9 +586,80 @@ pub struct Created {
 /// next to code that has no counter would not even build.
 const SAMPLE_CODE: &[&str] = &["src/lib.rs", "src/counter.rs", "tests/counter_test.rs"];
 
+/// A package or a plugin (`--template`): a library crate, written into a new directory.
+fn create_library(options: &Options) -> Result<Created, String> {
+    if options.dir.join("Cargo.toml").exists() {
+        return Err(format!(
+            "{} has a Cargo.toml already: a {} is made in a new directory",
+            options.dir.display(),
+            if options.template == Template::Package {
+                "package"
+            } else {
+                "plugin"
+            }
+        ));
+    }
+    if options.platforms.is_some() || options.deeplink.is_some() {
+        return Err("--platforms and --deeplink are an application's (--template app)".into());
+    }
+    let name = match &options.name {
+        Some(name) => name.clone(),
+        None => name_of(&options.dir)?,
+    };
+    let project = Project::new(&name, &options.org)?;
+    let frus_path = match &options.frus_path {
+        Some(path) => Some(check_checkout(path)?),
+        None => None,
+    };
+    let mut files = options
+        .template
+        .files()
+        .iter()
+        .map(|file| render_file(&project, file, frus_path.as_deref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(description) = &options.description {
+        for file in files.iter_mut().filter(|f| f.path == "Cargo.toml") {
+            let text = String::from_utf8_lossy(&file.bytes).into_owned();
+            let text =
+                platforms::set_key(&text, "package", "description", &toml_string(description))
+                    .unwrap_or(text);
+            file.bytes = text.into_bytes();
+        }
+    }
+    let (present, files): (Vec<_>, Vec<_>) = files
+        .into_iter()
+        .partition(|file| options.dir.join(&file.path).exists());
+    let made_dir = prepare_dir(&options.dir)?;
+    if let Err(error) = write_files(&options.dir, &files) {
+        if made_dir {
+            let _ = fs::remove_dir_all(&options.dir);
+        }
+        return Err(error);
+    }
+    let git = if options.git {
+        git_init(&options.dir)
+    } else {
+        Git::Skipped
+    };
+    Ok(Created {
+        project,
+        dir: options.dir.clone(),
+        written: files.into_iter().map(|file| file.path).collect(),
+        kept: present.len(),
+        existing: false,
+        git,
+        platforms: Vec::new(),
+        deeplink: None,
+        manifest_changes: Vec::new(),
+    })
+}
+
 /// Creates the application: checks the names, renders the files, then writes the ones that
 /// are missing.
 pub fn create(options: &Options) -> Result<Created, String> {
+    if options.template != Template::App {
+        return create_library(options);
+    }
     let existing = existing_application(&options.dir)?;
     let project = match &existing {
         // The application says what it is called, and that is what its files are written
@@ -919,6 +1042,7 @@ mod tests {
             platforms: None,
             deeplink: None,
             description: None,
+            template: Template::App,
         }
     }
 
@@ -1495,6 +1619,53 @@ mod tests {
         assert_eq!(manifest.matches("intent_filter").count(), 1);
         assert!(manifest.contains("deeplink = \"https://example.com\""));
         assert!(create(&opts).unwrap().manifest_changes.is_empty());
+    }
+
+    /// **`--template package` and `--template plugin`** (milestone 791): a library crate each,
+    /// every value filled in — the plugin's Java class at its package's path.
+    #[test]
+    fn packages_and_plugins_are_made() {
+        let temp = TempDir::new("library");
+        let mut opts = options(temp.0.join("shop_widgets"));
+        opts.template = Template::Package;
+        opts.description = Some("Shop widgets".into());
+        let created = create(&opts).unwrap();
+        assert!(created.platforms.is_empty());
+        let dir = &created.dir;
+        let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("name = \"shop_widgets\""));
+        assert!(manifest.contains("description = \"Shop widgets\""));
+        assert!(!manifest.contains("package.metadata.android"));
+        assert!(fs::read_to_string(dir.join("tests/tag_test.rs"))
+            .unwrap()
+            .contains("use shop_widgets::Tag;"));
+        assert!(dir.join("examples/gallery.rs").is_file());
+
+        let mut opts = options(temp.0.join("battery-level"));
+        opts.template = Template::Plugin;
+        opts.org = "com.acme".into();
+        let created = create(&opts).unwrap();
+        assert_eq!(created.project.class_name(), "BatteryLevel");
+        let java = created
+            .dir
+            .join("android/java/com/acme/battery_level/BatteryLevelPlugin.java");
+        let java = fs::read_to_string(java).unwrap();
+        assert!(
+            java.starts_with("package com.acme.battery_level;"),
+            "{java}"
+        );
+        assert!(java.contains("public final class BatteryLevelPlugin"));
+        let android = fs::read_to_string(created.dir.join("src/android.rs")).unwrap();
+        assert!(android.contains("\"com.acme.battery_level.BatteryLevelPlugin\""));
+
+        // Not over a crate that is there, and not with an application's options.
+        let mut again = options(created.dir.clone());
+        again.template = Template::Plugin;
+        assert!(create(&again).unwrap_err().contains("Cargo.toml already"));
+        let mut odd = options(temp.0.join("other"));
+        odd.template = Template::Package;
+        odd.platforms = Some(vec![AppPlatform::Web]);
+        assert!(create(&odd).unwrap_err().contains("--platforms"));
     }
 
     #[test]
