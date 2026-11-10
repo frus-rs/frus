@@ -45,6 +45,11 @@ captured.
 - **Checking**: `analyze` and `run_tests` run `frus analyze` and `frus test` in the project
   and return what they said.
 
+On Android, `enter_text` sets the field's value (its current value with the text added)
+rather than typing key by key: the phone showed that the protocol's `type`, which presses each
+character through the shell's key handling, does not reach an Android text field, whose text
+comes from the input method. `replace` was already the input method's own path.
+
 A tool's failure (the application is not up, a widget is not there, the build failed) is a
 result with `isError: true` and a sentence the agent can act on, not a protocol error: the
 agent reads it and tries something else.
@@ -102,8 +107,13 @@ The DevTools protocol gains `stop` (as `q`), so that `stop_app` can end an attac
 
 ### Several applications
 
-Each `launch_app` is a session with its own `frus run`, its own DevTools port and its own log:
-an agent can run the desktop and the phone side by side. Every tool takes an `app_id` and acts
+Each launched run is a session with its own `frus run`, its own DevTools port and its own log:
+an agent can run the desktop and the phone side by side. `launch_app` takes `device: "all"`
+(this computer and every connected phone) or a list of `devices`, resolved as `frus run -d all`
+resolves them (milestone 791), and starts one `frus run --machine` per device with its own
+working copy (`FRUS_RUN_SESSION`), so each device is an application with its own `app_id`.
+`frus run -d all --machine` itself was not used: its runs share one process's standard
+streams, and a session here is one run. Every tool takes an `app_id` and acts
 on the last session without it. When the client closes the server's input, every run the
 server launched is stopped (`app.stop`, then the process tree killed if it lingers).
 
@@ -153,8 +163,39 @@ VS Code (Copilot's agent mode), Cursor and any other stdio client.
   (`mcp__frus__tap`, …) from the server.
 - `cargo package --list -p frus-cli` includes `template/.mcp.json`; a project made by
   `frus create` has it.
-PHONE
+- **Android, on the test phone** (Huawei STK-L21, Android 10), the same client with
+  `device: "XMJNW19B23011768"` and `--no-hot`: built, installed, started in 69 s; the tree
+  (424 by 918 logical pixels, 2.55 pixels a point), two taps (count 2), `replace` into the
+  field, keys, Back, `widget_at`, the device's screenshot downscaled from 1080 by 2340 to 473
+  by 1024 (27 KB), the switches, frames during the automatic counting (119), the log with the
+  install; `hot_reload` after the edit rebuilt and restarted it (226 s) with the edit on
+  screen, a broken edit returned cargo's error, the fix brought in; `stop_app`. Typing key by
+  key did not reach the field (above); with the fix, "Ada" then " L." were entered and "Hello
+  Ada L." shown, on screen in the screenshot.
+- Before the phone was free, a run on the `frus_api28` emulator was started and abandoned
+  (stopped while building) when the phone became available.
 
 ## Not done
 
-NOTDONE
+- **Web**: not run. `launch_app` with `device: "web-server"` or a browser goes through the same
+  `frus run`, relay and protocol that milestone 788 checked in headless Edge, but this
+  milestone did not drive a page through `frus mcp`.
+- **Several devices at once** (`device: "all"`, `devices`) were added after the merge of
+  milestone 791 and are covered by `frus run -d all`'s own resolution; no run on the desktop
+  and the phone together was made through `frus mcp`.
+- **Hot reload on Android** through `frus mcp` was not run (`--no-hot` was, to keep the phone's
+  time short); on Windows it was.
+- **One request at a time.** The server answers requests in order: while `launch_app` waits
+  for a build (up to `wait_seconds`), a `ping` waits too, and `notifications/cancelled` is not
+  acted on. Clients wait for tools long enough in practice; a client with a short timeout
+  should pass a smaller `wait_seconds` and poll `app_status`.
+- **Typing key by key on Android** is replaced by setting the value; the protocol's own `type`
+  still does not reach an Android field (an application-side fix, for the input method's
+  path, is left to a later milestone).
+- **Desktop log without hot reload, when attached**: a `frus run --no-hot` started by the
+  developer does not keep its application's log (milestone 788's limit), so `get_logs` on such
+  an attached run is empty; a run `launch_app` starts keeps it.
+- **Resources and prompts** (MCP's other features) are not offered: only tools.
+- **macOS and Linux** were not run; the server has no platform-specific code beyond killing a
+  process tree (`taskkill` on Windows).
+- **iOS**: no shell yet.

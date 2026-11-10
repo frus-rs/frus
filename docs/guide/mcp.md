@@ -57,7 +57,7 @@ screenshot; hot_reload after each edit."
 | Tool | What it does |
 | --- | --- |
 | `list_devices` | What the application can run on: this computer, phones and emulators, browsers |
-| `launch_app` | Builds and starts the application (`frus run`) on a `device`, with optional `flags`, and waits until it is up |
+| `launch_app` | Builds and starts the application (`frus run`) on a `device` (or several, or `all`), with optional `flags`, and waits until it is up |
 | `attach_app` | Reaches a `frus run` you started yourself, by its DevTools address or by finding it |
 | `app_status` | The applications the server drives: building, running or stopped, the device, the address; waits for one to be up |
 | `stop_app` | Stops the application and its `frus run` |
@@ -70,7 +70,7 @@ screenshot; hot_reload after each edit."
 | `widget_at` | The widget at a point |
 | `tap` | Taps a widget found as `find_widgets` finds it, or a point |
 | `scroll` | Scrolls the area under a widget or a point by `dx`, `dy` |
-| `enter_text` | Types into a field, key by key, or sets its whole value (`replace`) |
+| `enter_text` | Types into a field, key by key, or sets its whole value (`replace`); on Android the field's value is extended, as the input method does |
 | `press_key` | `Enter`, `Tab`, `Escape`, arrows, `ctrl+a`… |
 | `go_back` | The system's Back |
 | `screenshot` | The application as an image, downscaled (`max_size`, 1024 pixels by default); `save_to` keeps the full PNG |
@@ -106,8 +106,10 @@ stop_app {}
 rebuild and restart with the state saved and restored, `["--release"]` runs a release build, which
 has no DevTools, so only the log, restarts and stopping work. The first build can take minutes:
 when the application is not up within `wait_seconds` (300 by default), `launch_app` says so and
-`app_status` with a `wait_seconds` goes on waiting. Several applications can run at once, on
-several devices; each tool takes an `app_id`, and acts on the last one launched without it.
+`app_status` with a `wait_seconds` goes on waiting. `device: "all"` runs on this computer and every connected
+phone at once, and `devices` names several: each device is an application of its own, with its
+own `app_id`, as with `frus run -d all`. Every tool takes an `app_id`, and acts on the last one
+launched without it.
 
 When you already have `frus run` going, the agent can use it instead: every debug run notes
 where its DevTools are, in `target/frus-devtools/run-<pid>.json` (in the build's directory,

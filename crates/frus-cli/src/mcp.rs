@@ -70,7 +70,8 @@ const TOOLS: &str = r#"[
 {"name": "launch_app",
  "description": "Build and start a frus app (`frus run --machine`) on a device, in debug mode with hot reload, and wait until it is up. Returns the app id and its DevTools address. The first build can take minutes; if it is not up within wait_seconds, call app_status to keep waiting. Build errors are returned. Several apps can run at once; the other tools act on the last one unless given `app_id`.",
  "inputSchema": {"type": "object", "properties": {
-   "device": {"type": "string", "description": "Where to run: an id from list_devices, or `desktop`, `android`, `web` (a browser), `web-server`. Default: this computer."},
+   "device": {"type": "string", "description": "Where to run: an id from list_devices, or `desktop`, `android`, `web` (a browser), `web-server`, or `all` (this computer and every connected phone, each its own app). Default: this computer."},
+   "devices": {"type": "array", "items": {"type": "string"}, "description": "Several devices at once, each its own app with its own app_id."},
    "project_dir": {"type": "string", "description": "The app's directory (its Cargo.toml). Default: the server's working directory."},
    "flags": {"type": "array", "items": {"type": "string"}, "description": "More `frus run` options, e.g. [\"--no-hot\"] to restart instead of patching, [\"--release\"] (no DevTools then), [\"--\", \"app-arg\"]."},
    "wait_seconds": {"type": "number", "description": "How long to wait for the app to be up. Default 300."}}}},
@@ -557,12 +558,23 @@ fn kill_tree(child: &mut Child, pid: u32) {
 }
 
 /// Starts `frus run --machine` in `root`, its output read into a session.
-fn launch(root: &Path, device: Option<&str>, flags: &[String]) -> Result<Session, String> {
+///
+/// `slot` is set when this run is one of several the agent launched together: each then keeps
+/// its own copy of the sources and its own build, as `frus run -d all`'s runs do.
+fn launch(
+    root: &Path,
+    device: Option<&str>,
+    flags: &[String],
+    slot: Option<&str>,
+) -> Result<Session, String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = Command::new(program);
     command.args(["run", "--machine"]);
     if let Some(device) = device {
         command.args(["-d", device]);
+    }
+    if let Some(slot) = slot {
+        command.env(crate::sessions::SESSION_ENV, slot);
     }
     command
         .args(flags)
@@ -1395,34 +1407,86 @@ impl Server {
             .map(str::to_string)
             .collect();
         let release = flags.iter().any(|f| f == "--release");
-        let session = launch(&root, arg_str(args, "device"), &flags)?;
-        let id = session.id.clone();
-        self.sessions.push(session);
+        // Several devices: one run each, as `frus run -d all` makes them, each its own app.
+        let mut wanted: Vec<String> = arg_str(args, "device")
+            .map(str::to_string)
+            .into_iter()
+            .collect();
+        if let Some(more) = args.get("devices").and_then(Value::as_array) {
+            wanted.extend(more.iter().filter_map(Value::as_str).map(str::to_string));
+        }
+        let targets: Vec<(Option<String>, Option<String>)> = if crate::sessions::is_several(&wanted)
+        {
+            let project = Project::find(&root)?;
+            let found = crate::devices::discover();
+            let made_for = project.app_platforms();
+            crate::sessions::resolve(&found, &wanted, made_for.as_deref())?
+                .iter()
+                .map(|d| (Some(d.id.clone()), Some(crate::sessions::slot(d))))
+                .collect()
+        } else {
+            vec![(wanted.first().cloned(), None)]
+        };
+        let several = targets.len() > 1;
+        let mut ids = Vec::new();
+        for (device, slot) in &targets {
+            let session = launch(
+                &root,
+                device.as_deref(),
+                &flags,
+                slot.as_deref().filter(|_| several),
+            )?;
+            ids.push(session.id.clone());
+            self.sessions.push(session);
+        }
         let wait = seconds(args, "wait_seconds", 300);
-        let session = self.sessions.last_mut().expect("just pushed");
-        let up = session.shared.wait_until(wait, |s| {
-            s.stopped.is_some() || if release { s.started } else { s.hub.is_some() }
-        });
-        let stopped = session.shared.lock().stopped.clone();
-        if let Some(why) = stopped {
-            let tail = session.shared.lock().tail(40, None);
-            self.sessions.retain(|s| s.id != id);
-            return Err(format!("the app did not start: {why}\nLast lines:\n{tail}"));
+        let deadline = Instant::now() + wait;
+        let mut said = Vec::new();
+        let mut failed = Vec::new();
+        for id in &ids {
+            let Some(session) = self.sessions.iter().find(|s| &s.id == id) else {
+                continue;
+            };
+            let left = deadline.saturating_duration_since(Instant::now());
+            let up = session.shared.wait_until(left, |s| {
+                s.stopped.is_some() || if release { s.started } else { s.hub.is_some() }
+            });
+            let (stopped, progress, device) = {
+                let state = session.shared.lock();
+                (
+                    state.stopped.clone(),
+                    state.progress.clone(),
+                    state.device.clone(),
+                )
+            };
+            if let Some(why) = stopped {
+                let tail = session.shared.lock().tail(40, None);
+                failed.push(id.clone());
+                said.push(format!(
+                    "{id} on {device} did not start: {why}\nLast lines:\n{tail}"
+                ));
+            } else if !up {
+                said.push(format!(
+                    "{id} is still building or starting (last: {progress}). Call app_status with \
+                     wait_seconds to wait for it; get_logs shows the build."
+                ));
+            } else if release {
+                said.push(format!(
+                    "{id} is running on {device}, a release build: no DevTools, so only \
+                     get_logs, hot_restart and stop_app work."
+                ));
+            } else {
+                said.push(self.describe(id, Duration::from_secs(30)));
+            }
         }
-        if !up {
-            let progress = session.shared.lock().progress.clone();
-            return Ok(vec![text(format!(
-                "{id} is still building or starting (last: {progress}). Call app_status with \
-                 wait_seconds to wait for it; get_logs shows the build."
-            ))]);
+        self.sessions.retain(|s| !failed.contains(&s.id));
+        if several {
+            said.push("Each device is its own app: pass app_id to act on one.".into());
         }
-        if release {
-            return Ok(vec![text(format!(
-                "{id} is running, a release build: no DevTools, so only get_logs, hot_restart \
-                 and stop_app work."
-            ))]);
+        if failed.len() == ids.len() {
+            return Err(said.join("\n"));
         }
-        Ok(vec![text(self.describe(&id, Duration::from_secs(30)))])
+        Ok(vec![text(said.join("\n"))])
     }
 
     /// A session's state, with its application's `hello` once it answers.
