@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use crate::cargo::{self, Mode};
 use crate::devices::{self, Device, Kind};
 use crate::devlink::{DevLink, Report};
+use crate::devtools::{self, Relay};
 use crate::json::object;
 use crate::keys;
 use crate::project::Project;
@@ -106,6 +107,8 @@ pub(crate) enum Action {
     /// Something the application does itself, by the command it is sent (`frus-shell`'s
     /// `dev_commands`).
     App(&'static str),
+    /// DevTools opened in the browser (milestone 788).
+    DevTools,
     /// A key of the reference's tool that has nothing to do here, and why.
     Missing(&'static str),
 }
@@ -134,10 +137,12 @@ pub(crate) fn action(key: char) -> Option<Action> {
         'L' => Action::Missing("frus has no layer tree: a frame is one scene, painted in order"),
         'U' => Action::Missing("frus hit-tests one way only: there is no order to invert"),
         'I' => Action::Missing("frus does not mark oversized images yet"),
-        'a' => Action::Missing("frus records no timeline yet: `P` shows what each frame costs"),
+        'a' => Action::Missing(
+            "frus records no timeline yet: `P` shows what each frame costs, and DevTools (`v`) charts them",
+        ),
         'M' => Action::Missing("frus compiles no shaders at run time: there is nothing to write"),
         'g' => Action::Missing("frus has no code generators to run"),
-        'v' => Action::Missing("frus has no DevTools yet: `i` is its inspector"),
+        'v' => Action::DevTools,
         _ => return None,
     })
 }
@@ -162,6 +167,7 @@ pub(crate) const KEYS: &str =
   T  text size: 100%, 130%, 200%, 85%, as a reader's settings would
   l  turn a simulated device on its side and back (frus run -d iphone-15)
   K  hold a simulated device's keyboard up, or let it go
+  v  open DevTools in the browser: the widget tree, the frames, the log
 ";
 
 /// Clears the terminal, its scrollback too, and puts the cursor at the top.
@@ -212,6 +218,7 @@ pub(crate) fn run(options: &RunOptions) -> Result<ExitCode, String> {
     }
     let result = run_session(options);
     keys::restore();
+    devtools::stop();
     report::event(
         "app.stop",
         object([("error", result.as_ref().err().map(String::as_str).into())]),
@@ -346,6 +353,36 @@ fn restarted(action: Action, started: Instant, more: &str) {
     }
 }
 
+/// Serves DevTools for the application `relay` reaches (milestone 788): a debug build's only,
+/// since a release has nothing of it compiled in.
+fn serve_devtools(relay: Relay, project: &Project, device: &str, platform: &str, mode: Mode) {
+    if mode == Mode::Debug {
+        devtools::start(
+            relay,
+            devtools::Info {
+                app: project.package.clone(),
+                device: device.to_string(),
+                platform: platform.to_string(),
+            },
+        );
+    }
+}
+
+/// The desktop's name for DevTools.
+fn host_name(options: &RunOptions) -> (String, &'static str) {
+    let platform = if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    match &options.simulate {
+        Some(profile) => (format!("{profile} (simulated)"), platform),
+        None => ("this computer".to_string(), platform),
+    }
+}
+
 /// The keys, from the moment the application is up.
 fn attach(what: &str) -> Receiver<char> {
     if report::is_machine() {
@@ -356,6 +393,7 @@ fn attach(what: &str) -> Receiver<char> {
     } else {
         report::say(&format!("\n{what}. Keys:\n{KEYS}"));
     }
+    devtools::announce();
     keys::listen()
 }
 
@@ -387,6 +425,8 @@ fn restarting(action: Action, location: Option<&str>) {
 
 fn run_desktop(project: &Project, options: &RunOptions) -> Result<ExitCode, String> {
     let link = DevLink::open()?;
+    let (device, platform) = host_name(options);
+    serve_devtools(link.relay(), project, &device, platform, options.mode);
     let runs = crate::sessions::session_dir(project.target_dir()?.join("frus-run"));
     let mut generation = 0;
     let built = cargo::build_desktop(project, options.mode)?;
@@ -418,6 +458,7 @@ fn run_desktop(project: &Project, options: &RunOptions) -> Result<ExitCode, Stri
             }
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             Some(Action::App(command)) => {
                 if !link.send(&format!("do {command}")) {
                     report::warn("the application is not connected to frus run");
@@ -592,6 +633,8 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
     let shadow = crate::hot::shadow(project)?;
     let mirror = mirror_sources(project, &shadow)?;
     let link = DevLink::open()?;
+    let (device, platform) = host_name(options);
+    serve_devtools(link.relay(), project, &device, platform, options.mode);
     // A build of its own: the program a patch replaces is linked with everything kept.
     let target = crate::hot::session_root(project)?.join("target");
     // The engine's server, on a port of its own: beside a web run, or another run, its default
@@ -716,6 +759,7 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
             }
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             Some(Action::App(command)) => {
                 if !link.send(&format!("do {command}")) {
                     report::warn("the application is not connected to frus run");
@@ -872,6 +916,13 @@ fn run_android(
     // needs no network permission to be restarted.
     let link = DevLink::open()?;
     let package = &project.android_package;
+    serve_devtools(
+        Relay::adb(adb.clone(), serial, package),
+        project,
+        &device.name,
+        "android",
+        mode,
+    );
     // The device's processor: the package is built for it (see `cargo::build_apk`).
     let device_target = adb_on(&["shell", "getprop", "ro.product.cpu.abi"])
         .output()
@@ -948,6 +999,7 @@ fn run_android(
             }
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             Some(Action::App(command)) => send_android_command(&adb, serial, package, command),
             Some(Action::Screenshot) => android_screenshot(&adb, serial, project),
             Some(action @ (Action::Restart | Action::Reload)) => {
@@ -1091,6 +1143,13 @@ fn run_android_hot(
     )?;
     let mirror = mirror_sources(project, &shadow)?;
     let link = DevLink::open()?;
+    serve_devtools(
+        Relay::adb(adb.clone(), serial, package),
+        project,
+        &device.name,
+        "android",
+        options.mode,
+    );
     let target = crate::hot::session_root(project)?.join("target");
     // The engine's server, which the application reaches through `adb reverse` on this port.
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -1266,6 +1325,7 @@ fn run_android_hot(
             }
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             Some(Action::App(command)) => send_android_command(&adb, serial, package, command),
             Some(Action::Screenshot) => android_screenshot(&adb, serial, project),
             None => {}
@@ -1437,6 +1497,7 @@ fn run_web(
         },
         options.port,
     )?;
+    serve_devtools(server.relay(), project, "browser", "web", options.mode);
     let url = server.url.clone();
     let (mut browser_process, profile) = open_browser(browser, &url)?;
     let keys = attach(&match browser_process {
@@ -1468,6 +1529,7 @@ fn run_web(
             ),
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             // The page asks for them, as it asks which build is served.
             Some(Action::App(command)) => server.command(command),
             // The application reads its canvas on its next frame and the page sends it here.
@@ -1618,6 +1680,7 @@ fn run_web_hot(
         },
         options.port,
     )?;
+    serve_devtools(server.relay(), project, "browser", "web", options.mode);
     // The engine's socket, read by this run: each patch is kept for the pages, which ask for it
     // (see `serve::PatchSlot`). The engine sends a patch to each client connected when it is
     // made, and the latest one to a client that connects — but not reliably to every page that
@@ -1714,6 +1777,7 @@ fn run_web_hot(
             ),
             Some(Action::Clear) => clear_screen(),
             Some(Action::Missing(why)) => report::say(why),
+            Some(Action::DevTools) => devtools::open(),
             Some(Action::App(command)) => server.command(command),
             Some(Action::Screenshot) => {
                 let path = screenshot_path(&project.root);
@@ -1831,7 +1895,8 @@ mod tests {
         assert_eq!(action('T'), Some(Action::App("text-scale")));
         assert_eq!(action('l'), Some(Action::App("rotate")));
         assert_eq!(action('K'), Some(Action::App("keyboard")));
-        assert!(matches!(action('v'), Some(Action::Missing(_))));
+        assert_eq!(action('v'), Some(Action::DevTools));
+        assert!(matches!(action('a'), Some(Action::Missing(_))));
     }
 
     /// Every key the help lists does something, and every key that does something is listed

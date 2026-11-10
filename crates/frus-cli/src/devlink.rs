@@ -55,6 +55,8 @@ pub(crate) struct DevLink {
     /// Lines sent before any application connected: a key pressed while it starts. The next
     /// connection gets them first.
     pending: Arc<Mutex<Vec<String>>>,
+    /// DevTools' answers, `devtools <json>` lines (milestone 788).
+    answers: Arc<crate::devtools::Answers>,
 }
 
 impl DevLink {
@@ -68,11 +70,13 @@ impl DevLink {
         let latest = Arc::new(Mutex::new(None));
         let saved = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(Mutex::new(Vec::<String>::new()));
-        let (shared, newest, answered, waiting) = (
+        let answers = Arc::new(crate::devtools::Answers::default());
+        let (shared, newest, answered, waiting, devtools) = (
             report.clone(),
             latest.clone(),
             saved.clone(),
             pending.clone(),
+            answers.clone(),
         );
         std::thread::spawn(move || {
             for stream in listener.incoming().map_while(Result::ok) {
@@ -85,10 +89,13 @@ impl DevLink {
                     *slot = Some(writer);
                 }
                 let (shared, answered) = (shared.clone(), answered.clone());
+                let devtools = devtools.clone();
                 std::thread::spawn(move || {
                     for line in BufReader::new(stream).lines().map_while(Result::ok) {
                         if line == "saved" {
                             answered.store(true, Ordering::SeqCst);
+                        } else if let Some(answer) = line.strip_prefix("devtools ") {
+                            devtools.deliver(answer);
                         } else if let Ok(mut report) = shared.lock() {
                             report.take(&line);
                         }
@@ -102,7 +109,19 @@ impl DevLink {
             latest,
             saved,
             pending,
+            answers,
         })
+    }
+
+    /// How DevTools reaches the application on this socket (milestone 788): its requests go
+    /// out as `devtools <json>` lines, as a key's commands do, and its answers come back the
+    /// same way.
+    pub(crate) fn relay(&self) -> crate::devtools::Relay {
+        let (latest, pending) = (self.latest.clone(), self.pending.clone());
+        crate::devtools::Relay::Lines {
+            send: Box::new(move |line: &str| send_on(&latest, &pending, line)),
+            answers: self.answers.clone(),
+        }
     }
 
     /// `127.0.0.1:<port>`, what the application is told.
@@ -117,18 +136,7 @@ impl DevLink {
     /// Sends the running application a line: `do <command>` (milestone 668). Before it has
     /// connected — it is starting — the line waits for it. `false` when it could not be written.
     pub(crate) fn send(&self, line: &str) -> bool {
-        let Ok(mut slot) = self.latest.lock() else {
-            return false;
-        };
-        match slot.as_mut() {
-            Some(stream) => stream.write_all(format!("{line}\n").as_bytes()).is_ok(),
-            None => {
-                if let Ok(mut pending) = self.pending.lock() {
-                    pending.push(line.to_string());
-                }
-                true
-            }
-        }
+        send_on(&self.latest, &self.pending, line)
     }
 
     /// The application was stopped: what is sent from now on waits for the next one to connect,
@@ -178,6 +186,22 @@ impl DevLink {
     /// The report, shared with the thread that reads a device's log.
     pub(crate) fn shared(&self) -> Arc<Mutex<Report>> {
         self.report.clone()
+    }
+}
+
+/// A line to the application connected last, or kept for the next one to connect.
+fn send_on(latest: &Mutex<Option<TcpStream>>, pending: &Mutex<Vec<String>>, line: &str) -> bool {
+    let Ok(mut slot) = latest.lock() else {
+        return false;
+    };
+    match slot.as_mut() {
+        Some(stream) => stream.write_all(format!("{line}\n").as_bytes()).is_ok(),
+        None => {
+            if let Ok(mut pending) = pending.lock() {
+                pending.push(line.to_string());
+            }
+            true
+        }
     }
 }
 

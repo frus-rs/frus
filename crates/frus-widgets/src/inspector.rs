@@ -11,12 +11,13 @@
 //! without touching the app.
 
 use frus_core::{Color, Point, Rect, Scene, Size, TextStyle};
+use frus_layout::Style;
 
 use crate::interaction::WidgetId;
 use crate::theme::Theme;
 
 /// One observed widget: its identity, its painted box, its short name
-/// (`debug_name`) and its depth in the tree.
+/// (`debug_name`), its depth in the tree, its key and the layout style it asked for.
 #[derive(Clone, Copy, Debug)]
 pub struct InspectorNode {
     /// The widget's identity.
@@ -27,6 +28,11 @@ pub struct InspectorNode {
     pub name: &'static str,
     /// How deep it sits in the tree; the outermost widget is at 0.
     pub depth: usize,
+    /// Its stable key ([`Widget::key`](crate::Widget::key)), when it has one.
+    pub key: Option<u64>,
+    /// The layout style it asked for: sizes and their bounds, padding, margin, flex
+    /// factors, alignment.
+    pub style: Style,
 }
 
 /// The node the hover designates: the **deepest** one containing `point`
@@ -113,9 +119,29 @@ pub fn paint_overlay(
         scene.draw_rect(node.rect, Color::TRANSPARENT, 0.0, 1.0, color);
     }
 
-    let Some(target) = hover.and_then(|point| node_at(nodes, point)) else {
-        return;
-    };
+    if let Some(target) = hover.and_then(|point| node_at(nodes, point)) {
+        paint_highlight(target, window, theme, scene);
+    }
+}
+
+/// Paints **one** designated widget on top of an already built scene: a scrim and a
+/// heavier outline over its box, and a card with its name, size, position and id near
+/// it, kept inside the window. What the inspector paints for the widget under the
+/// cursor, and what a debugging tool paints for the widget it selected.
+///
+/// ```
+/// use frus_widgets::{build_ui_inspected, paint_highlight, Container, Runtime, Size, Theme};
+///
+/// let root: Container<()> = Container::new().width(80.0).height(40.0);
+/// let (runtime, theme) = (Runtime::default(), Theme::default());
+/// let (ui, nodes) = build_ui_inspected(&root, Size::new(80.0, 40.0), &runtime, &theme);
+/// let mut scene = ui.scene().clone();
+/// paint_highlight(&nodes[0], Size::new(80.0, 40.0), &theme, &mut scene);
+/// assert!(scene.len() > ui.scene().len());
+/// ```
+pub fn paint_highlight(target: &InspectorNode, window: Size, theme: &Theme, scene: &mut Scene) {
+    scene.set_clip(Rect::UNBOUNDED);
+    scene.set_owner(0);
 
     // Highlight for the designated widget: a primary scrim + a heavier outline.
     scene.draw_rect(

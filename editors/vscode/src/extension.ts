@@ -178,6 +178,7 @@ export function activate(context: vscode.ExtensionContext): void {
       createEmulator(devices, (name) => (awaitedEmulator = name)),
     ),
     vscode.commands.registerCommand("frus.reload", () => customRequest("hotReload")),
+    vscode.commands.registerCommand("frus.openDevTools", openDevTools),
     vscode.commands.registerCommand("frus.restart", () => customRequest("hotRestart")),
     ...KEY_COMMANDS.map(([command, key]) =>
       vscode.commands.registerCommand(command, () => customRequest("key", { key })),
@@ -443,6 +444,24 @@ async function createEmulator(devices: Devices, awaiting: (name: string) => void
       vscode.window.showErrorMessage(`frus: ${error.message}`),
     );
   }
+}
+
+/** DevTools of the running application, in the browser: the address `frus run` serves it at. */
+async function openDevTools(): Promise<void> {
+  const session = vscode.debug.activeDebugSession;
+  if (session?.type !== "frus") {
+    vscode.window.showInformationMessage("frus: start the application first (F5), then open DevTools.");
+    return;
+  }
+  const answer = await session.customRequest("devTools");
+  const uri = answer?.uri as string | undefined;
+  if (!uri) {
+    vscode.window.showInformationMessage(
+      "frus: DevTools is not served yet; it comes with a debug build, once the application runs.",
+    );
+    return;
+  }
+  await vscode.env.openExternal(vscode.Uri.parse(uri));
 }
 
 /** A request to every running frus session. */

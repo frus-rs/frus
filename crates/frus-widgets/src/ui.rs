@@ -5932,6 +5932,8 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 rect: draw_rect,
                 name: widget.debug_name(),
                 depth: self.depth,
+                key: widget.key(),
+                style: widget.style(),
             });
         }
         self.depth += 1;
