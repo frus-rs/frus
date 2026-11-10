@@ -8,10 +8,27 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 787 so far, each documenting the objective, the alternatives
+> record — one per step, 788 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **DevTools** (J788). `frus run` serves DevTools on `localhost` for a debug build, and `v` opens
+  it in the browser (in VS Code, **frus: Open DevTools**; with `--machine`, the `app.devTools`
+  event carries its address). An **inspector** shows the live widget tree with each widget's
+  key, words and semantics; a selected widget's box, layout style, semantics, ancestors and
+  children; the selection highlighted in the application; and a select mode in which tapping
+  the application picks the widget under the finger. **Performance** charts every frame's
+  build, layout and paint, and render times against the 60 Hz budget, jank in red. **Settings**
+  sets the animation speed (1×, 0.5×, 0.2×, 0.1×), debug paint, the performance overlay, the
+  brightness, the platform and the text size; **Logs** shows the application's log. Behind it,
+  one versioned JSON protocol (`POST /api`, guarded by a token in the printed address) that any
+  client can speak: `tree`, `node`, `find` (by text, semantics label, type, key or id), `at`,
+  `tap`, `scroll`, `type`, `setText`, `key`, `back`, `screenshot`, `frames`, `state`, `set`,
+  `logs`, `reload`, `restart` — documented in `docs/guide/devtools.md`. It works on the
+  desktop, on Android (a local socket reached with `adb forward`, no permission needed) and on
+  the web. Nothing of it is compiled into a release build. `InspectorNode` now carries the
+  widget's key and layout style, and `paint_highlight` paints one designated widget.
 
 - **Material 3 expressive widgets, second batch** (J787). `LinearWavyProgressIndicator` and
   `CircularWavyProgressIndicator` (determinate and indeterminate; the wave flattens near the

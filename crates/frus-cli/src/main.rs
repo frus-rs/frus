@@ -23,6 +23,7 @@ mod create;
 mod daemon;
 mod devices;
 mod devlink;
+mod devtools;
 mod doctor;
 mod emulators;
 mod hot;

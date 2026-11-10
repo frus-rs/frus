@@ -209,7 +209,10 @@ The generated project depends on the published [`frus`](https://crates.io/crates
 While `frus run` runs: `r` reload, `R` restart, `s` screenshot, `w` / `f` / `S` print the widget,
 focus and semantics trees, `i` the inspector, `p` outlines around every widget, `o` another
 platform's behaviour, `b` light or dark, `T` the text size, `P` a performance panel with graphs,
-`l` / `K` turn a simulated device and hold up its keyboard, `d` detach, `q` quit. [`crates/frus-cli`](crates/frus-cli) has the details.
+`l` / `K` turn a simulated device and hold up its keyboard, `v` DevTools in the browser (the live
+widget tree, each frame's cost, slow animations, the log), `d` detach, `q` quit.
+[`crates/frus-cli`](crates/frus-cli) has the details, and [DevTools](docs/guide/devtools.md)
+its protocol.
 
 **VS Code:** the extension in [`editors/vscode`](editors/vscode) adds a device picker in the
 status bar (and starts or creates emulators from it), F5 with the log in the Debug Console,
