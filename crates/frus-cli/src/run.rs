@@ -348,6 +348,10 @@ fn serve_devtools(relay: Relay, project: &Project, device: &str, platform: &str,
                 platform: platform.to_string(),
             },
         );
+        // Noted where a client that did not start this run can find it (`frus mcp`).
+        if let Ok(target) = project.target_dir() {
+            devtools::record(&target, &project.root);
+        }
     }
 }
 

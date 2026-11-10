@@ -19,6 +19,7 @@ frus run -d web           # in a browser
 | `frus devices` | lists what the application can run on now |
 | `frus run [-d <device>]` | builds it, starts it there, and shows its log in the terminal |
 | `frus build apk\|web\|desktop` | builds what you ship, in release |
+| `frus mcp` | an MCP server: an AI coding agent runs, inspects and drives the application |
 
 `frus create` writes an application that runs on Windows, macOS, Linux, Android and the web
 from the same code: a counter built from a component, with its tests, the Android launcher
@@ -139,6 +140,20 @@ platform as far as the developer sees, and done three ways underneath:
   new one — its address, which is the application's location, survives the reload.
 
 iOS simulators are listed, but frus cannot run on iOS yet: its shell does not exist (issue #19).
+
+## For AI agents: `frus mcp`
+
+`frus mcp` is a Model Context Protocol server on standard input and output. Through its tools an
+agent starts the application (`frus run`) or attaches to one that runs, reads its widget tree
+and log, finds widgets by their words, label, type or key, taps, scrolls, types, takes
+screenshots, hot reloads after an edit, and runs `frus analyze` and `frus test`. `frus create`
+writes a `.mcp.json` that registers it:
+
+```json
+{"mcpServers": {"frus": {"command": "frus", "args": ["mcp"]}}}
+```
+
+The tools and how to add the server to other agents are in `docs/guide/mcp.md`.
 
 ## For editors: `frus daemon` and `frus run --machine`
 

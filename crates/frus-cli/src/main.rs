@@ -29,7 +29,9 @@ mod emulators;
 mod hot;
 mod json;
 mod keys;
+mod mcp;
 mod permissions;
+mod png;
 mod project;
 mod report;
 mod run;
@@ -59,6 +61,7 @@ Usage:
   frus test [<filter>] [-v]           the tests, said briefly: a summary, each failure at its place
   frus analyze [--fix]                clippy and rustfmt, everything to fix listed together
   frus daemon                         JSON lines for an editor: devices, as they come and go
+  frus mcp                            an MCP server: AI agents run, inspect and drive the application
   frus help [<command>]               print this, or a command's options
   frus --version                      print the version
 ";
@@ -95,6 +98,19 @@ Examples:
   frus run -d edge --release
   frus run -d iphone-15
   frus run -d iphone-15 --web
+";
+
+const MCP_USAGE: &str = "frus mcp — a Model Context Protocol server for AI coding agents
+
+Usage:
+  frus mcp
+
+An agent's client starts it and talks to it on standard input and output. Its tools
+start the application (`frus run`) or attach to one that runs, read its widget tree
+and log, tap, scroll, type, take screenshots, hot reload after an edit, run the tests.
+Add it to a project with a `.mcp.json` (`frus create` writes one):
+
+  {\"mcpServers\": {\"frus\": {\"command\": \"frus\", \"args\": [\"mcp\"]}}}
 ";
 
 const EMULATORS_USAGE: &str = "\
@@ -188,6 +204,8 @@ enum Command {
     Create(Options),
     Devices,
     Daemon,
+    Mcp,
+    McpHelp,
     Doctor(doctor::Options),
     DoctorHelp,
     Emulators(emulators::Action),
@@ -239,6 +257,11 @@ fn main() -> ExitCode {
         }
         Ok(Command::Run(options)) => outcome(run::run(&options)),
         Ok(Command::Daemon) => outcome(daemon::daemon()),
+        Ok(Command::Mcp) => outcome(mcp::mcp()),
+        Ok(Command::McpHelp) => {
+            print!("{MCP_USAGE}");
+            ExitCode::SUCCESS
+        }
         Ok(Command::Doctor(options)) => doctor::doctor(options),
         Ok(Command::Emulators(action)) => outcome(emulators::emulators(action)),
         Ok(Command::Clean) => outcome(clean::clean()),
@@ -285,6 +308,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
             Some("devices") => Ok(Command::DevicesHelp),
             Some("doctor") => Ok(Command::DoctorHelp),
             Some("emulators") => Ok(Command::EmulatorsHelp),
+            Some("mcp") => Ok(Command::McpHelp),
             Some(other) => Err(format!("no command `{other}`")),
         },
         Some("-V" | "--version" | "version") => Ok(Command::Version),
@@ -296,6 +320,11 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
         },
         Some("run") => parse_run(args),
         Some("daemon") => Ok(Command::Daemon),
+        Some("mcp") => match args.next().as_ref().and_then(|a| a.to_str()) {
+            None => Ok(Command::Mcp),
+            Some("-h" | "--help") => Ok(Command::McpHelp),
+            Some(other) => Err(format!("frus mcp takes no `{other}`")),
+        },
         Some("doctor") => parse_doctor(args),
         Some("emulators") => parse_emulators(args),
         Some("test") => {

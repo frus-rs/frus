@@ -35,6 +35,15 @@ What it needs and does not find — a Rust target, wasm-bindgen, cargo-apk, the 
 installs. Underneath it runs cargo, cargo-apk and wasm-bindgen: each section below ends with the
 same steps by hand.
 
+## With an AI coding agent
+
+`.mcp.json` registers `frus mcp`, a Model Context Protocol server, for agents that read it
+(Claude Code does, from this directory). Through it the agent runs the application, reads its
+widget tree and log, taps, types, takes screenshots, and hot reloads after an edit. For other
+agents, the same server is `frus mcp`: add it as a stdio server in their settings. Tell the
+agent in your `CLAUDE.md` or `AGENTS.md`, for instance: "Check UI changes in the running app
+with the frus tools: launch_app, then find_widgets, tap and screenshot."
+
 ## Desktop
 
 ```sh

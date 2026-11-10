@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -355,10 +355,61 @@ pub(crate) fn start(relay: Relay, info: Info) {
     });
 }
 
-/// The run ends: the port forwarded to a device is given back.
+/// The run ends: the port forwarded to a device is given back, and the note of the address
+/// (see [`record`]) removed.
 pub(crate) fn stop() {
     if let Some(hub) = HUB.lock().ok().and_then(|mut slot| slot.take()) {
         hub.relay.forget_forward();
+    }
+    if let Some(file) = RECORD.lock().ok().and_then(|mut slot| slot.take()) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// The note of where a run's DevTools are, for a client that attaches to a run it did not start
+/// (`frus mcp`, milestone 789).
+static RECORD: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Where the runs of the applications built into `target` note their DevTools: a file each,
+/// `run-<pid>.json`, there while the run lasts.
+pub(crate) fn runs_dir(target: &Path) -> PathBuf {
+    target.join("frus-devtools")
+}
+
+/// Notes this run's DevTools for clients that attach to it: `{uri, root, app, device,
+/// platform, pid}` in [`runs_dir`]. The token is in it, so the file is the user's alone where
+/// the system has such rights. A run that ends without [`stop`] leaves its note behind; a client
+/// tells it from a live one by asking its `status`.
+pub(crate) fn record(target: &Path, root: &Path) {
+    let (Some(address), Some(info)) = (
+        address(),
+        HUB.lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|hub| hub.info.clone())),
+    ) else {
+        return;
+    };
+    let dir = runs_dir(target);
+    let file = dir.join(format!("run-{}.json", std::process::id()));
+    let note = object([
+        ("uri", address.into()),
+        ("root", root.display().to_string().into()),
+        ("app", info.app.into()),
+        ("device", info.device.into()),
+        ("platform", info.platform.into()),
+        ("pid", u64::from(std::process::id()).into()),
+    ]);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let written = std::fs::create_dir_all(&dir)
+        .and_then(|_| options.open(&file))
+        .and_then(|mut out| out.write_all(note.to_json().as_bytes()));
+    if written.is_ok() {
+        if let Ok(mut slot) = RECORD.lock() {
+            *slot = Some(file);
+        }
     }
 }
 
@@ -504,8 +555,12 @@ impl Hub {
                     .map(|n| n as u64);
                 answer(Ok(log_after(after)))
             }
-            "reload" | "restart" => {
-                crate::keys::press(if method == "reload" { 'r' } else { 'R' });
+            "reload" | "restart" | "stop" => {
+                crate::keys::press(match method {
+                    "reload" => 'r',
+                    "restart" => 'R',
+                    _ => 'q',
+                });
                 answer(Ok(object([])))
             }
             "screenshot" if self.relay.device_screenshot_here() => answer(
@@ -547,7 +602,7 @@ impl Relay {
 }
 
 /// Standard base64, padded.
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

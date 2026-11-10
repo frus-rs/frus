@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "frus": {
+      "command": "frus",
+      "args": ["mcp"]
+    }
+  }
+}

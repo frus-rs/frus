@@ -18,6 +18,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Animation](animation.md) | Values that move to their new value, switching widgets, curves, what is animated for you |
 | [Testing](testing.md) | Testing the state and the logic, and what the screen looks like |
 | [DevTools](devtools.md) | The live widget tree, each frame's cost, slow animations and the log, in the browser; the protocol behind it |
+| [AI agents](mcp.md) | `frus mcp`: an MCP server through which a coding agent runs, inspects and drives the application |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
 | [Structuring an application](../app-structure.md) | Where each part of a growing application goes |
 

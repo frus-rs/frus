@@ -8,11 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 788 so far, each documenting the objective, the alternatives
+> record — one per step, 789 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **`frus mcp`: AI agents drive the application** (J789). A Model Context Protocol server on
+  standard input and output, through which a coding agent runs the application (`launch_app`,
+  which starts `frus run` on any device) or attaches to a `frus run` already going
+  (`attach_app`; each debug run notes its DevTools address in `target/frus-devtools/`), reads
+  its widget tree as compact text (`get_widget_tree`, `find_widgets`, `get_widget`,
+  `widget_at`) and its log with the build's errors (`get_logs`), acts on it (`tap`, `scroll`,
+  `enter_text`, `press_key`, `go_back`), looks at it (`screenshot`, an image downscaled to 1024
+  pixels by default), hot reloads its own edits and is told when the change is in or why it
+  could not be (`hot_reload`, `hot_restart`), slows animations, flips debug switches, reads
+  frame times, and runs `frus analyze` and `frus test`. `frus create` writes a `.mcp.json` that
+  registers it. The DevTools protocol gains `stop`. Documented in `docs/guide/mcp.md`.
 - **DevTools** (J788). `frus run` serves DevTools on `localhost` for a debug build, and `v` opens
   it in the browser (in VS Code, **frus: Open DevTools**; with `--machine`, the `app.devTools`
   event carries its address). An **inspector** shows the live widget tree with each widget's
