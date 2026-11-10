@@ -40,6 +40,12 @@ pub(crate) struct Project {
     /// The lines of `[package.metadata.frus.permissions]`, `(key, value as written)`: read by
     /// [`Project::permissions`] (milestone 744).
     pub permission_lines: Vec<(String, String)>,
+    /// `[package.metadata.frus] platforms`: what the application is made for (milestone 791).
+    /// None when the manifest has no list: every platform.
+    pub platforms: Option<Vec<String>>,
+    /// `[package.metadata.frus] deeplink`: the links that open it, `myapp` or
+    /// `https://example.com` (milestone 791).
+    pub deeplink: Option<String>,
 }
 
 impl Project {
@@ -90,6 +96,8 @@ impl Project {
         let mut devices: Vec<Vec<String>> = Vec::new();
         let mut version = None;
         let mut permission_lines = Vec::new();
+        let mut platforms = None;
+        let mut deeplink = None;
         for line in text.lines() {
             let line = line.trim();
             if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -124,6 +132,8 @@ impl Project {
                 ("package.metadata.android.sdk", "target_sdk_version") => {
                     android_target_sdk = value.split('#').next().unwrap_or("").trim().parse().ok();
                 }
+                (FRUS, "platforms") => platforms = Some(string_list(value)),
+                (FRUS, "deeplink") => deeplink = string_value(value),
                 _ => {}
             }
             let value = string_value(value);
@@ -155,7 +165,22 @@ impl Project {
             devices: devices.into_iter().map(|pairs| pairs.join(";")).collect(),
             version,
             permission_lines,
+            platforms,
+            deeplink,
         })
+    }
+
+    /// The platforms the manifest lists, None when it lists none (every platform).
+    pub(crate) fn app_platforms(&self) -> Option<Vec<crate::platforms::AppPlatform>> {
+        self.platforms.as_deref().map(crate::platforms::from_words)
+    }
+
+    /// Whether the application is made for `platform`; the error says how to add it.
+    pub(crate) fn check_platform(
+        &self,
+        platform: crate::platforms::AppPlatform,
+    ) -> Result<(), String> {
+        crate::platforms::check(self.app_platforms().as_deref(), platform)
     }
 
     /// The permissions the application declares, or what is wrong with the declaration.
@@ -220,6 +245,9 @@ impl Project {
 
 /// The header of a project's own devices, as `from_manifest` sees `[[package.metadata.frus.devices]]`.
 const DEVICES: &str = "[package.metadata.frus.devices]";
+
+/// frus's own table in the manifest.
+const FRUS: &str = "package.metadata.frus";
 
 /// A device key's value as a description holds it: a string's text, a list's items joined by
 /// commas, a number as written. `;` and `=` would end the pair early, so they are left out.

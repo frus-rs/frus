@@ -8,11 +8,27 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 788 so far, each documenting the objective, the alternatives
+> record — one per step, 791 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **`frus create` platforms and links, several devices at once, the size report** (J791).
+  `frus create --platforms android,web` writes only what those platforms need (files, the
+  manifest's sections, the README's, the CI jobs) and records them in
+  `[package.metadata.frus] platforms`; `frus run` and `frus build` refuse a platform the
+  application is not made for, with the command that adds it: `frus create --platforms web .`,
+  which writes the platform's files and appends its section to `Cargo.toml` without changing the
+  rest. `--deeplink myapp` or `--deeplink https://example.com` declares the links that open the
+  application (Android's intent filter, the macOS bundle's URL types; for an `https` host the
+  `assetlinks.json` to serve is printed), and `--description` says what it is. `frus run -d all`
+  (this computer and every connected phone) and `-d a -d b` run on several devices at once: one
+  run each, every log line with its device in front, every key (`r`, `R`, `q`, `p`…) for all of
+  them, and for an editor each device's events under its own `appId`. `frus build <target>
+  --analyze-size` and `frus size` break the release binary down by crate (ELF, WebAssembly, and
+  the Windows linker's map, read without dependencies), list the bundled fonts and assets found
+  inside it, write the whole as JSON and compare with an earlier one (`--compare`). The guide's
+  "Shipping" says what makes an application smaller.
 - **DevTools** (J788). `frus run` serves DevTools on `localhost` for a debug build, and `v` opens
   it in the browser (in VS Code, **frus: Open DevTools**; with `--machine`, the `app.devTools`
   event carries its address). An **inspector** shows the live widget tree with each widget's

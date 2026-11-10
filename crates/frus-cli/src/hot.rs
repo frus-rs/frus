@@ -129,12 +129,17 @@ fn is_kept_out(name: &str) -> bool {
     ) || name.starts_with('.')
 }
 
+/// Where a hot-reload run keeps the shadow package and its build: `target/frus-hot/`, or a
+/// directory of its own below it when the run is one of several (milestone 791, see `sessions`).
+pub(crate) fn session_root(project: &Project) -> Result<PathBuf, String> {
+    Ok(crate::sessions::session_dir(
+        project.target_dir()?.join("frus-hot"),
+    ))
+}
+
 /// Makes the shadow package for `project` and gives its directory.
 pub(crate) fn shadow(project: &Project) -> Result<PathBuf, String> {
-    let dir = project
-        .target_dir()?
-        .join("frus-hot")
-        .join(&project.package);
+    let dir = session_root(project)?.join(&project.package);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let entries =
         std::fs::read_dir(&project.root).map_err(|e| format!("{}: {e}", project.root.display()))?;
@@ -335,6 +340,7 @@ pub(crate) fn android_project_files(
     package: &str,
     resources: &Path,
     config_changes: &str,
+    deeplink: Option<&crate::platforms::Deeplink>,
 ) -> Result<(), String> {
     // The application's launcher icons (`res/mipmap-*`), and nothing else of its resources: the
     // engine's project has its own theme and strings, which the application's would replace.
@@ -376,7 +382,7 @@ pub(crate) fn android_project_files(
     )?;
     write_if_changed(
         &shadow.join(ANDROID_MANIFEST),
-        &android_manifest(config_changes),
+        &android_manifest(config_changes, deeplink),
     )?;
     write_if_changed(
         &shadow.join("MainActivity.kt"),
@@ -391,7 +397,10 @@ pub(crate) fn android_project_files(
 /// configuration changes: the engine declares four, and Android recreates the activity for any
 /// other — a font size, the night setting, a language — which a frus application cannot
 /// survive in its process (milestones 755 and 763).
-fn android_manifest(config_changes: &str) -> String {
+fn android_manifest(config_changes: &str, deeplink: Option<&crate::platforms::Deeplink>) -> String {
+    let links = deeplink
+        .map(|link| link.android_filter_xml())
+        .unwrap_or_default();
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <!-- Written by `frus run` for the hot-reload engine's Android build (milestone 763). -->
@@ -414,7 +423,7 @@ fn android_manifest(config_changes: &str) -> String {
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+{links}        </activity>
     </application>
 </manifest>
 "#
@@ -874,7 +883,17 @@ resources = "res"
         let _ = std::fs::remove_dir_all(&shadow);
         std::fs::create_dir_all(&shadow).unwrap();
         let changes = crate::config_changes::wanted(34);
-        android_project_files(&shadow, "com.acme.tides", &shadow.join("res"), &changes).unwrap();
+        let link = crate::platforms::Deeplink::Https {
+            host: "tides.example".into(),
+        };
+        android_project_files(
+            &shadow,
+            "com.acme.tides",
+            &shadow.join("res"),
+            &changes,
+            Some(&link),
+        )
+        .unwrap();
         let dioxus = std::fs::read_to_string(shadow.join("Dioxus.toml")).unwrap();
         assert!(
             dioxus.contains("android_manifest = \"AndroidManifest.xml\"\n"),
@@ -899,6 +918,9 @@ resources = "res"
             // What frus itself uses (milestone 777).
             "android.permission.VIBRATE",
             "android.permission.ACCESS_NETWORK_STATE",
+            // The application's links (milestone 791), checked by Android against the host.
+            "<intent-filter android:autoVerify=\"true\">",
+            "android:host=\"tides.example\"",
         ] {
             assert!(manifest.contains(kept), "{kept}: {manifest}");
         }
