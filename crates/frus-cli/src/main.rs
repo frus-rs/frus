@@ -29,11 +29,14 @@ mod hot;
 mod json;
 mod keys;
 mod permissions;
+mod platforms;
 mod project;
 mod report;
 mod run;
 mod serve;
+mod sessions;
 mod setup;
+mod size;
 mod socket;
 mod template;
 mod testing;
@@ -57,6 +60,7 @@ Usage:
   frus clean                          delete the application's builds
   frus test [<filter>] [-v]           the tests, said briefly: a summary, each failure at its place
   frus analyze [--fix]                clippy and rustfmt, everything to fix listed together
+  frus size <target|file>             what the shipped binary is made of, crate by crate
   frus daemon                         JSON lines for an editor: devices, as they come and go
   frus help [<command>]               print this, or a command's options
   frus --version                      print the version
@@ -73,7 +77,11 @@ platform: the desktop's output, Android's logcat, the browser's console.
 
 Options:
   -d, --device <device>    where to run: a device's id or name from `frus devices`,
-                           or `android`, `web`, `desktop` (default: this computer)
+                           or `android`, `web`, `desktop` (default: this computer).
+                           Given more than once, or `all` (this computer and every
+                           connected phone), it runs on each at once: one build per
+                           platform, every log here with its device in front, and
+                           every key (r, R, q…) for all of them
       --release            a release build (default: debug)
       --port <port>        the port the web build is served on (default: 8080)
       --no-hot             restart to reload (`r`) instead of patching the running
@@ -94,6 +102,8 @@ Examples:
   frus run -d edge --release
   frus run -d iphone-15
   frus run -d iphone-15 --web
+  frus run -d all
+  frus run -d windows -d android -d edge
 ";
 
 const EMULATORS_USAGE: &str = "\
@@ -136,8 +146,35 @@ Targets:
   desktop    the program for this computer (also: windows, linux, macos)
 
 Options:
-      --debug    a debug build instead of release
-  -h, --help     print this
+      --debug             a debug build instead of release
+      --analyze-size      what the release binary is made of, crate by crate, and the
+                          fonts and assets inside it: a table here, the whole as JSON
+                          (see `frus help size`)
+      --compare <json>    with --analyze-size: what changed since that analysis
+  -h, --help              print this
+";
+
+const SIZE_USAGE: &str = "\
+frus size — what the shipped binary is made of
+
+Usage:
+  frus size <apk|web|desktop> [--compare <json>]   build it with symbols, then measure
+  frus size <file> [--compare <json>]              measure a binary already built:
+                                                   a .so, a .wasm, an .exe with its .map
+
+The release is built again with its symbols kept, in target/frus-size/ (the build you
+ship is left as it is), and each byte of code and read-only data is put down to the
+crate it comes from. The fonts frus bundles and the files of assets/ found inside are
+listed with their sizes. The whole analysis is written to target/frus-size/<platform>-NN.json;
+`--compare` with an earlier one says what grew and what shrank.
+
+`frus build <target> --analyze-size` is the same as `frus size <target>`.
+How to make an application smaller: the guide's \"Shipping\" (docs/getting-started.md).
+
+Examples:
+  frus size desktop
+  frus build apk --analyze-size
+  frus size web --compare target/frus-size/web-01.json
 ";
 
 const DEVICES_USAGE: &str = "\
@@ -158,6 +195,8 @@ The directory is made if it is not there. In one that has files already, only th
 template's missing files are written and nothing there is changed: `frus create .`
 in an application brings back what was deleted (web/, icons, the desktop binary),
 keeps its manifest and code, and takes its name from its Cargo.toml.
+`frus create --platforms web .` adds a platform to an application: its files, and its
+section of Cargo.toml.
 
 A new application's name is the directory's own unless --name gives one:
 lowercase letters, digits, `_` and `-`.
@@ -166,13 +205,21 @@ Options:
       --name <name>        the package's name (default: the directory's name)
       --org <org>          the reverse domain the Android package starts with
                            (default: com.example; the package is <org>.<name>)
+      --platforms <list>   what it is made for, comma-separated: android, web,
+                           windows, macos, linux, or desktop for the three
+                           (default: all of them)
+      --deeplink <link>    the links that open it: a scheme of its own (`myapp`) or
+                           a host whose https links it opens (`https://example.com`)
+      --description <text> one line saying what it is (Cargo.toml, the web page)
       --frus-path <dir>    build against a checkout of frus, not the published crates
       --no-git             do not make the directory a git repository
   -h, --help               print this
 
 Examples:
   frus create my_app --org com.acme
+  frus create my_app --platforms android,web --deeplink myapp
   frus create .                        # in an application: restore missing files
+  frus create --platforms web .        # in an application: add the web
 ";
 
 /// What the command line asked for.
@@ -201,6 +248,9 @@ enum Command {
     },
     Run(run::RunOptions),
     Build(build::Target, cargo::Mode),
+    /// `frus build <target> --analyze-size`, `frus size` (milestone 791).
+    Size(size::Options),
+    SizeHelp,
 }
 
 fn main() -> ExitCode {
@@ -252,6 +302,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Command::Build(target, mode)) => outcome(build::build(target, mode)),
+        Ok(Command::Size(options)) => outcome(size::size(&options)),
+        Ok(Command::SizeHelp) => {
+            print!("{SIZE_USAGE}");
+            ExitCode::SUCCESS
+        }
         Ok(Command::Create(options)) => match create::create(&options) {
             Ok(created) => {
                 print!("{}", report(&created));
@@ -284,6 +339,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
             Some("devices") => Ok(Command::DevicesHelp),
             Some("doctor") => Ok(Command::DoctorHelp),
             Some("emulators") => Ok(Command::EmulatorsHelp),
+            Some("size") => Ok(Command::SizeHelp),
             Some(other) => Err(format!("no command `{other}`")),
         },
         Some("-V" | "--version" | "version") => Ok(Command::Version),
@@ -326,6 +382,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
             Some(other) => Err(format!("frus clean takes no `{other}`")),
         },
         Some("build") => parse_build(args),
+        Some("size") => parse_size(args),
         _ => Err(format!("no command `{}`", command.to_string_lossy())),
     }
 }
@@ -397,6 +454,9 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
     let mut org = None;
     let mut frus_path = None;
     let mut git = true;
+    let mut platforms = None;
+    let mut deeplink = None;
+    let mut description = None;
 
     while let Some(arg) = args.next() {
         let Some(text) = arg.to_str() else {
@@ -421,6 +481,13 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
             "--org" => set_once(&mut org, value(flag)?, flag)?,
             "--frus-path" => set_once(&mut frus_path, PathBuf::from(value(flag)?), flag)?,
             "--no-git" if inline.is_none() => git = false,
+            "--platforms" => set_once(&mut platforms, platforms::parse_list(&value(flag)?)?, flag)?,
+            "--deeplink" => set_once(
+                &mut deeplink,
+                platforms::Deeplink::parse(&value(flag)?)?,
+                flag,
+            )?,
+            "--description" => set_once(&mut description, value(flag)?, flag)?,
             _ if flag.starts_with('-') && flag != "-" => {
                 return Err(format!("frus create has no option `{text}`"));
             }
@@ -435,13 +502,19 @@ fn parse_create(args: impl Iterator<Item = OsString>) -> Result<Command, String>
         org: org.unwrap_or_else(|| DEFAULT_ORG.to_string()),
         frus_path,
         git,
+        platforms,
+        deeplink,
+        description,
     }))
 }
 
 fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
-    let mut args = args.peekable();
+    let args: Vec<OsString> = args.collect();
+    let forwarded = forwarded_run_args(&args);
+    let mut args = args.into_iter().peekable();
     let mut options = run::RunOptions {
-        device: None,
+        devices: Vec::new(),
+        forwarded,
         mode: cargo::Mode::Debug,
         port: run::DEFAULT_PORT,
         args: Vec::new(),
@@ -477,7 +550,7 @@ fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         };
         match flag.as_str() {
             "-h" | "--help" => return Ok(Command::RunHelp),
-            "-d" | "--device" => set_once(&mut options.device, value("--device")?, "--device")?,
+            "-d" | "--device" => options.devices.push(value("--device")?),
             "--release" if inline.is_none() => options.mode = cargo::Mode::Release,
             "--machine" if inline.is_none() => options.machine = true,
             "--hot" | "--no-hot" if inline.is_none() => {
@@ -503,14 +576,46 @@ fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     Ok(Command::Run(options))
 }
 
+/// `frus run`'s arguments without the devices and `--machine`: what each device's own run is
+/// started with when there are several (see `sessions`). Everything after `--` is the
+/// application's, and kept as it is.
+fn forwarded_run_args(args: &[OsString]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut args = args.iter().map(|a| a.to_string_lossy().into_owned());
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => {
+                out.push(arg);
+                out.extend(args.by_ref());
+            }
+            "-d" | "--device" => {
+                args.next();
+            }
+            "--machine" => {}
+            _ if arg.starts_with("--device=") => {}
+            _ => out.push(arg),
+        }
+    }
+    out
+}
+
 fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     let mut target = None;
     let mut mode = cargo::Mode::Release;
-    for arg in args {
+    let mut analyze = false;
+    let mut compare = None;
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
         let text = arg.to_string_lossy();
         match text.as_ref() {
             "-h" | "--help" => return Ok(Command::BuildHelp),
             "--debug" => mode = cargo::Mode::Debug,
+            "--analyze-size" => analyze = true,
+            "--compare" => set_once(
+                &mut compare,
+                PathBuf::from(args.next().ok_or("--compare needs a file")?),
+                "--compare",
+            )?,
             flag if flag.starts_with('-') => {
                 return Err(format!("frus build has no option `{flag}`"));
             }
@@ -518,7 +623,52 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         }
     }
     let target = target.ok_or("frus build needs a target: `frus build apk`, `web` or `desktop`")?;
+    if analyze || compare.is_some() {
+        if mode == cargo::Mode::Debug {
+            return Err("--analyze-size measures the release build: leave out --debug".into());
+        }
+        return Ok(Command::Size(size::Options {
+            build: Some(target),
+            file: None,
+            compare,
+        }));
+    }
     Ok(Command::Build(target, mode))
+}
+
+/// `frus size <apk|web|desktop|file> [--compare old.json]`.
+fn parse_size(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut what: Option<String> = None;
+    let mut compare = None;
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        let text = arg.to_string_lossy().into_owned();
+        match text.as_str() {
+            "-h" | "--help" => return Ok(Command::SizeHelp),
+            "--compare" => set_once(
+                &mut compare,
+                PathBuf::from(args.next().ok_or("--compare needs a file")?),
+                "--compare",
+            )?,
+            flag if flag.starts_with('-') => {
+                return Err(format!("frus size has no option `{flag}`"));
+            }
+            _ => set_once(&mut what, text, "what to measure")?,
+        }
+    }
+    let what =
+        what.ok_or("frus size needs a target or a file: `frus size apk`, `frus size app.wasm`")?;
+    // A target's word, or a file.
+    let looks_like_file = what.contains(['.', '/', '\\']);
+    let (build, file) = match build::Target::parse(&what) {
+        Ok(target) if !looks_like_file => (Some(target), None),
+        _ => (None, Some(PathBuf::from(what))),
+    };
+    Ok(Command::Size(size::Options {
+        build,
+        file,
+        compare,
+    }))
 }
 
 /// A command's result, as the program's exit.
@@ -571,41 +721,125 @@ fn report(created: &Created) -> String {
         Git::Failed(why) => out.push_str(&format!("No git repository: {why}\n")),
         Git::Skipped => {}
     }
+    use platforms::AppPlatform;
+    let made_for = &created.platforms;
+    if made_for.as_slice() != AppPlatform::ALL {
+        out.push_str(&format!(
+            "Made for {}. `frus create --platforms <list> .` adds others later.\n",
+            platforms::words(made_for)
+        ));
+    }
     let cd = if created.dir == std::path::Path::new(".") {
         String::new()
     } else {
         format!("  cd {}\n", quote(&dir.to_string()))
     };
-    out.push_str(&format!(
-        "\nTo run it:\n\n\
-         {cd}  frus run                   # on this computer\n  \
-         frus run -d android        # on the connected phone\n  \
-         frus run -d web            # in a browser\n\n\
-         What a platform needs and this machine lacks is installed on the way.\n\
-         Shipping and the releases are in README.md.\n\
-         The Android package is {}: settle it before the first release.\n",
-        project.android_package()
-    ));
+    out.push_str(&format!("\nTo run it:\n\n{cd}"));
+    let has = |platform| made_for.contains(&platform);
+    if made_for.contains(&AppPlatform::host()) {
+        out.push_str("  frus run                   # on this computer\n");
+    }
+    if has(AppPlatform::Android) {
+        out.push_str("  frus run -d android        # on the connected phone\n");
+    }
+    if has(AppPlatform::Web) {
+        out.push_str("  frus run -d web            # in a browser\n");
+    }
+    if made_for.contains(&AppPlatform::host()) && has(AppPlatform::Android) {
+        out.push_str("  frus run -d all            # on this computer and the phone at once\n");
+    }
+    out.push_str(
+        "\nWhat a platform needs and this machine lacks is installed on the way.\n\
+         Shipping and the releases are in README.md.\n",
+    );
+    if has(AppPlatform::Android) {
+        out.push_str(&format!(
+            "The Android package is {}: settle it before the first release.\n",
+            project.android_package()
+        ));
+    }
+    if let Some(link) = &created.deeplink {
+        out.push_str(&deeplink_report(
+            link,
+            &project.android_package(),
+            has(AppPlatform::Android),
+        ));
+    }
+    out
+}
+
+/// What `frus create --deeplink` says: how to try a link, and what the host must serve.
+fn deeplink_report(link: &platforms::Deeplink, package: &str, android: bool) -> String {
+    let example = link.example();
+    let mut out = format!(
+        "\n{example} opens the application at the location /home: a router's page, or \
+         Application::open_location.\n"
+    );
+    if android {
+        out.push_str(&format!(
+            "Try it on the phone: adb shell am start -a android.intent.action.VIEW -d \"{example}\"\n"
+        ));
+    }
+    if let Some(json) = link.assetlinks(package).filter(|_| android) {
+        out.push_str(&format!(
+            "\nAndroid opens these links without asking once {}/.well-known/assetlinks.json \
+             says so:\n\n{json}\nThe fingerprint is your release key's: \
+             keytool -list -v -keystore release.keystore\n",
+            link.text()
+        ));
+    }
+    if let Some(scheme) = link.scheme() {
+        out.push_str(&format!(
+            "On a Mac the .app frus builds declares {scheme}://; Windows and Linux learn it when \
+             the application is installed (a registry key, a .desktop file).\n"
+        ));
+    }
     out
 }
 
 /// What `frus create` prints in an application that was there: what came back.
 fn report_existing(created: &Created) -> String {
     let name = &created.project.project_name;
-    if created.written.is_empty() {
+    if created.written.is_empty() && created.manifest_changes.is_empty() {
         return format!(
             "{name} has every file the template gives an application: nothing to recreate.\n"
         );
     }
-    let mut out = format!(
-        "Recreated {} missing file{} in {name}:\n",
-        created.written.len(),
-        if created.written.len() == 1 { "" } else { "s" }
-    );
-    for path in &created.written {
-        out.push_str(&format!("  {path}\n"));
+    let mut out = String::new();
+    if !created.written.is_empty() {
+        // A platform added writes files that were never there; otherwise they came back.
+        let verb = if created.manifest_changes.is_empty() {
+            "Recreated"
+        } else {
+            "Wrote"
+        };
+        out.push_str(&format!(
+            "{verb} {} missing file{} in {name}:\n",
+            created.written.len(),
+            if created.written.len() == 1 { "" } else { "s" }
+        ));
+        for path in &created.written {
+            out.push_str(&format!("  {path}\n"));
+        }
     }
-    out.push_str("Nothing that was there has been changed.\n");
+    if !created.manifest_changes.is_empty() {
+        out.push_str("Added:\n");
+        for change in &created.manifest_changes {
+            out.push_str(&format!("  {change}\n"));
+        }
+    }
+    out.push_str(if created.manifest_changes.is_empty() {
+        "Nothing that was there has been changed.\n"
+    } else {
+        "Nothing else that was there has been changed.\n"
+    });
+    if let Some(link) = &created.deeplink {
+        out.push_str(&deeplink_report(
+            link,
+            &created.project.android_package(),
+            created.platforms.contains(&platforms::AppPlatform::Android),
+        ));
+    }
     out
 }
 
@@ -668,7 +902,7 @@ mod tests {
     #[test]
     fn run_options_parse() {
         let plain = run_options("run");
-        assert_eq!(plain.device, None);
+        assert!(plain.devices.is_empty());
         assert_eq!(plain.mode, cargo::Mode::Debug);
         assert_eq!(plain.port, run::DEFAULT_PORT);
         assert!(!plain.web);
@@ -677,12 +911,12 @@ mod tests {
         assert_eq!(run_options("run --no-hot").hot, Some(false));
 
         let web = run_options("run -d iphone-15 --web");
-        assert_eq!(web.device.as_deref(), Some("iphone-15"));
+        assert_eq!(web.devices, ["iphone-15"]);
         assert!(web.web);
         assert_eq!(web.simulate, None, "set by run once the device is known");
 
         let full = run_options("run -d edge --release --port=9000 -- /widget/button --flag");
-        assert_eq!(full.device.as_deref(), Some("edge"));
+        assert_eq!(full.devices, ["edge"]);
         assert_eq!(full.mode, cargo::Mode::Release);
         assert_eq!(full.port, 9000);
         assert_eq!(full.args, ["/widget/button", "--flag"]);
@@ -690,18 +924,31 @@ mod tests {
         assert!(run_options("run --machine -d windows").machine);
         assert_eq!(parse(args("daemon")), Ok(Command::Daemon));
 
-        assert_eq!(
-            run_options("run --device=android").device.as_deref(),
-            Some("android")
-        );
+        assert_eq!(run_options("run --device=android").devices, ["android"]);
         let error = |line| parse(args(line)).unwrap_err();
         assert!(error("run -d").contains("needs a value"));
-        assert!(error("run -d a -d b").contains("given twice"));
         assert!(error("run --port x").contains("takes a number"));
         assert!(error("run --verbose").contains("no option `--verbose`"));
         assert!(error("run --hot --no-hot").contains("one of them"));
         assert!(error("run --no-hot --no-hot").contains("one of them"));
         assert!(error("run --hot=yes").contains("no option"));
+    }
+
+    /// `-d` as often as there are devices, or `all`; each device's own run gets the rest of the
+    /// command line (milestone 791).
+    #[test]
+    fn several_devices_are_read() {
+        let several = run_options("run -d windows --release -d android --port 9000 -- /home -d x");
+        assert_eq!(several.devices, ["windows", "android"]);
+        assert_eq!(several.args, ["/home", "-d", "x"]);
+        assert_eq!(
+            several.forwarded,
+            ["--release", "--port", "9000", "--", "/home", "-d", "x"]
+        );
+        let all = run_options("run -d all --machine --device=edge --no-hot");
+        assert_eq!(all.devices, ["all", "edge"]);
+        assert!(all.machine);
+        assert_eq!(all.forwarded, ["--no-hot"]);
     }
 
     #[test]
@@ -718,6 +965,35 @@ mod tests {
         assert!(error("build").contains("needs a target"));
         assert!(error("build apk web").contains("given twice"));
         assert!(error("build ios").contains("not `ios`"));
+    }
+
+    #[test]
+    fn size_options_parse() {
+        let measure = |line| match parse(args(line)) {
+            Ok(Command::Size(options)) => options,
+            other => panic!("{line}: {other:?}"),
+        };
+        assert_eq!(
+            measure("build apk --analyze-size"),
+            size::Options {
+                build: Some(build::Target::Apk),
+                file: None,
+                compare: None,
+            }
+        );
+        let compared = measure("build --analyze-size web --compare old.json");
+        assert_eq!(compared.build, Some(build::Target::Web));
+        assert_eq!(compared.compare, Some(PathBuf::from("old.json")));
+        assert_eq!(measure("size desktop").build, Some(build::Target::Desktop));
+        let file = measure("size target/x/app.wasm --compare a.json");
+        assert_eq!(file.build, None);
+        assert_eq!(file.file, Some(PathBuf::from("target/x/app.wasm")));
+        assert_eq!(parse(args("size --help")), Ok(Command::SizeHelp));
+        assert_eq!(parse(args("help size")), Ok(Command::SizeHelp));
+        let error = |line| parse(args(line)).unwrap_err();
+        assert!(error("size").contains("needs a target or a file"));
+        assert!(error("build apk --analyze-size --debug").contains("release"));
+        assert!(error("size apk --what").contains("no option"));
     }
 
     #[test]
@@ -780,6 +1056,9 @@ mod tests {
                 org: "com.example".into(),
                 frus_path: None,
                 git: true,
+                platforms: None,
+                deeplink: None,
+                description: None,
             }
         );
     }
@@ -816,6 +1095,9 @@ mod tests {
             kept: 0,
             existing: false,
             git: Git::Initialised,
+            platforms: platforms::AppPlatform::ALL.to_vec(),
+            deeplink: None,
+            manifest_changes: Vec::new(),
         };
         let out = report(&created);
         assert!(
@@ -851,9 +1133,21 @@ mod tests {
         );
         let whole = Created {
             written: Vec::new(),
-            ..restored
+            ..restored.clone()
         };
         assert!(report(&whole).contains("nothing to recreate"));
+
+        // A platform added (milestone 791): its files, and what the manifest gained.
+        let added = Created {
+            manifest_changes: vec!["Cargo.toml: the web section".into()],
+            ..restored
+        };
+        assert_eq!(
+            report(&added),
+            "Wrote 1 missing file in my_app:\n  web/index.html\n\
+             Added:\n  Cargo.toml: the web section\n\
+             Nothing else that was there has been changed.\n"
+        );
     }
 
     // --- The template and the crate stay in step ---
