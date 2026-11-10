@@ -13,6 +13,18 @@ any release may break.
 
 ## [Unreleased]
 
+- **`frus mcp`: AI agents drive the application** (J789). A Model Context Protocol server on
+  standard input and output, through which a coding agent runs the application (`launch_app`,
+  which starts `frus run` on any device) or attaches to a `frus run` already going
+  (`attach_app`; each debug run notes its DevTools address in `target/frus-devtools/`), reads
+  its widget tree as compact text (`get_widget_tree`, `find_widgets`, `get_widget`,
+  `widget_at`) and its log with the build's errors (`get_logs`), acts on it (`tap`, `scroll`,
+  `enter_text`, `press_key`, `go_back`), looks at it (`screenshot`, an image downscaled to 1024
+  pixels by default), hot reloads its own edits and is told when the change is in or why it
+  could not be (`hot_reload`, `hot_restart`), slows animations, flips debug switches, reads
+  frame times, and runs `frus analyze` and `frus test`. `launch_app` takes `device: "all"` or
+  several `devices`, each its own app. `frus create` writes a `.mcp.json` that
+  registers it. The DevTools protocol gains `stop`. Documented in `docs/guide/mcp.md`.
 - **`frus create` platforms and links, several devices at once, the size report** (J791).
   `frus create --platforms android,web` writes only what those platforms need (files, the
   manifest's sections, the README's, the CI jobs) and records them in

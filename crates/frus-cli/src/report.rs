@@ -23,6 +23,20 @@ static MACHINE: OnceLock<String> = OnceLock::new();
 static STDOUT: Mutex<()> = Mutex::new(());
 /// `frus daemon`: what the tool says goes out as `daemon.logMessage` events (milestone 671).
 static DAEMON: AtomicBool = AtomicBool::new(false);
+/// `frus mcp`: standard output is the agent's protocol, and what the tool says goes to standard
+/// error (milestone 789).
+static STDERR: AtomicBool = AtomicBool::new(false);
+
+/// Keeps standard output for a protocol of the caller's: what the tool says goes to standard
+/// error, as text.
+pub(crate) fn to_stderr() {
+    STDERR.store(true, Ordering::SeqCst);
+}
+
+fn is_stderr() -> bool {
+    STDERR.load(Ordering::SeqCst)
+}
+
 /// Whether the run patches the code in place: said in `app.started`, for a run that drives
 /// several (milestone 791).
 static HOT: AtomicBool = AtomicBool::new(false);
@@ -50,7 +64,9 @@ fn is_daemon() -> bool {
 /// A message for the developer to see now, in the editor's own notifications: `level` is
 /// `info`, `warning` or `error` (daemon only; elsewhere it is said or warned as usual).
 pub(crate) fn show(level: &str, message: &str) {
-    if is_daemon() {
+    if is_stderr() {
+        eprintln!("{message}");
+    } else if is_daemon() {
         line(&object([
             ("event", "daemon.showMessage".into()),
             (
@@ -122,7 +138,9 @@ pub(crate) fn line(value: &Value) {
 
 /// What the tool tells the developer: where it is, what it does.
 pub(crate) fn say(message: &str) {
-    if is_daemon() {
+    if is_stderr() {
+        eprintln!("{message}");
+    } else if is_daemon() {
         daemon_log("status", message);
     } else if is_machine() {
         event("app.progress", object([("message", message.into())]));
@@ -133,7 +151,9 @@ pub(crate) fn say(message: &str) {
 
 /// Something that went wrong without ending the run.
 pub(crate) fn warn(message: &str) {
-    if is_daemon() {
+    if is_stderr() {
+        eprintln!("{message}");
+    } else if is_daemon() {
         daemon_log("error", message);
     } else if is_machine() {
         event(

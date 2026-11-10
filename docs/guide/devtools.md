@@ -75,7 +75,16 @@ answers them against its next frame, so what they describe is what is on screen.
 | `logs` | `after?` | `{lines: [{number, text, error}]}`: the lines after line `after`, or all that are kept (5000) |
 | `reload` | | `{}`: hot reload, as `r` |
 | `restart` | | `{}`: restart afresh, as `R` |
+| `stop` | | `{}`: end the run, as `q` |
 | `screenshot` | | On Android: `{format: "png", data}`, the device's own screenshot, base64. Elsewhere relayed to the application. |
+
+### Finding a run
+
+A debug run notes its address in the build's directory while it lasts:
+`target/frus-devtools/run-<pid>.json`, `{uri, root, app, device, platform, pid}`. A client that
+did not start the run, such as [`frus mcp`](mcp.md), finds it there: the note's `root` is the
+application's directory, and a run that ended without removing its note no longer answers
+`status`.
 
 ### Answered by the application
 
