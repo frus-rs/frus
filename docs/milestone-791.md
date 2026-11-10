@@ -144,7 +144,7 @@ The JSON goes to `target/frus-size/<platform>-NN.json`, numbered so that earlier
 
 ## How it was tested
 
-Unit tests (`cargo test -p frus-cli`, NNN pass):
+Unit tests (`cargo test -p frus-cli`, 159 pass):
 
 - `platforms`: the list in any order and spelling, `desktop`, `ios` and unknown words refused;
   deep links parsed and refused; the intent filter cargo-apk reads; regions cut; keys set in their
@@ -163,7 +163,51 @@ Unit tests (`cargo test -p frus-cli`, NNN pass):
 - `bundle`: `CFBundleURLTypes` for a scheme, none for an `https` host; `hot`: the engine's
   Android manifest has the `autoVerify` filter.
 
-On this machine — EVIDENCE
+On this machine (Windows 11, the Huawei STK-L21 on Android 10, an x86_64 emulator), with
+projects made by the new `frus create` against this checkout:
+
+- **`frus create`**: four projects — every platform; `--platforms android,web --org com.acme
+  --deeplink myapp --description "Tides & currents"`; `--platforms windows --deeplink
+  https://tides.example`; `--platforms web` — and the refusals of `ios` and of an `http` link.
+  Each wrote what its platforms need and nothing else.
+- **Builds**: the Windows-only project `frus build desktop --debug`; the web-only project and the
+  Android + web one `frus build web`; the Android + web one `frus build apk --debug`, the one with
+  every platform `frus build apk --debug` and `frus size desktop` (release). `frus build web` in
+  the Windows-only project and `frus build desktop` in the Android + web one stop with the
+  command that adds the platform.
+- **Adding a platform**: `frus create --platforms android --deeplink https://tides.example .` in
+  the web-only project wrote `res/`, appended the Android section and the intent filter, rewrote
+  the list; asked again, it changed nothing.
+- **A new application's first web build failed**, before this milestone too: with no lockfile
+  yet, the `wasm-bindgen` on the PATH (0.2.129) was taken, and refused the module the build then
+  resolved (0.2.130). The program is now chosen once the build has written the lockfile; the
+  first `frus build web` of the web-only project installed and used 0.2.130.
+- **Several devices**: `frus run -d all --no-hot` with the phone connected ran on Windows and the
+  phone; `s` wrote one screenshot per device (`frus_01.png`, `frus_02.png`, one after the other),
+  an edit to `src/counter.rs` then `r` reloaded both ("Reloaded in 72.6 s", "Reloaded in
+  137.6 s") and both screens showed the edit, `q` ended both runs. The same with
+  `-d windows -d iphone-15` (two desktop runs) and `-d windows -d emulator-5556`. The first
+  screenshot attempt had shown two runs writing `frus_01.png` at once, hence the screenshots one
+  after the other, each waiting for the previous run to say where its file went.
+- **For an editor**: `frus run --machine -d windows -d iphone-15 --no-hot`: two `app.start` with
+  their own `appId`, `app.key p` without an `appId` answered once and sent to both,
+  `app.stop` with one `appId` stopped that run only, an unknown `appId` answered
+  `no run has that appId`, `app.stop` without one stopped the other.
+- **Deep link on the phone**: the package `frus build apk` made for the `--deeplink myapp`
+  project, installed; `dumpsys package` lists the `myapp` scheme with `VIEW`, `DEFAULT` and
+  `BROWSABLE` for the activity; `am start -a android.intent.action.VIEW -d myapp://home` cold
+  started it, and it was the focused window.
+- **Size**: `frus size desktop` on the every-platform counter: 14.90 MB as shipped; naga 1.46 MB,
+  core 1.29 MB, frus_widgets 610 kB, wgpu_hal 606 kB…; the seven bundled faces found inside
+  (3.3 MB); `[unattributed]` 2.04 MB. Its first version put the compiler's anonymous constants
+  (`anon.<hash>.<n>`, where the fonts live) and the jump tables and unwinding data of Rust
+  functions (`switch.table._ZN…`, `$ip2state$_ZN…`) under `[C/C++]`, 5.5 MB of it, and counted
+  the fonts twice; `frus size <exe> --compare` against that first analysis shows the move.
+  `frus size apk` on the same counter linked the arm64 `.so` with its symbols and then stopped at
+  the signing, for want of a release key on this machine; the analysis now carries on with the
+  library when only the package fails. Read with `frus size <.so>`: 13.51 MB as shipped (20.00 MB
+  with the symbols), naga 958 kB, core 915 kB, wgpu_core 574 kB, frus_widgets 479 kB, the seven
+  faces found inside, `[unattributed]` 2.14 MB.
 
 ## Not done
 
@@ -182,5 +226,13 @@ On this machine — EVIDENCE
 - **The size of a macOS program** is not broken down: Mach-O's symbol table has no sizes, and no
   Mac was at hand to check a reader against; `frus size` says the format is not read.
 - **The web's size is the module before wasm-bindgen**, which trims a little more.
+- **Hot reload on several devices was not run end to end.** Each device's run keeps its own
+  shadow package and build (`FRUS_RUN_SESSION`), which is what lets one save patch every device,
+  but the checks above used `--no-hot` (reload by rebuilding): a first hot build per device in a
+  fresh directory was more than this machine could fit in the session. Hot reload on one device
+  is unchanged, apart from the desktop engine's own free port.
+- **`q` while a device's run is still building** is acted on once its application is up: a run
+  reads the commands sent to it only from then on. Ctrl+C ends everything at once.
+- **`-d all` leaves out the browsers**, as said above; `-d all -d edge` adds one.
 - **The editor extensions** start one run per debug session; a launch with `deviceId: "all"`
   works through the parent run, but the session ends when the first device's run ends.

@@ -598,14 +598,23 @@ the whole analysis is written as JSON to `target/frus-size/<platform>-NN.json`, 
 the earlier ones stay: `--compare` with one says what grew and what shrank since.
 
 ```text
-  crate                               size     share
-  [unattributed]                    3.01 MB   27.4%
-  wgpu_core                         1.02 MB    9.3%
-  frus_widgets                    931.2 kB    8.5%
+a_all.exe (pe): 14.90 MB as shipped, without its symbols
+
+  crate                                              size   share
+  [unattributed]                                  2.04 MB   13.7%
+  naga                                            1.46 MB    9.8%
+  core                                            1.29 MB    8.7%
+  frus_widgets                                   609.8 kB    4.0%
+  wgpu_hal                                       605.9 kB    4.0%
   …
-  carried inside                      size     share
-  frus-text/assets/DejaVuSans.ttf   742.3 kB    6.8%
+  carried inside                                     size   share
+  frus-text/assets/DejaVuSans-Bold.ttf           692.3 kB    4.6%
+  frus-text/assets/DejaVuSans.ttf                741.9 kB    4.9%
+  …
 ```
+
+(The template's counter, a Windows release build: the shader translator, the standard library
+and the renderer weigh more than frus's widgets, and the seven bundled faces are 3.3 MB.)
 
 `[unattributed]` is what no symbol names: string literals, tables the compiler built, data
 whose owner the linker merged away. `[C/C++]` is code with no Rust name.

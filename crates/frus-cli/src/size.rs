@@ -241,12 +241,26 @@ fn build_android(project: &Project, dir: &Path) -> Result<PathBuf, String> {
         .first()
         .cloned()
         .unwrap_or_else(|| "aarch64-linux-android".into());
-    let apk = crate::cargo::build_apk(project, Mode::Release, Some(&target))?;
-    println!("The package: {} ({} kB).", apk.display(), file_kb(&apk));
-    Ok(dir
+    let library = dir
         .join(&target)
         .join("release")
-        .join(format!("lib{}.so", project.lib)))
+        .join(format!("lib{}.so", project.lib));
+    let started = std::time::SystemTime::now();
+    match crate::cargo::build_apk(project, Mode::Release, Some(&target)) {
+        Ok(apk) => println!("The package: {} ({} kB).", apk.display(), file_kb(&apk)),
+        // cargo-apk links the library before it signs the package: with no key to sign a
+        // release with, the library is there all the same, and it is what is measured.
+        Err(error) => {
+            let fresh = std::fs::metadata(&library)
+                .and_then(|m| m.modified())
+                .is_ok_and(|at| at >= started);
+            if !fresh {
+                return Err(error);
+            }
+            println!("The package was not made ({error}); the library was, and is measured.");
+        }
+    }
+    Ok(library)
 }
 
 fn file_kb(path: &Path) -> u64 {
@@ -298,7 +312,13 @@ fn attribute(
     let mut by_crate: BTreeMap<String, u64> = BTreeMap::new();
     let mut named = 0;
     for symbol in &parsed.symbols {
-        *by_crate.entry(crate_of(&symbol.name)).or_default() += symbol.size;
+        let owner = crate_of(&symbol.name);
+        // Anonymous data is what remains once the files found inside are taken out of it: it
+        // is counted with what no symbol covers, below.
+        if owner == UNATTRIBUTED {
+            continue;
+        }
+        *by_crate.entry(owner).or_default() += symbol.size;
         named += symbol.size;
     }
     let in_assets: u64 = assets.iter().map(|(_, n)| n).sum();
@@ -687,6 +707,11 @@ pub(crate) fn parse_msvc_map(text: &str) -> Parsed {
 
 /// The crate a symbol's code or data comes from.
 pub(crate) fn crate_of(symbol: &str) -> String {
+    // The compiler's anonymous constants (`anon.<hash>.<n>`): literals, tables, the bytes of an
+    // `include_bytes!` — Rust's data, owned by no name.
+    if is_anonymous(symbol) {
+        return UNATTRIBUTED.to_string();
+    }
     let path = demangle(symbol);
     match path {
         Some(path) => crate_of_path(&path).unwrap_or_else(|| FOREIGN.to_string()),
@@ -697,19 +722,28 @@ pub(crate) fn crate_of(symbol: &str) -> String {
 /// The path of a Rust symbol, `<core::fmt::Write as …>::write_str` or `alloc::vec::…`; None for
 /// a symbol with no Rust name.
 fn demangle(symbol: &str) -> Option<String> {
-    // Mach-O puts an underscore in front of every name.
-    let symbol = symbol
-        .strip_prefix('_')
-        .filter(|rest| rest.starts_with("_ZN") || rest.starts_with("_R"))
-        .unwrap_or(symbol);
-    if let Some(rest) = symbol.strip_prefix("_ZN") {
-        return Some(legacy(rest));
+    // A Rust name inside another: Mach-O's underscore in front, a jump table of a function
+    // (`switch.table._ZN…`), the unwinding data of one on Windows (`$ip2state$_ZN…`).
+    if let Some(at) = symbol.find("_ZN") {
+        return Some(legacy(&symbol[at + 3..]));
     }
-    if let Some(rest) = symbol.strip_prefix("_R") {
-        return v0_crate(rest).map(|name| format!("{name}::"));
+    let v0 = symbol.match_indices("_R").find(|(at, _)| {
+        let before = symbol[..*at].chars().next_back();
+        let after = symbol[at + 2..].chars().next();
+        before.is_none_or(|c| !c.is_ascii_alphanumeric())
+            && after.is_some_and(|c| c.is_ascii_uppercase())
+    });
+    if let Some((at, _)) = v0 {
+        return v0_crate(&symbol[at + 2..]).map(|name| format!("{name}::"));
     }
     // A name already demangled (the `name` section of a module): `core::fmt::write::h12…`.
     (symbol.contains("::")).then(|| symbol.to_string())
+}
+
+/// Whether a symbol names one of the compiler's anonymous constants.
+fn is_anonymous(symbol: &str) -> bool {
+    let symbol = symbol.trim_start_matches('.').trim_start_matches('L');
+    symbol.starts_with("anon.") || symbol.starts_with("__unnamed_") || symbol.starts_with("alloc_")
 }
 
 /// `4core3fmt5write17h0123E` → `core::fmt::write::h0123`, the escapes decoded.
@@ -906,32 +940,45 @@ pub(crate) fn table(report: &Report) -> String {
             n as f64 * 100.0 / total as f64
         }
     };
-    out.push_str("\n  crate                               size     share\n");
     const SHOWN: usize = 20;
+    let others = (report.crates.len() > SHOWN)
+        .then(|| format!("{} other crates", report.crates.len() - SHOWN));
+    // One width for both lists: the longest name shown.
+    let width = report
+        .crates
+        .iter()
+        .take(SHOWN)
+        .chain(&report.assets)
+        .map(|(name, _)| name.chars().count())
+        .chain(others.as_ref().map(|o| o.len()))
+        .max()
+        .unwrap_or(0)
+        .max(16);
+    let row = |name: &str, bytes: u64| {
+        format!(
+            "  {name:<width$} {:>10}  {:>5.1}%\n",
+            kb(bytes),
+            share(bytes)
+        )
+    };
+    out.push_str(&format!(
+        "\n  {:<width$} {:>10}  {:>6}\n",
+        "crate", "size", "share"
+    ));
     for (name, bytes) in report.crates.iter().take(SHOWN) {
-        out.push_str(&format!(
-            "  {name:<32} {:>10}  {:>5.1}%\n",
-            kb(*bytes),
-            share(*bytes)
-        ));
+        out.push_str(&row(name, *bytes));
     }
-    if report.crates.len() > SHOWN {
+    if let Some(others) = &others {
         let rest: u64 = report.crates[SHOWN..].iter().map(|(_, n)| n).sum();
-        out.push_str(&format!(
-            "  {:<32} {:>10}  {:>5.1}%\n",
-            format!("{} other crates", report.crates.len() - SHOWN),
-            kb(rest),
-            share(rest)
-        ));
+        out.push_str(&row(others, rest));
     }
     if !report.assets.is_empty() {
-        out.push_str("\n  carried inside                      size     share\n");
+        out.push_str(&format!(
+            "\n  {:<width$} {:>10}  {:>6}\n",
+            "carried inside", "size", "share"
+        ));
         for (name, bytes) in &report.assets {
-            out.push_str(&format!(
-                "  {name:<32} {:>10}  {:>5.1}%\n",
-                kb(*bytes),
-                share(*bytes)
-            ));
+            out.push_str(&row(name, *bytes));
         }
     }
     out
@@ -1088,8 +1135,25 @@ mod tests {
         );
         // v0.
         assert_eq!(crate_of("_RNvCs1234_7mycrate3foo"), "mycrate");
+        // Inside another name: a jump table, unwinding data.
+        assert_eq!(
+            crate_of("switch.table._ZN4naga5front3foo17h0E.9116.rel"),
+            "naga"
+        );
+        assert_eq!(
+            crate_of("$ip2state$_ZN8frus_gpu8renderer8Renderer4make17h0E"),
+            "frus_gpu"
+        );
+        assert_eq!(crate_of("$ip2state$_RNvCs1234_7mycrate3foo"), "mycrate");
+        // The compiler's anonymous constants: nobody's.
+        assert_eq!(
+            crate_of("anon.864c7b0412b58b40282e4edf17b122e6.294"),
+            UNATTRIBUTED
+        );
+        assert_eq!(crate_of(".Lanon.fad58de7366495db.3"), UNATTRIBUTED);
         // No Rust name.
         assert_eq!(crate_of("memcpy"), FOREIGN);
+        assert_eq!(crate_of("__real@3ff0000000000000"), FOREIGN);
         assert_eq!(crate_of("?CreateWindow@@YAXXZ"), FOREIGN);
     }
 
@@ -1273,6 +1337,21 @@ mod tests {
                 ("core".to_string(), 0x80),
                 ("my_app".to_string(), 0x80),
                 (FOREIGN.to_string(), 0x40),
+            ]
+        );
+
+        // A font inside an anonymous constant is counted once, as the file it is.
+        let map = map.replace("_ZN6my_app5TABLE17h0E", "anon.0123456789abcdef.7");
+        let parsed = parse_msvc_map(&map);
+        let font = vec![("font.ttf".to_string(), 0x30)];
+        let report = attribute("windows", Path::new("app.exe"), 1000, parsed, font);
+        assert_eq!(
+            report.crates,
+            [
+                ("core".to_string(), 0x80),
+                (FOREIGN.to_string(), 0x40),
+                ("my_app".to_string(), 0x40),
+                (UNATTRIBUTED.to_string(), 0x10),
             ]
         );
     }
