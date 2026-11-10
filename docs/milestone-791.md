@@ -256,6 +256,11 @@ What the first part left, taken up again:
 How it was tested, second part (`cargo test -p frus-cli`: 172 pass with master merged in; the VS Code extension's
 tests: 30 pass, the new one included):
 
+- **Hot reload on two devices, end to end**: `frus run -d windows -d iphone-15` (hot reload by
+  default), each device with its own shadow package and build: both came up "running, with hot
+  reload"; one save of `src/counter.rs` was patched into both ("Patched in 131.4 s", "Patched in
+  173.8 s", the first patch of a fresh build on a loaded machine), both screens showed the edit,
+  and `r` said the hot devices had it already; `q` ended both.
 - `q` during the hot builds of `-d windows -d edge` stopped both runs ("Stopped before the
   application was up", twice); `a_build_is_stopped_when_asked` ends a 60-second process within a
   moment of the flag.
@@ -272,13 +277,11 @@ tests: 30 pass, the new one included):
 
 ## Not done
 
-- **Hot reload on several devices, end to end.** On Windows the hot run came up ("Windows is
-  running, with hot reload") beside a web run; the web run with the pinned wasm-bindgen then
-  failed its build ("cargo build finished with errors") on a machine loaded by other builds, and
-  the errors could not be read before the check of them was itself cut off. So no save was seen
-  patched into two devices at once; the reload with `r` on two devices (with `--no-hot`) is what
-  was shown, in the first part. The pin is unverified beyond the shadow's lockfile taking the
-  versions.
+- **Hot reload on the web beside another device.** One save patched into two desktop runs
+  (above), but the web run with the pinned wasm-bindgen failed its build ("cargo build finished
+  with errors") on a machine loaded by other builds, and the errors could not be read before the
+  check of them was itself cut off. The pin is unverified beyond the shadow's lockfile taking the
+  versions; the phone was not in a hot run.
 - **The web size after wasm-bindgen** was built into `frus size web` and not run on a real
   application in this part.
 - **The phone numbers for a release build** (RAM, idle CPU) were not measured: the numbers above
