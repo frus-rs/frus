@@ -209,8 +209,81 @@ projects made by the new `frus create` against this checkout:
   with the symbols), naga 958 kB, core 915 kB, wgpu_core 574 kB, frus_widgets 479 kB, the seven
   faces found inside, `[unattributed]` 2.14 MB.
 
+## Second part (after the first pull request)
+
+What the first part left, taken up again:
+
+- **`q` while building stops the build.** The keys are heard from the start of a run
+  (`keys::start`), not from the moment the application is up. `q` (or an editor's `app.stop`)
+  sets a flag that every build waits on: cargo, cargo-apk and wasm-bindgen are run through
+  `cargo::wait_or_cancel`, which ends the process tree (`taskkill /T` on Windows, an interrupt
+  elsewhere) and returns `CANCELLED`; the hot-reload loops stop their engine. The run then ends as
+  asked, not as a failure ("Stopped before the application was up."). The error check that
+  follows a failed patch (`cargo check` of the shadow package, minutes long) is waited on the
+  same way: it was the reason a stopped web run did not end.
+- **An editor's session with `deviceId: "all"`** keeps the `appId`s that started and ends with
+  the last `app.stop`, not the first.
+- **Verified https links in the APK.** cargo-apk 0.10 cannot write `android:autoVerify`, so once
+  it has made the package, frus makes it again around the same manifest with the attribute on
+  every intent filter of `https` links (`app_links.rs`), with the SDK's own tools as cargo-apk
+  does: `aapt package` (the manifest, the resources, and the libraries cargo-apk left, stored and
+  not compressed as cargo-apk stores them), `zipalign -p`, `apksigner` with the key cargo-apk
+  signed with. A package with no `https` filter is left exactly as cargo-apk made it; a failure
+  leaves cargo-apk's package and says so.
+- **`--template package` and `--template plugin`.** A package: a library with a `Tag` widget
+  (themed defaults, every visual overridable), its tests and a gallery example. A plugin: one
+  function (`platform_version()`), its Android side in Java under `android/java/<org path>/…`,
+  compiled by `build.rs` with `javac` and `d8` into a dex the library carries and loads with an
+  `InMemoryDexClassLoader` into the activity (as frus-shell's bridges do), reached through
+  `ndk-context` and JNI, every exception cleared; the desktops, the web and iOS return
+  `PluginError::Unsupported`. The templates are built in like the application's
+  (`template-package/`, `template-plugin/`), and exempt from the SPDX header like it.
+- **Mach-O sizes.** `parse_macho` reads the sections and the symbol table of a 64-bit Mach-O and
+  sizes each symbol up to the next one of its section (Mach-O has no symbol sizes); the
+  assembler's `ltmp` labels and the stabs are left out. Tested on a real object, cross-compiled
+  here with `rustc --target x86_64-apple-darwin --emit=obj` (`src/fixtures/`).
+- **The web's size after wasm-bindgen.** The analysis runs wasm-bindgen as `frus build web` does
+  (which runs no wasm-opt) and measures its `_bg.wasm`; the `name` section it keeps is read and
+  not counted as shipped.
+- **Hot reload of a new application on the web.** Found on the way: the engine refuses what
+  wasm-bindgen 0.2.130 writes (an imported exception tag: "exceptions proposal not enabled"),
+  and a new application resolves 0.2.130, so its first hot web build failed whatever the number
+  of devices. The shadow package now pins the versions the engine reads (`ENGINE_WASM_CRATES`:
+  wasm-bindgen 0.2.127, js-sys and web-sys 0.3.104, wasm-bindgen-futures 0.4.77, the ones frus's
+  own lockfile has) when the application asks for the template's `wasm-bindgen = "0.2"`.
+- **Desktop hot engine on its own port**, as before, and the shadow per device.
+
+How it was tested, second part (`cargo test -p frus-cli`: 167 pass; the VS Code extension's
+tests: 29 pass, the new one included):
+
+- `q` during the hot builds of `-d windows -d edge` stopped both runs ("Stopped before the
+  application was up", twice); `a_build_is_stopped_when_asked` ends a 60-second process within a
+  moment of the flag.
+- The APK of an application made with `--deeplink https://tides.example`: `aapt2 dump xmltree`
+  shows `android:autoVerify(0x010104ee)=true` on the `https` filter; `aapt list -v` shows the
+  library stored, as cargo-apk stored it; installed on the phone, `dumpsys package` reads
+  `AutoVerify=true` for `tides.example`.
+- The plugin, made with `--template plugin --org com.acme`: its tests and its example on Windows
+  (`battery_level does not work on Windows`), its Android build (javac and d8 in `build.rs`, a
+  1204-byte dex), and an application depending on it, installed on the phone: it shows
+  "Android 10 (API 29)", read from the Java side. The package: its tests and its example built.
+- On the phone, that debug build idles at 0.0 % CPU (no CPU time used over six seconds of
+  `top`), 137 MB PSS, of which 66 MB graphics.
+
 ## Not done
 
-See "Second part" below: most of what was left here was done after the first pull request.
-
-FOLLOWUP
+- **Hot reload on several devices, end to end.** On Windows the hot run came up ("Windows is
+  running, with hot reload") beside a web run; the web run with the pinned wasm-bindgen then
+  failed its build ("cargo build finished with errors") on a machine loaded by other builds, and
+  the errors could not be read before the check of them was itself cut off. So no save was seen
+  patched into two devices at once; the reload with `r` on two devices (with `--no-hot`) is what
+  was shown, in the first part. The pin is unverified beyond the shadow's lockfile taking the
+  versions.
+- **The web size after wasm-bindgen** was built into `frus size web` and not run on a real
+  application in this part.
+- **The phone numbers for a release build** (RAM, idle CPU) were not measured: the numbers above
+  are a debug build's; the guide's APK sizes per font feature are the release numbers measured
+  before.
+- **Windows and Linux scheme registration** belongs to the installers (#448) and is left to them.
+- **iOS**: `--platforms ios` refused, plugin side `Unsupported`.
+- **`-d all` leaves out the browsers** on purpose; `-d all -d edge` adds one.

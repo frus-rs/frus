@@ -856,7 +856,7 @@ pub(crate) fn parse_macho(b: &[u8]) -> Result<Parsed, String> {
         }
         defined.push((*sect as usize - 1, value, name));
     }
-    defined.sort_by(|a, c| (a.0, a.1).cmp(&(c.0, c.1)));
+    defined.sort_by_key(|(sect, addr, _)| (*sect, *addr));
     defined.dedup_by_key(|(sect, addr, _)| (*sect, *addr));
     for (i, (sect, addr, name)) in defined.iter().enumerate() {
         let Some(section) = sections.get(*sect).filter(|s| s.covered) else {

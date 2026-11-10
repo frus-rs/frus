@@ -192,7 +192,10 @@ pub(crate) fn verify_https_links(
     let zipalign = build_tool(&sdk, "zipalign")?;
     let apksigner = build_tool(&sdk, "apksigner")?;
 
-    let patched_path = dir.join("AndroidManifest.frus.xml");
+    // aapt reads a manifest only by its own name: the patched one goes in a folder of its own.
+    let patched_dir = dir.join("frus-links");
+    std::fs::create_dir_all(&patched_dir).map_err(|e| e.to_string())?;
+    let patched_path = patched_dir.join("AndroidManifest.xml");
     std::fs::write(&patched_path, patched).map_err(|e| e.to_string())?;
     let unaligned = dir.join("frus-relinked-unaligned.apk.tmp");
     let aligned = dir.join("frus-relinked.apk.tmp");
@@ -212,22 +215,25 @@ pub(crate) fn verify_https_links(
     if let Some(assets) = manifest_value(&cargo_toml, android, "assets") {
         package.arg("-A").arg(project.root.join(assets));
     }
-    tool(&mut package)?;
-    // The libraries, under the same paths cargo-apk put them at.
+    // The libraries, under the same paths cargo-apk put them at (`lib/<abi>/…`), from a folder
+    // that holds only them; stored, not compressed, as cargo-apk stores them: the system maps a
+    // stored library from the package rather than unpacking it.
     let mut libraries = Vec::new();
     files_below(dir, &dir.join("lib"), &mut libraries);
     if libraries.is_empty() {
         return Err("cargo-apk left no lib/ beside the package to add again".into());
     }
+    let raw = patched_dir.join("raw");
+    let _ = std::fs::remove_dir_all(&raw);
     for library in &libraries {
-        tool(
-            Command::new(&aapt)
-                .arg("add")
-                .arg(&unaligned)
-                .arg(library)
-                .current_dir(dir),
-        )?;
+        let to = raw.join(library);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(dir.join(library), &to).map_err(|e| format!("{library}: {e}"))?;
     }
+    package.args(["-0", "so"]).arg(&raw);
+    tool(&mut package)?;
     tool(
         Command::new(&zipalign)
             .args(["-f", "-p", "4"])
@@ -243,7 +249,7 @@ pub(crate) fn verify_https_links(
     )?;
     std::fs::rename(&aligned, apk).map_err(|e| format!("{}: {e}", apk.display()))?;
     let _ = std::fs::remove_file(&unaligned);
-    let _ = std::fs::remove_file(&patched_path);
+    let _ = std::fs::remove_dir_all(&patched_dir);
     let _ = std::fs::remove_file(dir.join("frus-relinked.apk.tmp.idsig"));
     Ok(true)
 }
