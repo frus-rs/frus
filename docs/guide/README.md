@@ -17,6 +17,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Talking to a server](network.md) | Requests, JSON, loading a screen's data, sending a form |
 | [Animation](animation.md) | Values that move to their new value, switching widgets, curves, what is animated for you |
 | [Testing](testing.md) | Testing the state and the logic, and what the screen looks like |
+| [Build modes, flavors and releases](build-variants.md) | Debug, profile and release; flavors; values given at build time; the version; App Bundles, one APK per processor, installers; signing |
 | [DevTools](devtools.md) | The live widget tree, each frame's cost, slow animations and the log, in the browser; the protocol behind it |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
 | [Structuring an application](../app-structure.md) | Where each part of a growing application goes |

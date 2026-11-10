@@ -76,7 +76,19 @@ required.
   `res/values/styles.xml`. Make it your first frame's background colour.
 - **The package name**, `{{org}}.{{crate_name}}`, is `package` in `Cargo.toml`. Settle it
   before your first release: a store knows the application by it.
-- **The version code** comes from `version` in `Cargo.toml` (each part at most 255).
+- **The version code** comes from `version` in `Cargo.toml` (each part at most 255), or from
+  `--build-number`; `--build-name` overrides the version people see.
+
+```sh
+frus build appbundle         # the .aab a store takes, signed with your key
+frus build apk --split-per-abi   # one smaller APK per processor
+frus run --profile           # optimised, frames timed in the log: to measure performance
+frus run --flavor dev --define API_URL=http://localhost:3000
+frus build installer         # the desktop program as a setup program, a .deb or a .dmg
+```
+
+Flavors are declared in `Cargo.toml` (see the comment on flavors there); the code reads them
+with `frus::flavor()`, and a define with `frus::define!("API_URL")`.
 
 ## Web
 
@@ -149,7 +161,8 @@ For the APK, give the repository two secrets (Settings → Secrets and variables
 
 What the workflow does not do: sign the desktop programs (Windows SmartScreen and macOS
 Gatekeeper warn about an unsigned program the first time it opens), make a macOS `.app` or an
-installer, or build an Android App Bundle (`.aab`) for Google Play.
+installer (`frus build installer` makes one where you run it), or build an Android App Bundle
+(`frus build appbundle` makes it).
 
 `.github/workflows/ci.yml` checks every push: formatting, clippy, the tests, and a build for
 the desktops, the web and Android.

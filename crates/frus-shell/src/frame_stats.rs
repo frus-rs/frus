@@ -25,7 +25,8 @@
 //!
 //! It is off unless asked for, and costs nothing then: `FRUS_FRAME_STATS=1` in the
 //! environment, or on Android `adb shell setprop debug.frus.frames 1` before the
-//! application starts.
+//! application starts. A profile build (`frus run --profile`) has it on from the start
+//! (`FRUS_FRAME_STATS=0` turns it off).
 
 use std::time::Duration;
 // The browser has no `std` clock: the same one the shell keeps time with.
@@ -296,7 +297,15 @@ fn spread(values: &[f32]) -> (f32, f32, f32) {
 
 /// Whether the platform's switch is on.
 fn switched_on() -> bool {
-    if std::env::var("FRUS_FRAME_STATS").is_ok_and(|v| !v.is_empty() && v != "0") {
+    match std::env::var("FRUS_FRAME_STATS") {
+        Ok(v) if !v.is_empty() && v != "0" => return true,
+        // Asked off, even in a profile build.
+        Ok(v) if v == "0" => return false,
+        _ => {}
+    }
+    // A profile build is made to be measured: its frames are timed without asking
+    // (milestone 790).
+    if crate::build_mode() == crate::BuildMode::Profile {
         return true;
     }
     // An Android application has no environment to be given: a system property, set with

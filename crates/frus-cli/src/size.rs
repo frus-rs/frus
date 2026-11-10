@@ -169,10 +169,11 @@ fn build_with_symbols(project: &Project, target: Target) -> Result<PathBuf, Stri
         target.platform(),
         dir.display()
     );
+    // A bundle carries the APK's library, an installer the desktop's program.
     match target {
-        Target::Desktop => build_desktop(project, &dir),
+        Target::Desktop | Target::Installer => build_desktop(project, &dir),
         Target::Web => build_web(project, &dir),
-        Target::Apk => build_android(project, &dir),
+        Target::Apk | Target::AppBundle => build_android(project, &dir),
     }
 }
 

@@ -12,19 +12,50 @@ use std::time::SystemTime;
 use crate::project::{json_string, Project};
 use crate::setup;
 
-/// Debug or release.
+/// Debug, profile or release (milestone 790).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Debug,
+    /// Optimised as a release is, the symbols kept and the frames timed: cargo's `profile`
+    /// profile, which `frus create` declares (and the environment gives an older project).
+    Profile,
     Release,
 }
 
 impl Mode {
-    /// The directory cargo writes this mode's build to.
-    fn dir(self) -> &'static str {
+    /// The flag's word: `debug`, `profile`, `release`.
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Mode::Debug => "debug",
+            Mode::Profile => "profile",
             Mode::Release => "release",
+        }
+    }
+
+    /// The cargo profile: `dev`, `profile`, `release`.
+    pub(crate) fn cargo_profile(self) -> &'static str {
+        match self {
+            Mode::Debug => "dev",
+            Mode::Profile => "profile",
+            Mode::Release => "release",
+        }
+    }
+
+    /// The directory cargo writes this mode's build to.
+    pub(crate) fn dir(self) -> &'static str {
+        match self {
+            Mode::Debug => "debug",
+            Mode::Profile => "profile",
+            Mode::Release => "release",
+        }
+    }
+
+    /// What cargo is told for this mode: nothing, `--profile profile`, `--release`.
+    pub(crate) fn cargo_args(self) -> &'static [&'static str] {
+        match self {
+            Mode::Debug => &[],
+            Mode::Profile => &["--profile", "profile"],
+            Mode::Release => &["--release"],
         }
     }
 }
@@ -36,10 +67,9 @@ pub(crate) fn build_desktop(project: &Project, mode: Mode) -> Result<PathBuf, St
     let mut command = Command::new("cargo");
     command
         .args(["build", "--message-format=json-render-diagnostics"])
-        .current_dir(&project.root);
-    if mode == Mode::Release {
-        command.arg("--release");
-    }
+        .current_dir(&project.root)
+        .args(mode.cargo_args())
+        .args(project.feature_args());
     // The messages are JSON on stdout; cargo's progress and the compiler's diagnostics,
     // rendered for people, go to stderr and straight through.
     let mut child = command
@@ -109,6 +139,7 @@ pub(crate) fn build_web(project: &Project, mode: Mode) -> Result<PathBuf, String
     // Release builds use the size-first profile `frus create` declares, when there is one.
     let profile = match mode {
         Mode::Debug => "dev",
+        Mode::Profile => "profile",
         Mode::Release if project.has_web_release => "web-release",
         Mode::Release => "release",
     };
@@ -125,6 +156,7 @@ pub(crate) fn build_web(project: &Project, mode: Mode) -> Result<PathBuf, String
             "--profile",
             profile,
         ])
+        .args(project.feature_args())
         .current_dir(&project.root))?;
 
     let wasm = project
@@ -148,12 +180,44 @@ pub(crate) fn build_web(project: &Project, mode: Mode) -> Result<PathBuf, String
     Ok(web)
 }
 
-/// The Android package, built with cargo-apk: the path of the `.apk`.
-/// `device_target`, the Rust target of the device the package is for (`frus run`): when the
+/// The Android package, built with cargo-apk and, for a flavor or a version, packaged again
+/// with them: the path of the `.apk`. `device_target`, the Rust target of the device the package is for (`frus run`): when the
 /// manifest's `build_targets` do not have it, the package is built for that one alone — an
 /// x86_64 emulator runs an arm64 library only through Android's translation, which some
 /// system images lack and some drivers crash under.
 pub(crate) fn build_apk(
+    project: &Project,
+    mode: Mode,
+    device_target: Option<&str>,
+) -> Result<PathBuf, String> {
+    let apk = cargo_apk(project, mode, device_target)?;
+    // Another id, label, version or resources (a flavor, `--build-name`): packaged again with
+    // them (milestone 790).
+    if project.android_overrides() {
+        let targets = match only_target(project, device_target) {
+            Some(target) => vec![target.to_string()],
+            None => project.android_targets.clone(),
+        };
+        return crate::android_pack::repackage(
+            project,
+            mode,
+            &apk,
+            &targets,
+            device_target.is_some(),
+        );
+    }
+    Ok(apk)
+}
+
+/// The device's target, when the manifest's `build_targets` do not have it: the one target the
+/// package is built for.
+fn only_target<'a>(project: &Project, device_target: Option<&'a str>) -> Option<&'a str> {
+    device_target.filter(|target| !project.android_targets.iter().any(|t| t == target))
+}
+
+/// The APK exactly as cargo-apk writes it, its manifest and libraries left beside it: what the
+/// split APKs and the App Bundle are packaged from (`android_pack`).
+pub(crate) fn cargo_apk(
     project: &Project,
     mode: Mode,
     device_target: Option<&str>,
@@ -168,7 +232,7 @@ pub(crate) fn build_apk(
     // What building for Android needs, installed if it is missing: an SDK with its NDK, the
     // Rust targets the manifest lists, and cargo-apk.
     setup::android_sdk(project.android_target_sdk)?;
-    let only = device_target.filter(|target| !project.android_targets.iter().any(|t| t == target));
+    let only = only_target(project, device_target);
     match only {
         Some(target) => setup::rust_target(target)?,
         None => {
@@ -194,28 +258,18 @@ pub(crate) fn build_apk(
     if let Some(target) = only {
         command.args(["--target", target]);
     }
+    command.args(mode.cargo_args()).args(project.feature_args());
     match mode {
-        Mode::Release => {
-            command.arg("--release");
-            // `frus run --release` runs the package; it does not publish it. Without a release
-            // key in the manifest, cargo-apk stops at the signing: the package is signed with
-            // the debug key, as a debug build is. `frus build apk` still asks for a real one.
-            if device_target.is_some() && std::env::var_os("CARGO_APK_RELEASE_KEYSTORE").is_none() {
-                let manifest =
-                    std::fs::read_to_string(project.root.join("Cargo.toml")).unwrap_or_default();
-                let debug_key =
-                    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                        .map(|home| PathBuf::from(home).join(".android").join("debug.keystore"))
-                        .filter(|key| key.is_file());
-                if let (false, Some(key)) = (
-                    manifest.contains("[package.metadata.android.signing.release]"),
-                    debug_key,
-                ) {
-                    command
-                        .env("CARGO_APK_RELEASE_KEYSTORE", key)
-                        .env("CARGO_APK_RELEASE_KEYSTORE_PASSWORD", "android");
-                }
-            }
+        // The key, found here as cargo-apk would (`android_pack::signing_key`) and handed to it:
+        // `frus run --release` runs the package, it does not publish it, so without a release
+        // key it is signed with the debug key, as a debug build is; a profile build is too.
+        // `frus build apk` still asks for a real one.
+        Mode::Release | Mode::Profile => {
+            let key = crate::android_pack::signing_key(project, mode, device_target.is_some())?;
+            let variable = format!("CARGO_APK_{}_KEYSTORE", mode.name().to_uppercase());
+            command
+                .env(&variable, &key.path)
+                .env(format!("{variable}_PASSWORD"), &key.password);
         }
         // A debug `.so` is mostly debug information nobody reads on a phone: 267 MB of APK for a
         // hello world, against 56 MB without it. Every run and every reload sends the APK over

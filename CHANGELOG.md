@@ -29,6 +29,23 @@ any release may break.
   the Windows linker's map, read without dependencies), list the bundled fonts and assets found
   inside it, write the whole as JSON and compare with an earlier one (`--compare`). The guide's
   "Shipping" says what makes an application smaller.
+- **Build modes, flavors, defines, versions and release artifacts** (J790). `frus run` and
+  `frus build` take `--debug` / `--profile` / `--release`, `--flavor <name>`, `--define K=V`
+  and `--define-from-file <file.json|.env>`, `--build-name` and `--build-number`. A profile
+  build is optimised like a release, keeps its symbols and logs its frame timings; `frus
+  create` writes its `[profile.profile]`, and older projects get it through cargo's
+  environment. Flavors are declared under `[package.metadata.frus.flavors.<name>]` (name,
+  Android id suffix, resource overlay, features, defines). The code reads `frus::build_mode()`,
+  `frus::flavor()`, `frus::app_version()` and `frus::define!("KEY")`, a compile-time constant
+  that rebuilds when its value changes. The version reaches Android's `versionName` /
+  `versionCode`, the macOS `Info.plist` and the installers. New artifacts: `frus build
+  appbundle` (an Android App Bundle made with bundletool, fetched on first use, signed with the
+  release key), `frus build apk --split-per-abi`, and `frus build installer` (a per-user NSIS
+  setup program on Windows, a `.deb` on Linux, a disk image on macOS; `--format msix`, `rpm` or
+  `appimage` for the others). On Windows, the program, the setup program and the MSIX package
+  are signed with `signtool` when a certificate is configured
+  (`[package.metadata.frus.windows.signing]` or `FRUS_WINDOWS_CERTIFICATE*`). Guide page:
+  `docs/guide/build-variants.md`.
 - **DevTools** (J788). `frus run` serves DevTools on `localhost` for a debug build, and `v` opens
   it in the browser (in VS Code, **frus: Open DevTools**; with `--machine`, the `app.devTools`
   event carries its address). An **inspector** shows the live widget tree with each widget's
