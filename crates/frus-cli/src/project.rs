@@ -54,6 +54,11 @@ pub(crate) struct Project {
     /// `[package.metadata.android] resources` and `assets`, relative to the root.
     pub android_resources: Option<String>,
     pub android_assets: Option<String>,
+    /// `[package] license`, when written as a string.
+    pub license: Option<String>,
+    /// The lines of `[package.metadata.frus.windows.signing]`, `(key, value)`: read by
+    /// `windows_package::signing` (milestone 790).
+    pub windows_signing: Vec<(String, String)>,
     /// What `--flavor`, `--define`, `--build-name` and `--build-number` resolved to, once
     /// applied (see `variant::Variant::apply`); the plain build's otherwise.
     pub variant: crate::variant::Resolved,
@@ -114,6 +119,8 @@ impl Project {
         let mut label = None;
         let mut android_resources = None;
         let mut android_assets = None;
+        let mut license = None;
+        let mut windows_signing = Vec::new();
         for line in text.lines() {
             let line = line.trim();
             if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -176,6 +183,11 @@ impl Project {
                     }
                 }
             }
+            if section == crate::windows_package::SIGNING_SECTION {
+                if let Some(text) = string_value(value) {
+                    windows_signing.push((key.to_string(), text));
+                }
+            }
             let value = string_value(value);
             match (section.as_str(), key, value) {
                 ("package.metadata.android.application", "label", Some(value)) => {
@@ -188,6 +200,7 @@ impl Project {
                 ("package", "name", Some(value)) => package = Some(value),
                 ("lib", "name", Some(value)) => lib_name = Some(value),
                 ("package", "version", Some(value)) => version = Some(value),
+                ("package", "license", Some(value)) => license = Some(value),
                 ("package.metadata.android", "package", Some(value)) => {
                     android_package = Some(value)
                 }
@@ -219,6 +232,8 @@ impl Project {
             label,
             android_resources,
             android_assets,
+            license,
+            windows_signing,
             variant: crate::variant::Resolved::default(),
         })
     }

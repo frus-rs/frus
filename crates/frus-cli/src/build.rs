@@ -17,6 +17,8 @@ pub(crate) struct Request {
     pub mode: Mode,
     /// `--split-per-abi`: one APK per processor.
     pub split_per_abi: bool,
+    /// `--format`: the kind of installer, this system's default when `None`.
+    pub format: Option<crate::installer::Format>,
     /// `--flavor`, `--define`, `--build-name`, `--build-number` (milestone 790).
     pub variant: crate::variant::Variant,
 }
@@ -63,10 +65,14 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
         target,
         mode,
         split_per_abi,
+        format,
         variant,
     } = request;
     if split_per_abi && target != Target::Apk {
         return Err("--split-per-abi goes with `frus build apk`".into());
+    }
+    if format.is_some() && target != Target::Installer {
+        return Err("--format goes with `frus build installer`".into());
     }
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut project = Project::find(&here)?;
@@ -96,7 +102,7 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
         }
         Target::Installer => {
             let exe = cargo::build_desktop(&project, mode)?;
-            let installer = crate::installer::make(&project, mode, &exe)?;
+            let installer = crate::installer::make(&project, mode, &exe, format)?;
             println!("\nBuilt {} ({}).", installer.display(), size(&installer));
         }
         Target::Apk => {

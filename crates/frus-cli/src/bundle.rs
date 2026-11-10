@@ -155,6 +155,63 @@ mod tests {
         Project::from_manifest(Path::new("."), manifest).unwrap()
     }
 
+    /// **A flavor and a version reach the plist** (milestone 790): the flavor's name is the
+    /// bundle's, `--build-name` its short version, `--build-number` its build, the id suffix
+    /// its identifier's.
+    #[test]
+    fn the_info_plist_carries_the_variant() {
+        let manifest = "[package]
+name = \"tides\"
+version = \"1.2.0\"
+
+            [package.metadata.android]
+package = \"com.acme.tides_app\"
+
+            [package.metadata.frus.flavors.dev]
+app_name = \"Tides Dev\"
+            application_id_suffix = \".dev\"
+";
+        let mut project = Project::from_manifest(Path::new("."), manifest).unwrap();
+        crate::variant::Variant {
+            flavor: Some("dev".into()),
+            build_name: Some("2.5.0".into()),
+            build_number: Some(77),
+            ..crate::variant::Variant::default()
+        }
+        .apply(crate::cargo::Mode::Release, &mut project, Path::new("."))
+        .unwrap();
+        let plist = info_plist(&project, "tides", &[]);
+        for entry in [
+            "	<key>CFBundleName</key>
+	<string>Tides Dev</string>
+",
+            "	<key>CFBundleDisplayName</key>
+	<string>Tides Dev</string>
+",
+            "	<key>CFBundleShortVersionString</key>
+	<string>2.5.0</string>
+",
+            "	<key>CFBundleVersion</key>
+	<string>77</string>
+",
+        ] {
+            assert!(
+                plist.contains(entry),
+                "{entry} missing from
+{plist}"
+            );
+        }
+        assert!(
+            plist.contains(&format!(
+                "<key>CFBundleIdentifier</key>
+	<string>{}</string>",
+                project.bundle_identifier()
+            )),
+            "{plist}"
+        );
+        assert!(project.bundle_identifier().ends_with(".dev"), "{plist}");
+    }
+
     /// **The usage strings are in the plist, escaped**: a reason with `<`, `&` or quotes must
     /// not make the file one macOS cannot read — it would then find no reason and end the
     /// application at the question.

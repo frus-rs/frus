@@ -40,6 +40,7 @@ mod socket;
 mod template;
 mod testing;
 mod variant;
+mod windows_package;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -153,13 +154,15 @@ Targets:
   web        the site: web/, with the application compiled into web/pkg/
   desktop    the program for this computer (also: windows, linux, macos)
   installer  the program in this system's installer: a setup program (Windows),
-             a .deb (Linux), a disk image (macOS)
+             a .deb (Linux), a disk image (macOS); others with --format
 
 Options:
       --release            a release build (the default)
       --profile            optimised, the frames timed and the symbols kept
       --debug              a debug build
       --split-per-abi      with apk: one APK per processor, each smaller
+      --format <kind>      with installer: nsis or msix (Windows), deb, rpm or
+                           appimage (Linux), dmg (macOS)
       --flavor <name>      a flavor the application declares in its Cargo.toml
                            ([package.metadata.frus.flavors.<name>]): its name, id,
                            resources, features and defines; `frus::flavor()` in code
@@ -175,6 +178,7 @@ Examples:
   frus build apk --split-per-abi
   frus build appbundle --flavor prod --build-name 1.4.0 --build-number 23
   frus build installer
+  frus build installer --format msix
 ";
 
 const DEVICES_USAGE: &str = "\
@@ -558,6 +562,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
     let mut mode = None;
     let mut variant = variant::Variant::default();
     let mut split_per_abi = false;
+    let mut format = None;
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -579,6 +584,11 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         match flag.as_str() {
             "-h" | "--help" => return Ok(Command::BuildHelp),
             "--split-per-abi" if inline.is_none() => split_per_abi = true,
+            "--format" => set_once(
+                &mut format,
+                installer::Format::parse(&value("--format")?)?,
+                "--format",
+            )?,
             flag if flag.starts_with('-') => {
                 return Err(format!("frus build has no option `{text}`"));
             }
@@ -591,6 +601,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         target,
         mode: mode.unwrap_or(cargo::Mode::Release),
         split_per_abi,
+        format,
         variant,
     }))
 }
@@ -825,6 +836,17 @@ mod tests {
         assert!(error("build apk --debug --profile").contains("one mode at a time"));
         assert!(error("build apk --split-per-abi=yes").contains("no option"));
         assert!(error("build apk --flavor").contains("needs a value"));
+        assert_eq!(apk.format, None);
+        assert_eq!(
+            build_request("build installer --format msix").format,
+            Some(installer::Format::Msix)
+        );
+        assert_eq!(
+            build_request("build installer --format=appimage").format,
+            Some(installer::Format::AppImage)
+        );
+        assert!(error("build installer --format zip").contains("not `zip`"));
+        assert!(error("build installer --format deb --format rpm").contains("given twice"));
     }
 
     #[test]
