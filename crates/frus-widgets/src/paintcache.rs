@@ -55,6 +55,12 @@ pub struct PaintCache {
     misses: u32,
     last_hits: u32,
     last_misses: u32,
+    /// Each boundary met this frame: where it is drawn and how many times it has been
+    /// painted (not replayed) so far — what a repaint rainbow colours (milestone 788).
+    boundaries: Vec<(frus_core::Rect, u32)>,
+    last_boundaries: Vec<(frus_core::Rect, u32)>,
+    /// How many times each boundary has been painted rather than replayed.
+    repaints: HashMap<WidgetId, u32>,
 }
 
 impl PaintCache {
@@ -97,15 +103,20 @@ impl PaintCache {
         );
     }
 
-    /// A diagnostic counter: one boundary reused this frame.
-    pub(crate) fn note_hit(&mut self) {
+    /// A diagnostic counter: one boundary reused this frame, drawn at `rect`.
+    pub(crate) fn note_hit(&mut self, key: WidgetId, rect: frus_core::Rect) {
         self.hits += 1;
+        let painted = self.repaints.get(&key).copied().unwrap_or(0);
+        self.boundaries.push((rect, painted));
     }
 
     /// A diagnostic counter: one boundary repainted this frame (a miss, or
-    /// non-cacheable).
-    pub(crate) fn note_miss(&mut self) {
+    /// non-cacheable), drawn at `rect`.
+    pub(crate) fn note_miss(&mut self, key: WidgetId, rect: frus_core::Rect) {
         self.misses += 1;
+        let painted = self.repaints.entry(key).or_insert(0);
+        *painted += 1;
+        self.boundaries.push((rect, *painted));
     }
 
     /// To be called at the end of a frame: forgets untouched boundaries (vanished
@@ -113,6 +124,8 @@ impl PaintCache {
     pub(crate) fn end_frame(&mut self) {
         let touched = std::mem::take(&mut self.touched);
         self.entries.retain(|id, _| touched.contains(id));
+        self.repaints.retain(|id, _| touched.contains(id));
+        self.last_boundaries = std::mem::take(&mut self.boundaries);
         self.last_hits = self.hits;
         self.last_misses = self.misses;
         self.hits = 0;
@@ -122,6 +135,20 @@ impl PaintCache {
     /// Reuses and repaints of the last completed frame (diagnostic).
     pub fn last_frame_stats(&self) -> (u32, u32) {
         (self.last_hits, self.last_misses)
+    }
+
+    /// The repaint boundaries of the last completed frame: where each was drawn, in the
+    /// frame's logical coordinates, and how many times it has been painted rather than
+    /// replayed. A boundary whose count did not move was reused as it was. What a repaint
+    /// rainbow colours (milestone 788).
+    ///
+    /// ```
+    /// use frus_widgets::Runtime;
+    /// let runtime = Runtime::default();
+    /// assert!(runtime.paint_cache.borrow().last_frame_boundaries().is_empty());
+    /// ```
+    pub fn last_frame_boundaries(&self) -> &[(frus_core::Rect, u32)] {
+        &self.last_boundaries
     }
 }
 
@@ -164,11 +191,14 @@ mod tests {
     #[test]
     fn frame_stats_freeze_at_end_frame() {
         let mut c = PaintCache::default();
-        c.note_hit();
-        c.note_hit();
-        c.note_miss();
+        let r = frus_core::Rect::new(1.0, 2.0, 3.0, 4.0);
+        c.note_hit(A, r);
+        c.note_hit(A.child(1), r);
+        c.note_miss(A.child(2), r);
         c.end_frame();
         assert_eq!(c.last_frame_stats(), (2, 1));
+        // Each boundary, with how many times it was painted: the reused ones never were.
+        assert_eq!(c.last_frame_boundaries(), &[(r, 0), (r, 0), (r, 1)]);
         // The counters start again from zero for the next frame.
         c.end_frame();
         assert_eq!(c.last_frame_stats(), (0, 0));

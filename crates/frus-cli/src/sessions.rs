@@ -163,6 +163,9 @@ struct Session {
     shot_said: bool,
     /// Its output is closed: it has ended.
     done: bool,
+    /// Where its DevTools is served, from its `app.devTools`: each run serves its own, on a
+    /// port of its own.
+    devtools: Option<String>,
     failed: bool,
 }
 
@@ -230,6 +233,7 @@ pub(crate) fn run_many(options: &RunOptions) -> Result<ExitCode, String> {
             started: false,
             shot_said: false,
             done: false,
+            devtools: None,
             failed: false,
         });
     }
@@ -359,9 +363,23 @@ fn drive(sessions: &mut [Session], lines: &Receiver<Line>) -> Result<ExitCode, S
             Action::Help => report::say(run::KEYS),
             Action::Clear => run::clear_screen(),
             Action::Missing(why) => report::say(why),
-            Action::DevTools => report::say(
-                "each device has its own DevTools: open the address printed under its name",
-            ),
+            // Each run serves its own DevTools: every one that does is opened, named.
+            Action::DevTools => {
+                let served: Vec<(String, String)> = sessions
+                    .iter()
+                    .filter(|s| !s.done)
+                    .filter_map(|s| Some((s.devtools.clone()?, s.device.name.clone())))
+                    .collect();
+                if served.is_empty() {
+                    report::say(
+                        "no run serves DevTools yet: it comes with a debug build, once the \
+                         application runs",
+                    );
+                }
+                for (address, device) in served {
+                    crate::devtools::open_address(&address, Some(&device));
+                }
+            }
             Action::Reload | Action::Restart => {
                 let full = action == Action::Restart;
                 if !full && sessions.iter().any(|s| s.hot && !s.done) {
@@ -479,6 +497,11 @@ fn show(session: &mut Session, line: &str) {
             } else {
                 println!("{tag} {message}");
             }
+        }
+        "app.devTools" => {
+            let uri = text("uri");
+            println!("{tag} DevTools: {uri} (v opens it)");
+            session.devtools = Some(uri);
         }
         "app.restarted" => {
             let seconds = params
@@ -736,6 +759,7 @@ mod tests {
             started: false,
             shot_said: false,
             done: false,
+            devtools: None,
             failed: false,
         };
         show(
@@ -748,6 +772,15 @@ mod tests {
             r#"{"event":"app.started","params":{"appId":"frus-run-7","hotReload":true}}"#,
         );
         assert!(session.hot);
+        // Each run serves its own DevTools, on a port of its own: `v` opens this one.
+        show(
+            &mut session,
+            r#"{"event":"app.devTools","params":{"appId":"frus-run-7","uri":"http://127.0.0.1:9101/?token=t"}}"#,
+        );
+        assert_eq!(
+            session.devtools.as_deref(),
+            Some("http://127.0.0.1:9101/?token=t")
+        );
         show(
             &mut session,
             r#"{"event":"app.stop","params":{"appId":"frus-run-7","error":"it crashed"}}"#,

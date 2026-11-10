@@ -3895,6 +3895,22 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     };
                     (ui, scene)
                 };
+                // The repaint rainbow DevTools turns on (milestone 788): the boundaries this
+                // frame painted, and the frame itself, outlined in a colour that moves on each
+                // time they are painted again.
+                #[cfg(debug_assertions)]
+                let scene = if self.devtools.rainbow {
+                    self.devtools.rainbow_frames = self.devtools.rainbow_frames.wrapping_add(1);
+                    devtools::paint_rainbow(
+                        &scene,
+                        self.runtime.paint_cache.borrow().last_frame_boundaries(),
+                        self.devtools.rainbow_frames,
+                        Size::new(width, height),
+                        scale,
+                    )
+                } else {
+                    scene
+                };
                 let layout_took = layout_start.map(|at| at.elapsed());
                 if let Some(took) = layout_took {
                     self.frame_costs.layout_paint = took.as_secs_f32() * 1000.0;
@@ -4268,9 +4284,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         .fold(Why::NONE, |all, (_, why)| all | why);
                     self.frame_stats.frame(start, self.frame_costs);
                     #[cfg(debug_assertions)]
-                    if self.devtools.measuring() {
-                        self.devtools.frames.push(start, &self.frame_costs);
-                    }
+                    crate::devtools::record_frame(
+                        start,
+                        &self.frame_costs,
+                        frus_widgets::take_frame_rebuilds(),
+                    );
                     if self.debug.performance {
                         if let Some((_, before)) = self.debug.last_costs {
                             let gap = start.saturating_duration_since(before).as_secs_f32();
@@ -13032,6 +13050,16 @@ pub mod testing {
                         .collect()
                 })
                 .unwrap_or_default()
+        }
+
+        /// One DevTools call, answered as the window's frame answers it (milestone 788).
+        #[cfg(all(test, debug_assertions))]
+        pub(crate) fn devtools_call(
+            &mut self,
+            method: &str,
+            params: frus_widgets::__serde_json::Value,
+        ) -> Result<frus_widgets::__serde_json::Value, String> {
+            self.shell.devtools_call(method, &params)
         }
 
         /// The interface the last frame laid out — what a tap is asked about, what the registries

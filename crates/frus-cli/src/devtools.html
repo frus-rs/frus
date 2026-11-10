@@ -126,6 +126,8 @@
       <span><i style="background: var(--bad)"></i>jank</span>
     </div>
     <canvas id="chart"></canvas>
+    <h2>Components built most</h2>
+    <div class="scroll" style="flex: 0 1 auto; max-height: 220px"><table class="props" id="rebuilt"></table></div>
   </section>
   <section id="settings">
     <div class="setting"><label>Animation speed</label>
@@ -136,6 +138,9 @@
       <input type="checkbox" id="inspector-overlay"></div>
     <div class="setting"><label for="perf-overlay">Performance overlay</label>
       <input type="checkbox" id="perf-overlay"></div>
+    <div class="setting"><label for="rainbow">Repaint rainbow</label>
+      <input type="checkbox" id="rainbow">
+      <span style="color: var(--muted)">a border that changes colour each time a frame, or a repaint boundary in it, is painted again</span></div>
     <div class="setting"><label for="brightness">Brightness</label>
       <select id="brightness"><option value="light">light</option><option value="dark">dark</option></select></div>
     <div class="setting"><label for="platform">Platform the widgets behave as</label>
@@ -207,6 +212,7 @@
   function describe(node) {
     const parts = [el('span', { className: 'name' }, node.name)];
     if (node.key) parts.push(el('span', { className: 'key' }, ` key=${node.key}`));
+    if (node.rebuilds) parts.push(el('span', { className: 'key' }, ` built ${node.rebuilds}×`));
     if (node.text) parts.push(el('span', { className: 'text' }, ` "${node.text.slice(0, 60)}"`));
     if (node.semantics && node.semantics.label && node.semantics.label !== node.text)
       parts.push(el('span', { className: 'sem' }, ` [${node.semantics.role}: ${node.semantics.label}]`));
@@ -280,6 +286,7 @@
       row(general, 'position', `${r.x.toFixed(1)}, ${r.y.toFixed(1)}`);
       row(general, 'size', `${r.width.toFixed(1)} × ${r.height.toFixed(1)}`);
       row(general, 'depth', node.depth);
+      row(general, 'built (component)', node.rebuilds ? `${node.rebuilds} times` : '');
       details.append(el('h2', {}, 'Widget'), general);
       const style = el('table', { className: 'props' });
       const s = node.style;
@@ -299,6 +306,15 @@
       row(style, 'wrap', s.wrap ? 'yes' : '');
       row(style, 'grid columns', s.gridColumns);
       details.append(el('h2', {}, 'Layout'), style);
+      if (node.constraints) {
+        const c = node.constraints;
+        const bound = (v) => (v === null || v === undefined ? '∞' : v.toFixed(1));
+        const room = el('table', { className: 'props' });
+        row(room, 'width', `${bound(c.minWidth)} … ${bound(c.maxWidth)}`);
+        row(room, 'height', `${bound(c.minHeight)} … ${bound(c.maxHeight)}`);
+        row(room, 'available', `${bound(c.availableWidth)} × ${bound(c.availableHeight)}`);
+        details.append(el('h2', {}, 'Constraints (the room it was offered)'), room);
+      }
       if (node.semantics) {
         const sem = el('table', { className: 'props' });
         for (const [k, v] of Object.entries(node.semantics)) row(sem, k, Array.isArray(v) ? v.join(', ') : v);
@@ -388,6 +404,20 @@
   }
   setInterval(pollFrames, 500);
 
+  // The components built most since the application started, every two seconds.
+  async function pollRebuilds() {
+    if (paused || tab !== 'perf') return;
+    try {
+      const answer = await call('rebuilds', { limit: 15 });
+      const named = (id) => (nodes.find((n) => n.id === id) || {}).name || 'component';
+      const table = $('rebuilt');
+      table.replaceChildren(...answer.components.map((c) =>
+        el('tr', {}, el('td', {}, `${c.rebuilds}×`), el('td', {}, `${named(c.id)} ${c.id}`))));
+      if (!answer.components.length) table.append(el('tr', {}, el('td', {}, 'No component built yet.')));
+    } catch (_) {}
+  }
+  setInterval(pollRebuilds, 2000);
+
   function color(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
   function drawChart(budget = 1000 / 60) {
@@ -443,6 +473,7 @@
       stat(frames.length ? (total / frames.length).toFixed(1) + ' ms' : '–', 'average CPU cost'),
       stat(worst ? worst.toFixed(1) + ' ms' : '–', 'worst CPU cost'),
       stat(String(janks), 'janky frames'),
+      stat(String(frames.reduce((n, f) => n + (f.rebuilds || 0), 0)), 'components built'),
     );
   }
   window.addEventListener('resize', () => drawChart());
@@ -461,6 +492,7 @@
     $('debug-paint').checked = state.debugPaint;
     $('inspector-overlay').checked = state.inspector;
     $('perf-overlay').checked = state.performanceOverlay;
+    $('rainbow').checked = Boolean(state.repaintRainbow);
     $('brightness').value = state.brightness;
     if (state.platform) $('platform').value = state.platform;
     const scale = [...$('text-scale').options].find((o) => Math.abs(Number(o.value) - state.textScale) < 1e-3);
@@ -477,6 +509,7 @@
   $('debug-paint').onchange = (e) => set({ debugPaint: e.target.checked });
   $('inspector-overlay').onchange = (e) => set({ inspector: e.target.checked });
   $('perf-overlay').onchange = (e) => set({ performanceOverlay: e.target.checked });
+  $('rainbow').onchange = (e) => set({ repaintRainbow: e.target.checked });
   $('brightness').onchange = (e) => set({ brightness: e.target.value });
   $('platform').onchange = (e) => set({ platform: e.target.value });
   $('text-scale').onchange = (e) => set({ textScale: Number(e.target.value) });

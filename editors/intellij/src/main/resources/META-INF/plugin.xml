@@ -84,6 +84,8 @@ fetches the <code>frus</code> tool, and <code>frus</code> fetches what each plat
             <action id="frus.PrintFocusTree" class="dev.frus.intellij.PrintFocusTreeAction" text="Print Focus Tree"/>
             <action id="frus.PrintSemanticsTree" class="dev.frus.intellij.PrintSemanticsTreeAction"
                     text="Print Semantics Tree" description="What a screen reader sees"/>
+            <action id="frus.OpenDevTools" class="dev.frus.intellij.OpenDevToolsAction" text="Open DevTools"
+                    description="The widget tree, the frames and the log of the running application, in the browser"/>
             <action id="frus.Screenshot" class="dev.frus.intellij.ScreenshotAction" text="Save Screenshot"/>
             <action id="frus.Detach" class="dev.frus.intellij.DetachAction" text="Detach"
                     description="Leave the application running and end the run"/>

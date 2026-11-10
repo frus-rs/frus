@@ -57,12 +57,82 @@ impl Request {
 /// The requests not answered yet.
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());
 
-/// Queues a request for the next frame, and asks for that frame.
+/// The frames' costs, recorded once a client asked for them. Kept outside the window, so
+/// that `frames` is answered on the thread it arrives on: a client polling the frames of an
+/// idle application must not be what keeps it drawing.
+static FRAMES: Mutex<Frames> = Mutex::new(Frames::new());
+
+/// The switches as of the last frame drawn, for `state` to be answered the same way.
+static STATE: Mutex<Option<Value>> = Mutex::new(None);
+
+/// Queues a request for the next frame, and asks for that frame. `frames`, `state` and
+/// `rebuilds` are answered at once instead, from what the last frame left: they wake nothing.
 pub(crate) fn push(request: Request) {
+    if let Some(answer) = answer_now(&request.body) {
+        request.answer(answer);
+        return;
+    }
     if let Ok(mut queue) = QUEUE.lock() {
         queue.push(request);
     }
     crate::dev_commands::wake();
+}
+
+/// The answer to a request that needs no frame: `frames`, and `state` once a frame has
+/// published it.
+fn answer_now(body: &str) -> Option<String> {
+    let call = parse(body).ok()?;
+    match call.method.as_str() {
+        "frames" => {
+            let after = call.params.get("after").and_then(Value::as_u64);
+            let mut frames = FRAMES.lock().ok()?;
+            // Measured from the next frame the application draws on its own.
+            frames.recording = true;
+            Some(answer(&call.id, Ok(frames.after(after))))
+        }
+        "state" => {
+            let state = STATE.lock().ok()?.clone()?;
+            Some(answer(&call.id, Ok(state)))
+        }
+        "rebuilds" => {
+            let limit = call
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20);
+            let components: Vec<Value> = frus_widgets::rebuild_counts(limit as usize)
+                .into_iter()
+                .map(|(id, count)| json!({ "id": id_text(id), "rebuilds": count }))
+                .collect();
+            Some(answer(&call.id, Ok(json!({ "components": components }))))
+        }
+        _ => None,
+    }
+}
+
+/// Whether the frames' costs are being recorded: a client asked for them.
+pub(crate) fn measuring() -> bool {
+    FRAMES.lock().is_ok_and(|frames| frames.recording)
+}
+
+/// Records a frame that began at `start`, while frames are recorded.
+pub(crate) fn record_frame(
+    start: web_time::Instant,
+    costs: &crate::frame_stats::FrameCosts,
+    rebuilds: u32,
+) {
+    if let Ok(mut frames) = FRAMES.lock() {
+        if frames.recording {
+            frames.push(start, costs, rebuilds);
+        }
+    }
+}
+
+/// The switches as they are now, for `state` to be answered without a frame.
+pub(crate) fn publish_state(state: Value) {
+    if let Ok(mut slot) = STATE.lock() {
+        *slot = Some(state);
+    }
 }
 
 /// The requests that arrived since the last frame, oldest first.
@@ -239,7 +309,81 @@ fn node_json(node: &InspectorNode, parent: Option<usize>, extras: &Extras) -> Va
     if let Some(sem) = extras.semantics.get(&node.id.as_u64()) {
         out.insert("semantics".into(), semantics_json(sem));
     }
+    let rebuilds = frus_widgets::rebuild_count(node.id);
+    if rebuilds > 0 {
+        out.insert("rebuilds".into(), rebuilds.into());
+    }
     Value::Object(out)
+}
+
+/// The room a widget was offered, as the flexbox layout offers it: its parent's content box
+/// (the parent's box less its padding), unbounded along an axis its parent scrolls; then the
+/// widget's own size, minimum and maximum resolved against that room. `None` stands for
+/// unbounded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Offered {
+    pub available: (Option<f32>, Option<f32>),
+    pub min: (f32, f32),
+    pub max: (Option<f32>, Option<f32>),
+}
+
+/// What a dimension resolves to against `room`: `None` when it is `Auto`, or a fraction of a
+/// room that is unbounded.
+fn resolve(dim: frus_widgets::Dimension, room: Option<f32>) -> Option<f32> {
+    match dim {
+        frus_widgets::Dimension::Auto => None,
+        frus_widgets::Dimension::Length(v) => Some(v),
+        frus_widgets::Dimension::Percent(p) => room.map(|r| r * p),
+    }
+}
+
+/// The room node `index` was offered; `scrolls(id)` says along which axes (horizontal,
+/// vertical) widget `id` scrolls its content.
+pub(crate) fn offered(
+    nodes: &[InspectorNode],
+    index: usize,
+    parent: Option<usize>,
+    scrolls: impl Fn(WidgetId) -> (bool, bool),
+    surface: (f32, f32),
+) -> Offered {
+    let node = &nodes[index];
+    let available = match parent {
+        Some(p) => {
+            let parent = &nodes[p];
+            let pad = parent.style.padding;
+            let (free_x, free_y) = scrolls(parent.id);
+            (
+                (!free_x).then(|| (parent.rect.width - pad.left - pad.right).max(0.0)),
+                (!free_y).then(|| (parent.rect.height - pad.top - pad.bottom).max(0.0)),
+            )
+        }
+        None => (Some(surface.0), Some(surface.1)),
+    };
+    let s = &node.style;
+    let axis = |size, min, max, room: Option<f32>| {
+        let size = resolve(size, room);
+        let min = resolve(min, room).unwrap_or(0.0);
+        let max = match (resolve(max, room), room) {
+            (Some(m), Some(r)) => Some(m.min(r)),
+            (Some(m), None) => Some(m),
+            (None, r) => r,
+        };
+        match size {
+            // A fixed size is what it gets, within its own bounds.
+            Some(v) => {
+                let v = max.map_or(v, |m| v.min(m)).max(min);
+                (v, Some(v))
+            }
+            None => (min, max),
+        }
+    };
+    let (min_w, max_w) = axis(s.width, s.min_width, s.max_width, available.0);
+    let (min_h, max_h) = axis(s.height, s.min_height, s.max_height, available.1);
+    Offered {
+        available,
+        min: (min_w, min_h),
+        max: (max_w, max_h),
+    }
 }
 
 /// The parent of each node of a tree listed in paint order with depths: the last node before
@@ -275,12 +419,19 @@ pub(crate) fn tree_json(nodes: &[InspectorNode], extras: &Extras) -> Value {
     )
 }
 
-/// One widget in detail: what `tree` says of it, its layout style, and the chain of its
-/// ancestors' names.
-pub(crate) fn details_json(nodes: &[InspectorNode], index: usize, extras: &Extras) -> Value {
+/// One widget in detail: what `tree` says of it, its layout style, the room it was offered,
+/// and the chain of its ancestors' names.
+pub(crate) fn details_json(
+    nodes: &[InspectorNode],
+    index: usize,
+    extras: &Extras,
+    scrolls: impl Fn(WidgetId) -> (bool, bool),
+    surface: (f32, f32),
+) -> Value {
     let parents = parents(nodes);
     let node = &nodes[index];
     let mut out = node_json(node, parents[index], extras);
+    let room = offered(nodes, index, parents[index], scrolls, surface);
     let s = &node.style;
     let insets = |i: frus_widgets::Insets| json!([i.left, i.top, i.right, i.bottom]);
     let style = json!({
@@ -312,6 +463,17 @@ pub(crate) fn details_json(nodes: &[InspectorNode], index: usize, extras: &Extra
     }
     if let Value::Object(map) = &mut out {
         map.insert("style".into(), style);
+        map.insert(
+            "constraints".into(),
+            json!({
+                "minWidth": room.min.0,
+                "maxWidth": room.max.0,
+                "minHeight": room.min.1,
+                "maxHeight": room.max.1,
+                "availableWidth": room.available.0,
+                "availableHeight": room.available.1,
+            }),
+        );
         map.insert("ancestors".into(), Value::Array(ancestors));
         // The children, by index, for a client that walks down.
         let children: Vec<Value> = parents
@@ -501,13 +663,14 @@ pub(crate) struct FrameRecord {
     pub gpu: Option<f32>,
     /// What asked for the frame after it.
     pub why: crate::frame_stats::Why,
+    /// How many components were built for it.
+    pub rebuilds: u32,
 }
 
 /// How many frames are kept: ten seconds at 60 Hz.
 const KEPT_FRAMES: usize = 600;
 
 /// The frames' costs, recorded once a client asked for them.
-#[derive(Default)]
 pub(crate) struct Frames {
     /// Whether frames are recorded: from the first `frames` request on.
     pub recording: bool,
@@ -517,11 +680,21 @@ pub(crate) struct Frames {
 }
 
 impl Frames {
-    /// Records a frame that began at `start`.
+    pub(crate) const fn new() -> Self {
+        Self {
+            recording: false,
+            records: std::collections::VecDeque::new(),
+            next: 0,
+            last_start: None,
+        }
+    }
+
+    /// Records a frame that began at `start`, for which `rebuilds` components were built.
     pub(crate) fn push(
         &mut self,
         start: web_time::Instant,
         costs: &crate::frame_stats::FrameCosts,
+        rebuilds: u32,
     ) {
         let interval = self.last_start.map_or(0.0, |before| {
             start.saturating_duration_since(before).as_secs_f32() * 1000.0
@@ -540,6 +713,7 @@ impl Frames {
             draw: costs.draw,
             gpu: costs.gpu,
             why: costs.why,
+            rebuilds,
         });
         self.next += 1;
     }
@@ -561,6 +735,7 @@ impl Frames {
                     "draw": r.draw,
                     "gpu": r.gpu,
                     "why": r.why.names(),
+                    "rebuilds": r.rebuilds,
                 })
             })
             .collect();
@@ -582,8 +757,14 @@ pub(crate) struct DevTools {
     /// Select mode: a tap selects the widget under it instead of reaching the application,
     /// and the widget under the pointer is highlighted.
     pub select_mode: bool,
-    /// The frames' costs.
-    pub frames: Frames,
+    /// Draw the repaint rainbow: a coloured border around the frame and around each repaint
+    /// boundary, its colour moving each time it is painted again.
+    pub rainbow: bool,
+    /// How many frames were drawn with the rainbow on: the frame's own border's colour.
+    pub rainbow_frames: u32,
+    /// Whether a client has spoken to this application: from then on each frame publishes
+    /// the switches.
+    pub active: bool,
 }
 
 impl DevTools {
@@ -595,7 +776,7 @@ impl DevTools {
 
     /// Whether the frames' costs are measured.
     pub(crate) fn measuring(&self) -> bool {
-        self.frames.recording
+        measuring()
     }
 }
 
@@ -748,9 +929,47 @@ mod tests {
         assert_eq!(by(json!({ "id": id })), keyed);
         assert!(Finder::of(&json!({})).is_none());
 
-        let details = details_json(&nodes, keyed[0], &extras);
+        let details = details_json(
+            &nodes,
+            keyed[0],
+            &extras,
+            |_| (false, false),
+            (200.0, 200.0),
+        );
         assert_eq!(details["style"]["width"], "Length(80.0)");
         assert_eq!(details["ancestors"][0]["name"], nodes[0].name);
+        // An 80 by 30 box is offered exactly that, in a column's content box.
+        assert_eq!(details["constraints"]["minWidth"], 80.0);
+        assert_eq!(details["constraints"]["maxWidth"], 80.0);
+        // Offered within its parent's content box: the keyed wrapper around it, here.
+        let parent = details["parent"].as_u64().unwrap() as usize;
+        assert_eq!(
+            details["constraints"]["availableWidth"],
+            nodes[parent].rect.width
+        );
+    }
+
+    /// The room offered: the parent's content box, unbounded along a scrolled axis, and the
+    /// widget's own bounds within it.
+    #[test]
+    fn the_room_offered_is_the_parents_content_box() {
+        let root: Container<()> = Container::new()
+            .width(200.0)
+            .height(100.0)
+            .padding(10.0)
+            .child(Container::new().max_width(150.0).height(20.0));
+        let (runtime, theme) = (Runtime::default(), Theme::default());
+        let (_, nodes) = build_ui_inspected(&root, Size::new(200.0, 100.0), &runtime, &theme);
+        let child = nodes.iter().position(|n| n.depth == 1).unwrap();
+        let room = offered(&nodes, child, Some(0), |_| (false, false), (200.0, 100.0));
+        assert_eq!(room.available, (Some(180.0), Some(80.0)));
+        assert_eq!(room.max.0, Some(150.0));
+        assert_eq!((room.min.1, room.max.1), (20.0, Some(20.0)));
+        // The parent scrolls vertically: no bound on that axis.
+        let room = offered(&nodes, child, Some(0), |_| (false, true), (200.0, 100.0));
+        assert_eq!(room.available.1, None);
+        let root_room = offered(&nodes, 0, None, |_| (false, false), (200.0, 100.0));
+        assert_eq!(root_room.available, (Some(200.0), Some(100.0)));
     }
 
     #[test]
@@ -778,22 +997,49 @@ mod tests {
     /// Frames are kept up to a limit, numbered, and listed after a number.
     #[test]
     fn frames_are_listed_after_a_number() {
-        let mut frames = Frames::default();
+        let mut frames = Frames::new();
         let start = web_time::Instant::now();
         let costs = crate::frame_stats::FrameCosts {
             layout_paint: 2.0,
             ..Default::default()
         };
         for i in 0..(KEPT_FRAMES as u64 + 5) {
-            frames.push(start + std::time::Duration::from_millis(16 * i), &costs);
+            frames.push(start + std::time::Duration::from_millis(16 * i), &costs, 2);
         }
         let all = frames.after(None);
         let list = all["frames"].as_array().unwrap();
         assert_eq!(list.len(), KEPT_FRAMES);
         assert_eq!(list[0]["number"], 5);
         assert!((list[1]["interval"].as_f64().unwrap() - 16.0).abs() < 0.01);
+        assert_eq!(list[1]["rebuilds"], 2);
         let newer = frames.after(Some(KEPT_FRAMES as u64 + 2));
         assert_eq!(newer["frames"].as_array().unwrap().len(), 2);
+    }
+
+    /// `frames` and `state` are answered on the spot, without waking a frame; the rest wait
+    /// for one.
+    #[test]
+    fn polling_wakes_no_frame() {
+        let (send, receive) = std::sync::mpsc::channel();
+        let ask = |body: &str| {
+            let send = send.clone();
+            push(Request::new(body.to_string(), move |a| {
+                let _ = send.send(a);
+            }));
+        };
+        let _ = take();
+        ask(r#"{"id":1,"method":"frames"}"#);
+        let answered: Value = json::from_str(&receive.try_recv().unwrap()).unwrap();
+        assert!(answered["result"]["frames"].is_array());
+        assert!(measuring(), "asking starts the recording");
+        publish_state(json!({"debugPaint": true}));
+        ask(r#"{"id":2,"method":"state"}"#);
+        let answered: Value = json::from_str(&receive.try_recv().unwrap()).unwrap();
+        assert_eq!(answered["result"]["debugPaint"], true);
+        assert!(take().is_empty(), "nothing waits for a frame");
+        ask(r#"{"id":3,"method":"tree"}"#);
+        assert!(receive.try_recv().is_err());
+        assert_eq!(take().len(), 1);
     }
 
     #[test]

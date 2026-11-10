@@ -207,6 +207,11 @@ pub(crate) fn init<A>() {
     if let Ok(env) = std::env::var("RUST_LOG") {
         builder.parse_filters(&env);
     }
+    // `frus run` reads the log through a pipe, to show it in DevTools too, and asks for its
+    // colours to be kept for the terminal it prints it in (milestone 788).
+    if let Ok(style) = std::env::var("RUST_LOG_STYLE") {
+        builder.parse_write_style(&style);
+    }
     // A second call — a test harness that set one up first — is not an error.
     let _ = builder.try_init();
 }

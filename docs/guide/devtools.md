@@ -36,15 +36,18 @@ emulator (through `adb forward`, with no permission asked of the application), a
 - **Inspector.** The widget tree, as laid out on the last frame: each widget's type, its key,
   the words it paints and its semantics label. Select one to see its box, its layout style
   (sizes and their bounds, padding, margin, flex factors, alignment), its semantics (role,
-  label, value, state, actions), its ancestors and children. The selected widget is highlighted
+  label, value, state, actions), the room it was offered (its constraints), how many times it
+  was built when it is a component, its ancestors and children. The selected widget is highlighted
   in the application. **Select widget** turns a tap in the application into a choice: the widget
   under the finger or the mouse is highlighted, and tapping it selects it in the tree.
 - **Performance.** A bar per frame: building the tree, layout and paint, rendering (the GPU and
-  the display included). Frames over the 16.7 ms of 60 Hz, or late, are red. The frames per
-  second, the average and the worst frame.
+  the display included). Frames whose own work is over the 16.7 ms of 60 Hz, or that came late,
+  are red. The frames per second, the average and the worst frame, how many components were
+  built, and the components built most. Reading them does not make the application draw.
 - **Settings.** The animation speed (1×, 0.5×, 0.2×, 0.1×), debug paint (an outline around every
-  widget), the inspector's hover card, the performance overlay, the brightness, the platform the
-  widgets behave as, the text size.
+  widget), the repaint rainbow (a border that changes colour each time the frame, or a repaint
+  boundary in it, is painted again), the inspector's hover card, the performance overlay, the
+  brightness, the platform the widgets behave as, the text size.
 - **Logs.** The application's log, filtered as you type.
 
 ## The protocol
@@ -100,18 +103,19 @@ Coordinates are logical pixels from the top-left corner of the application's sur
 | --- | --- | --- |
 | `hello` | | `{protocol, frus, platform, size: {width, height}, devicePixelRatio}` |
 | `tree` | | `{size, selected, nodes: [node…]}`, in paint order |
-| `node` | `id` | `node` with `style`, `ancestors` and `children` |
+| `node` | `id` | `node` with `style`, `constraints`, `ancestors` and `children` |
 | `find` | a finder | `{nodes: [summary…]}` |
 | `at` | `x`, `y` | the `summary` of the deepest widget at the point, or `null` |
 | `select` | `id` or `null` | `{selected}`: the widget highlighted in the application |
 | `tap` | a finder, or `x`, `y` | `{x, y, id}`: where it tapped |
 | `scroll` | a finder, or `x`, `y`; `dx`, `dy` | `{x, y}`: the scroll area at that point moved by `dx`, `dy` logical pixels; `dy > 0` brings what is further down into view |
-| `type` | `text`; `target?`, a finder or a point to tap first | `{typed, focused}`: the characters typed into the widget with the focus, as keys |
+| `type` | `text`; `target?`, a finder or a point to tap first | `{typed, focused}`: the characters typed into the text field with the focus, through its editing as an input method commits text (on every platform, Android included); with no field focused, pressed as keys |
 | `setText` | `target`, a finder; `text` | `{id}`: the field's whole value replaced, as an assistive technology does |
 | `key` | `key`: `"Enter"`, `"Tab"`, `"Escape"`, `"Backspace"`, `"ArrowDown"`, `"F5"`, `"a"`, `"ctrl+a"`… | `{}` |
 | `back` | | `{wentBack}`: the system's Back, short of leaving the application |
 | `screenshot` | | `{format: "png", width, height, data}`: the frame, base64 (desktop and web) |
-| `frames` | `after?` | `{budget, frames: [{number, interval, build, layoutPaint, render, gpu, why}]}`, in milliseconds; recording starts with the first call, and the last 600 frames are kept |
+| `frames` | `after?` | `{budget, frames: [{number, interval, build, layoutPaint, render, acquire, draw, gpu, why, rebuilds}]}`, in milliseconds (`rebuilds`: components built for the frame); recording starts with the first call, and the last 600 frames are kept |
+| `rebuilds` | `limit?` (20) | `{components: [{id, rebuilds}]}`: the components built most since the application started |
 | `state` | | the switches below, and `size` |
 | `set` | any of the switches | the switches, after |
 
@@ -130,14 +134,28 @@ A `node`, as `tree` lists it:
 }
 ```
 
-`parent` is the index, in `nodes`, of the widget it sits in. `key`, `text` and `semantics` are
-there only when the widget has them. A `summary` is `{id, name, rect, center, text, label}`.
+`parent` is the index, in `nodes`, of the widget it sits in. `key`, `text`, `semantics` and
+`rebuilds` (how many times a component was built) are there only when the widget has them. A
+`summary` is `{id, name, rect, center, text, label}`.
+
+`constraints`, in `node`, is the room the widget was offered, as the flexbox layout offers it:
+`availableWidth` and `availableHeight`, its parent's content box (the parent's box less its
+padding), `null` along an axis the parent scrolls; and `minWidth`, `maxWidth`, `minHeight`,
+`maxHeight`, the widget's own size, minimum and maximum resolved against that room (`null` for
+unbounded).
+
+`frames`, `state` and `rebuilds` are answered from what the last frame left, without asking
+the application for a frame: polling them does not keep an idle application drawing. (`state`
+is answered that way once the application has been asked anything else; before that, it waits
+for a frame like the rest.)
 
 The switches of `state` and `set`: `animationSpeed` (a number, 1 is normal), `debugPaint`,
 `inspector` and `performanceOverlay` (booleans), `brightness` (`"light"`, `"dark"`, or `null`
 for the platform's), `platform` (`"android"`, `"ios"`, `"windows"`, `"macos"`, `"linux"`,
-`"fuchsia"`, or `null`), `textScale` (a number, or `null`), `selectMode` (a boolean) and
-`selected` (an id, read only: use `select`).
+`"fuchsia"`, or `null`), `textScale` (a number, or `null`), `selectMode` and
+`repaintRainbow` (booleans) and `selected` (an id, read only: use `select`).
+
+Version 1 only grows: a field or a method is added, never changed or taken away.
 
 ### An example
 

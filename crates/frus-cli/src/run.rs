@@ -620,9 +620,28 @@ fn start_desktop(
         command.env("FRUS_RESTORE_STATES", states);
     }
     if !report::is_machine() {
-        return command
+        if !options.mode.eq(&Mode::Debug) {
+            return command
+                .spawn()
+                .map_err(|e| format!("could not start {}: {e}", copy.display()));
+        }
+        // A debug build's log is read here, to show it in DevTools as well as in the terminal
+        // (milestone 788), with its colours kept when the terminal shows them.
+        if std::env::var_os("RUST_LOG_STYLE").is_none() && keys::colours() {
+            command.env("RUST_LOG_STYLE", "always");
+        }
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("could not start {}: {e}", copy.display()));
+            .map_err(|e| format!("could not start {}: {e}", copy.display()))?;
+        if let Some(out) = child.stdout.take() {
+            std::thread::spawn(move || pass_on(out, false));
+        }
+        if let Some(err) = child.stderr.take() {
+            std::thread::spawn(move || pass_on(err, true));
+        }
+        return Ok(child);
     }
     // For an editor, the application's output is carried in `app.log` events: it must not
     // reach standard output, which holds JSON only.
@@ -646,6 +665,21 @@ fn start_desktop(
         });
     }
     Ok(child)
+}
+
+/// The application's output, line by line, to this run's own (`error`: its standard error),
+/// and to DevTools' log.
+fn pass_on(from: impl std::io::Read, error: bool) {
+    use std::io::Write;
+    for line in BufReader::new(from).lines().map_while(Result::ok) {
+        let plain = devtools::without_colours(&line);
+        devtools::remember(&plain, error && is_error_line(&plain));
+        if error {
+            let _ = writeln!(std::io::stderr().lock(), "{line}");
+        } else {
+            let _ = writeln!(std::io::stdout().lock(), "{line}");
+        }
+    }
 }
 
 /// Whether a line of a desktop program's standard error is an error. The log goes there whole,
