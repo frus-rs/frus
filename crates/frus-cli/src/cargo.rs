@@ -102,15 +102,9 @@ pub(crate) fn build_web(project: &Project, mode: Mode) -> Result<PathBuf, String
             project.package
         ));
     }
-    // What the web build needs, installed if it is missing: the target, and the wasm-bindgen
-    // program at exactly the version the lockfile holds.
+    // What the web build needs, installed if it is missing: the target, and (below) the
+    // wasm-bindgen program at exactly the version the lockfile holds.
     setup::rust_target("wasm32-unknown-unknown")?;
-    let wasm_bindgen = setup::cargo_tool(
-        "wasm-bindgen",
-        "--version",
-        "wasm-bindgen-cli",
-        project.locked_wasm_bindgen().as_deref(),
-    )?;
 
     // Release builds use the size-first profile `frus create` declares, when there is one.
     let profile = match mode {
@@ -138,6 +132,15 @@ pub(crate) fn build_web(project: &Project, mode: Mode) -> Result<PathBuf, String
         .join("wasm32-unknown-unknown")
         .join(profile_dir)
         .join(format!("{}.wasm", project.lib));
+    // Asked for once the build is done: a new application has no lockfile before its first
+    // build, and the program on the PATH, of whatever version, was taken for it — a module of
+    // 0.2.130 handed to a wasm-bindgen 0.2.129, which refuses it (milestone 791).
+    let wasm_bindgen = setup::cargo_tool(
+        "wasm-bindgen",
+        "--version",
+        "wasm-bindgen-cli",
+        project.locked_wasm_bindgen().as_deref(),
+    )?;
     run(Command::new(wasm_bindgen)
         .args(["--target", "web", "--no-typescript", "--out-dir"])
         .arg(web.join("pkg"))

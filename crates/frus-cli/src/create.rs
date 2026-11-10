@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::platforms::{self, AppPlatform, Deeplink};
 use crate::template::{TemplateFile, FILES};
 
 /// The organisation an application gets when nobody names one, as the template's own default.
@@ -35,7 +36,38 @@ pub struct Options {
     pub frus_path: Option<PathBuf>,
     /// Whether to make the directory a git repository.
     pub git: bool,
+    /// `--platforms`: what the application is made for. None: every platform for a new
+    /// application; for one that exists, the ones it has. In one that exists, those named are
+    /// added to its own.
+    pub platforms: Option<Vec<AppPlatform>>,
+    /// `--deeplink`: the links that open the application.
+    pub deeplink: Option<Deeplink>,
+    /// `--description`: a line saying what it is, for the manifest and the web page.
+    pub description: Option<String>,
 }
+
+/// What an application is made of beyond its names (milestone 791): its platforms, the links
+/// that open it, its description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shape {
+    pub platforms: Vec<AppPlatform>,
+    pub deeplink: Option<Deeplink>,
+    pub description: Option<String>,
+}
+
+impl Default for Shape {
+    /// What `frus create` makes when asked nothing: every platform, no links.
+    fn default() -> Self {
+        Shape {
+            platforms: AppPlatform::ALL.to_vec(),
+            deeplink: None,
+            description: None,
+        }
+    }
+}
+
+/// The description the template's manifest and page are written with.
+const TEMPLATE_DESCRIPTION: &str = "A frus application";
 
 /// The three values the template is written with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,11 +309,114 @@ pub struct RenderedFile {
 /// The application's files, in memory. With `frus_path`, a checkout of frus, the manifest
 /// depends on that checkout's `frus` crate rather than on the published one.
 pub fn render(project: &Project, frus_path: Option<&Path>) -> Result<Vec<RenderedFile>, String> {
-    FILES
+    render_shaped(project, frus_path, &Shape::default())
+}
+
+/// The application's files for `shape`: only the files of its platforms, the manifest with only
+/// their regions, the README with only their sections, the workflows with only their jobs.
+pub fn render_shaped(
+    project: &Project,
+    frus_path: Option<&Path>,
+    shape: &Shape,
+) -> Result<Vec<RenderedFile>, String> {
+    let wanted = |path: &str| {
+        let has = |platform| shape.platforms.contains(&platform);
+        if path.starts_with("res/") {
+            has(AppPlatform::Android)
+        } else if path.starts_with("web/") {
+            has(AppPlatform::Web)
+        } else if path.starts_with("src/bin/") {
+            shape.platforms.iter().any(|p| p.is_desktop())
+        } else {
+            true
+        }
+    };
+    let mut files = FILES
         .iter()
-        .filter(|file| file.path != TEMPLATE_CONFIG)
+        .filter(|file| file.path != TEMPLATE_CONFIG && wanted(file.path))
         .map(|file| render_file(project, file, frus_path))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if *shape == Shape::default() {
+        return Ok(files);
+    }
+    for file in &mut files {
+        let Ok(text) = std::str::from_utf8(&file.bytes) else {
+            continue;
+        };
+        let shaped = match file.path.as_str() {
+            "Cargo.toml" => shape_manifest(text, shape),
+            "README.md" => platforms::trim_readme(text, &shape.platforms),
+            "web/index.html" => match &shape.description {
+                Some(description) => text.replacen(
+                    &format!("content=\"{TEMPLATE_DESCRIPTION}\""),
+                    &format!("content=\"{}\"", html_escape(description)),
+                    1,
+                ),
+                None => continue,
+            },
+            path if path.starts_with(".github/workflows/") => {
+                platforms::trim_workflow(text, &shape.platforms)
+            }
+            _ => continue,
+        };
+        file.bytes = shaped.into_bytes();
+    }
+    Ok(files)
+}
+
+/// The template's manifest for `shape`: the regions of the platforms left out cut, the list of
+/// platforms, the description and the links written.
+fn shape_manifest(manifest: &str, shape: &Shape) -> String {
+    let mut text = manifest.to_string();
+    for platform in AppPlatform::ALL {
+        if let Some(heading) = platforms::manifest_heading(platform) {
+            if !shape.platforms.contains(&platform) {
+                text = platforms::cut_region(&text, heading, "# --- ").0;
+            }
+        }
+    }
+    text = text.replacen(
+        &format!("platforms = {}", platforms::toml_list(&AppPlatform::ALL)),
+        &format!("platforms = {}", platforms::toml_list(&shape.platforms)),
+        1,
+    );
+    if let Some(description) = &shape.description {
+        text = text.replacen(
+            &format!("description = \"{TEMPLATE_DESCRIPTION}\""),
+            &format!("description = {}", toml_string(description)),
+            1,
+        );
+    }
+    if let Some(link) = &shape.deeplink {
+        text = platforms::set_key(
+            &text,
+            "package.metadata.frus",
+            "deeplink",
+            &toml_string(&link.text()),
+        )
+        .unwrap_or(text);
+        if shape.platforms.contains(&AppPlatform::Android) {
+            if let Some(at) = text.find("# --- Platforms") {
+                text.insert_str(
+                    at,
+                    &format!(
+                        "{}
+",
+                        link.android_filter()
+                    ),
+                );
+            }
+        }
+    }
+    text
+}
+
+/// Text for an HTML attribute.
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn render_file(
@@ -386,6 +521,12 @@ pub struct Created {
     /// Whether the directory held an application already (a `Cargo.toml` with a `[package]`).
     pub existing: bool,
     pub git: Git,
+    /// The platforms the application is made for, now.
+    pub platforms: Vec<AppPlatform>,
+    /// The links that open it, when `--deeplink` named them.
+    pub deeplink: Option<Deeplink>,
+    /// In an application that exists: what was added to its `Cargo.toml`, said for a person.
+    pub manifest_changes: Vec<String>,
 }
 
 /// The template's sample application: the code a new application starts with. An application
@@ -438,7 +579,47 @@ pub fn create(options: &Options) -> Result<Created, String> {
         Some(path) => Some(check_checkout(path)?),
         None => None,
     };
-    let rendered = render(&project, frus_path.as_deref())?;
+    // The platforms: those asked for in a new application; in one that exists, its own and
+    // those asked for. A manifest without a list is made for all of them.
+    let listed = existing
+        .as_ref()
+        .and_then(|app| app.platforms.as_deref())
+        .map(platforms::from_words);
+    let had = existing
+        .as_ref()
+        .map(|_| listed.clone().unwrap_or_else(|| AppPlatform::ALL.to_vec()));
+    let mut chosen: Vec<AppPlatform> = match (&had, &options.platforms) {
+        (Some(had), Some(asked)) => had.iter().chain(asked).copied().collect(),
+        (Some(had), None) => had.clone(),
+        (None, Some(asked)) => asked.clone(),
+        (None, None) => AppPlatform::ALL.to_vec(),
+    };
+    chosen.sort();
+    chosen.dedup();
+    let shape = Shape {
+        platforms: chosen,
+        deeplink: options.deeplink.clone(),
+        description: options.description.clone(),
+    };
+    let rendered = render_shaped(&project, frus_path.as_deref(), &shape)?;
+    // What the application's manifest gains: the regions of the platforms added, the list, the
+    // links. Worked out before anything is written, like the rest.
+    let manifest_update = match (&existing, &had) {
+        (Some(app), Some(had)) => {
+            let path = app.root.join("Cargo.toml");
+            let text = fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let template = render(&project, None)?
+                .into_iter()
+                .find(|file| file.path == "Cargo.toml")
+                .map(|file| String::from_utf8_lossy(&file.bytes).into_owned())
+                .unwrap_or_default();
+            let (updated, changes) =
+                update_manifest(&text, &template, had, listed.is_some(), &shape);
+            (updated != text).then_some((path, updated, changes))
+        }
+        _ => None,
+    };
     let wanted = wanted_files(&options.dir, rendered, existing.is_some());
     let (present, files): (Vec<_>, Vec<_>) = wanted
         .into_iter()
@@ -452,6 +633,12 @@ pub fn create(options: &Options) -> Result<Created, String> {
             let _ = fs::remove_dir_all(&options.dir);
         }
         return Err(error);
+    }
+    let mut manifest_changes = Vec::new();
+    if let Some((path, text, changes)) = manifest_update {
+        fs::write(&path, text)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        manifest_changes = changes;
     }
 
     // An application that exists keeps its version control as it is, or as it is not.
@@ -467,7 +654,86 @@ pub fn create(options: &Options) -> Result<Created, String> {
         kept: present.len(),
         existing: existing.is_some(),
         git,
+        platforms: shape.platforms,
+        deeplink: shape.deeplink,
+        manifest_changes,
     })
+}
+
+/// An application's manifest with what `shape` adds to it, and each addition said: the template's
+/// region of each platform it did not have (`had`), its list of platforms when it keeps one
+/// (`listed`), the links that open it, its description. Nothing that is there is changed, except
+/// the list, the `deeplink` key and the description that are asked for.
+fn update_manifest(
+    manifest: &str,
+    template: &str,
+    had: &[AppPlatform],
+    listed: bool,
+    shape: &Shape,
+) -> (String, Vec<String>) {
+    let mut text = manifest.to_string();
+    let mut changes = Vec::new();
+    let present: Vec<String> = platforms::table_headers(manifest);
+    for platform in shape.platforms.iter().filter(|p| !had.contains(p)) {
+        let Some(heading) = platforms::manifest_heading(*platform) else {
+            continue;
+        };
+        let Some(region) = platforms::cut_region(template, heading, "# --- ").1 else {
+            continue;
+        };
+        let headers = platforms::table_headers(&region);
+        if headers.iter().any(|header| present.contains(header)) {
+            changes.push(format!(
+                "Cargo.toml has some of {platform}'s tables already, so none was added: compare \
+                 it with a new application's (`frus create --platforms {platform} <dir>`)"
+            ));
+        } else {
+            text = platforms::append(&text, &region);
+            changes.push(format!("Cargo.toml: the {platform} section"));
+        }
+    }
+    if listed {
+        let list = platforms::toml_list(&shape.platforms);
+        if let Some(updated) =
+            platforms::set_key(&text, "package.metadata.frus", "platforms", &list)
+        {
+            if updated != text {
+                text = updated;
+                changes.push(format!("Cargo.toml: platforms = {list}"));
+            }
+        }
+    }
+    if let Some(link) = &shape.deeplink {
+        let value = toml_string(&link.text());
+        let updated = platforms::set_key(&text, "package.metadata.frus", "deeplink", &value)
+            .unwrap_or_else(|| {
+                platforms::append(
+                    &text,
+                    &format!("[package.metadata.frus]\ndeeplink = {value}\n"),
+                )
+            });
+        if updated != text {
+            text = updated;
+            changes.push(format!("Cargo.toml: deeplink = {value}"));
+        }
+        if shape.platforms.contains(&AppPlatform::Android) && !link.declared_in(&text) {
+            text = platforms::append(&text, &link.android_filter());
+            changes.push(format!(
+                "Cargo.toml: the Android intent filter for {}",
+                link.text()
+            ));
+        }
+    }
+    if let Some(description) = &shape.description {
+        let value = toml_string(description);
+        if let Some(updated) = platforms::set_key(&text, "package", "description", &value) {
+            if updated != text {
+                text = updated;
+                changes.push(format!("Cargo.toml: description = {value}"));
+            }
+        }
+    }
+    (text, changes)
 }
 
 /// The application already in `dir`, if there is one: a `Cargo.toml` with a `[package]`.
@@ -650,6 +916,9 @@ mod tests {
             org: DEFAULT_ORG.to_string(),
             frus_path: None,
             git: false,
+            platforms: None,
+            deeplink: None,
+            description: None,
         }
     }
 
@@ -1080,6 +1349,152 @@ mod tests {
         assert!(create(&options(path))
             .unwrap_err()
             .contains("not a directory"));
+    }
+
+    /// **`--platforms` writes only what those platforms need** (milestone 791): no `web/`, no
+    /// desktop program, no Android tables, the README and the workflows without them, and the
+    /// list in the manifest for `frus run` to read back.
+    #[test]
+    fn a_new_application_has_only_its_platforms() {
+        let temp = TempDir::new("platforms");
+        let dir = temp.0.join("phone_app");
+        let mut opts = options(dir.clone());
+        opts.platforms = Some(vec![AppPlatform::Android]);
+        let created = create(&opts).unwrap();
+        assert_eq!(created.platforms, [AppPlatform::Android]);
+        assert!(!dir.join("web").exists());
+        assert!(!dir.join("src/bin").exists());
+        assert!(dir.join("res/mipmap-hdpi/ic_launcher.png").is_file());
+        let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(!manifest.contains("wasm-bindgen"), "{manifest}");
+        assert!(!manifest.contains("[profile.web-release]"));
+        assert!(manifest.contains("[package.metadata.android]"));
+        assert!(manifest.contains("\nplatforms = [\"android\"]\n"));
+        assert!(
+            manifest.contains("[profile.release]"),
+            "the shared regions stay"
+        );
+        let app = crate::project::Project::from_manifest(&dir, &manifest).unwrap();
+        assert_eq!(app.app_platforms(), Some(vec![AppPlatform::Android]));
+        assert!(app.check_platform(AppPlatform::Web).is_err());
+        let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+        assert!(readme.contains("## Android") && !readme.contains("## Web"));
+        let ci = fs::read_to_string(dir.join(".github/workflows/ci.yml")).unwrap();
+        assert!(ci.contains("  android:") && !ci.contains("  web:"));
+        assert!(!ci.contains("windows-latest"), "{ci}");
+
+        let mut opts = options(temp.0.join("site"));
+        opts.platforms = Some(vec![AppPlatform::Web]);
+        create(&opts).unwrap();
+        let manifest = fs::read_to_string(temp.0.join("site/Cargo.toml")).unwrap();
+        assert!(
+            !platforms::table_headers(&manifest)
+                .iter()
+                .any(|header| header.contains("package.metadata.android")),
+            "{manifest}"
+        );
+        assert!(manifest.contains("[profile.web-release]"));
+        assert!(!temp.0.join("site/res").exists());
+    }
+
+    /// **`frus create --platforms web .` adds the web to an application**: its files, its region
+    /// of the manifest appended, the list — and nothing that was there changes.
+    #[test]
+    fn a_platform_is_added_to_an_application() {
+        let temp = TempDir::new("add-platform");
+        let dir = temp.0.join("shop");
+        let mut opts = options(dir.clone());
+        opts.platforms = Some(vec![AppPlatform::Android]);
+        create(&opts).unwrap();
+        let before = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "// mine").unwrap();
+
+        let mut opts = options(dir.clone());
+        opts.platforms = Some(vec![AppPlatform::Web]);
+        let added = create(&opts).unwrap();
+        assert!(added.existing);
+        assert_eq!(added.platforms, [AppPlatform::Android, AppPlatform::Web]);
+        assert_eq!(added.written, ["web/index.html"]);
+        assert_eq!(
+            added.manifest_changes,
+            [
+                "Cargo.toml: the web section",
+                "Cargo.toml: platforms = [\"android\", \"web\"]"
+            ]
+        );
+        let after = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        // Everything that was there is there, the list aside.
+        let unlisted = |text: &str| {
+            text.replace(
+                "platforms = [\"android\", \"web\"]",
+                "platforms = [\"android\"]",
+            )
+        };
+        assert!(unlisted(&after).starts_with(&before), "{after}");
+        assert!(after.contains("[profile.web-release]"));
+        assert!(after.contains("wasm-bindgen = \"0.2\""));
+        assert_eq!(
+            fs::read_to_string(dir.join("src/lib.rs")).unwrap(),
+            "// mine"
+        );
+        let app = crate::project::Project::from_manifest(&dir, &after).unwrap();
+        assert!(app.has_web_release);
+        assert!(app.check_platform(AppPlatform::Web).is_ok());
+
+        // Asked again: nothing to add.
+        let again = create(&opts).unwrap();
+        assert!(again.written.is_empty() && again.manifest_changes.is_empty());
+        assert_eq!(fs::read_to_string(dir.join("Cargo.toml")).unwrap(), after);
+
+        // `frus create .` restores only what the application's platforms need.
+        fs::remove_dir_all(dir.join("web")).unwrap();
+        let restored = create(&options(dir.clone())).unwrap();
+        assert_eq!(restored.written, ["web/index.html"]);
+        assert!(!dir.join("src/bin").exists(), "no desktop: no program");
+    }
+
+    /// **`--deeplink` declares the links that open the application**: the intent filter cargo-apk
+    /// writes into Android's manifest, and the manifest's own record for the other platforms.
+    #[test]
+    fn deeplinks_are_declared() {
+        let temp = TempDir::new("deeplink");
+        let dir = temp.0.join("tides");
+        let mut opts = options(dir.clone());
+        opts.deeplink = Some(Deeplink::Scheme("tides".into()));
+        opts.description = Some("Tides & \"currents\"".into());
+        let created = create(&opts).unwrap();
+        assert_eq!(created.deeplink, Some(Deeplink::Scheme("tides".into())));
+        let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(
+            manifest.contains("data = [{ scheme = \"tides\" }]"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("\ndeeplink = \"tides\"\n"));
+        assert!(manifest.contains("description = \"Tides & \\\"currents\\\"\""));
+        let page = fs::read_to_string(dir.join("web/index.html")).unwrap();
+        assert!(page.contains("content=\"Tides &amp; &quot;currents&quot;\""));
+        let app = crate::project::Project::from_manifest(&dir, &manifest).unwrap();
+        assert_eq!(app.deeplink.as_deref(), Some("tides"));
+        assert_eq!(app.platforms.as_ref().map(Vec::len), Some(5));
+
+        // To an application that has none: added, once.
+        let plain = temp.0.join("plain");
+        create(&options(plain.clone())).unwrap();
+        let mut opts = options(plain.clone());
+        opts.deeplink = Some(Deeplink::Https {
+            host: "example.com".into(),
+        });
+        let added = create(&opts).unwrap();
+        assert_eq!(
+            added.manifest_changes.len(),
+            2,
+            "{:?}",
+            added.manifest_changes
+        );
+        let manifest = fs::read_to_string(plain.join("Cargo.toml")).unwrap();
+        assert_eq!(manifest.matches("intent_filter").count(), 1);
+        assert!(manifest.contains("deeplink = \"https://example.com\""));
+        assert!(create(&opts).unwrap().manifest_changes.is_empty());
     }
 
     #[test]

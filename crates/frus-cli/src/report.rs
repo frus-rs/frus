@@ -37,6 +37,20 @@ fn is_stderr() -> bool {
     STDERR.load(Ordering::SeqCst)
 }
 
+/// Whether the run patches the code in place: said in `app.started`, for a run that drives
+/// several (milestone 791).
+static HOT: AtomicBool = AtomicBool::new(false);
+
+/// Records whether the run patches the code in place.
+pub(crate) fn set_hot(hot: bool) {
+    HOT.store(hot, Ordering::SeqCst);
+}
+
+/// Whether the run patches the code in place.
+pub(crate) fn is_hot() -> bool {
+    HOT.load(Ordering::SeqCst)
+}
+
 /// Switches to the daemon's JSON lines: no run, so no `appId`; the tool's messages are
 /// `daemon.logMessage` events, and the programs it runs write to standard error.
 pub(crate) fn daemon() {
@@ -104,6 +118,14 @@ pub(crate) fn event(name: &str, params: Value) {
         ("event", name.into()),
         ("params", Value::Object(members)),
     ]));
+}
+
+/// A line that is JSON already — another run's event, passed on — on standard output, whole.
+pub(crate) fn raw_line(text: &str) {
+    let _guard = STDOUT.lock();
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{text}");
+    let _ = out.flush();
 }
 
 /// A JSON line on standard output, whole.

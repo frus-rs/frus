@@ -34,8 +34,12 @@ use crate::serve;
 /// What `frus run` was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RunOptions {
-    /// `-d`: a device's id, name or platform. None: the desktop.
-    pub device: Option<String>,
+    /// `-d`, as often as it is given: a device's id, name or platform, or `all`. None: the
+    /// desktop. More than one, or `all`, is a run on each (see `sessions`).
+    pub devices: Vec<String>,
+    /// The command line without its devices and `--machine`: what each device's own run is
+    /// started with when there are several (see `sessions`).
+    pub forwarded: Vec<String>,
     pub mode: Mode,
     /// The port the web build is served on, when it is free.
     pub port: u16,
@@ -144,7 +148,8 @@ pub(crate) fn action(key: char) -> Option<Action> {
 }
 
 // No line continuation after the opening quote: it would eat this line's indentation too.
-const KEYS: &str = "  r  reload: build again, start where it was, with the states it keeps
+pub(crate) const KEYS: &str =
+    "  r  reload: build again, start where it was, with the states it keeps
   R  restart: build again, start where it was, every state afresh
   h  this list
   d  detach: frus run ends, the application goes on
@@ -166,7 +171,7 @@ const KEYS: &str = "  r  reload: build again, start where it was, with the state
 ";
 
 /// Clears the terminal, its scrollback too, and puts the cursor at the top.
-fn clear_screen() {
+pub(crate) fn clear_screen() {
     if !report::is_machine() {
         print!("\x1b[2J\x1b[3J\x1b[H");
         let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -201,6 +206,12 @@ fn report_screenshot(path: &Path, wait: Duration) {
 }
 
 pub(crate) fn run(options: &RunOptions) -> Result<ExitCode, String> {
+    // Several devices: a run each, this one sharing the terminal between them.
+    if crate::sessions::is_several(&options.devices) {
+        let result = crate::sessions::run_many(options);
+        keys::restore();
+        return result;
+    }
     // For an editor, from the very start: even a run that cannot begin ends with `app.stop`.
     if options.machine {
         report::machine(format!("frus-run-{}", std::process::id()));
@@ -219,7 +230,12 @@ fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     let project = Project::find(&here)?;
     let devices = devices::discover();
-    let device = devices::select(&devices, options.device.as_deref())?;
+    let wanted = options.devices.first().map(String::as_str);
+    let device = devices::select(&devices, wanted)?;
+    // An application made for some platforms only is not built for the others (milestone 791).
+    if let Some(platform) = crate::sessions::app_platform(&device, options.web) {
+        project.check_platform(platform)?;
+    }
     if options.machine {
         report::event(
             "app.start",
@@ -231,7 +247,7 @@ fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
             ]),
         );
     }
-    if options.device.is_none() && devices.iter().any(|d| d.platform != device.platform) {
+    if wanted.is_none() && devices.iter().any(|d| d.platform != device.platform) {
         report::say(&format!(
             "Running on {}. To run elsewhere: `frus run -d <device>` (`frus devices` lists them).",
             device.name
@@ -262,6 +278,7 @@ fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
         hot: Some(hot),
         ..options.clone()
     };
+    report::set_hot(hot);
     if options.web && !matches!(device.kind, Kind::Simulated { .. }) {
         return Err(format!(
             "--web shows a simulated device in a browser (`frus run -d iphone-15 --web`); \
@@ -373,7 +390,10 @@ fn host_name(options: &RunOptions) -> (String, &'static str) {
 /// The keys, from the moment the application is up.
 fn attach(what: &str) -> Receiver<char> {
     if report::is_machine() {
-        report::event("app.started", object([]));
+        report::event(
+            "app.started",
+            object([("hotReload", report::is_hot().into())]),
+        );
     } else {
         report::say(&format!("\n{what}. Keys:\n{KEYS}"));
     }
@@ -411,7 +431,7 @@ fn run_desktop(project: &Project, options: &RunOptions) -> Result<ExitCode, Stri
     let link = DevLink::open()?;
     let (device, platform) = host_name(options);
     serve_devtools(link.relay(), project, &device, platform, options.mode);
-    let runs = project.target_dir()?.join("frus-run");
+    let runs = crate::sessions::session_dir(project.target_dir()?.join("frus-run"));
     let mut generation = 0;
     let built = cargo::build_desktop(project, options.mode)?;
     let mut child = start_desktop(
@@ -620,7 +640,13 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
     let (device, platform) = host_name(options);
     serve_devtools(link.relay(), project, &device, platform, options.mode);
     // A build of its own: the program a patch replaces is linked with everything kept.
-    let target = project.target_dir()?.join("frus-hot").join("target");
+    let target = crate::hot::session_root(project)?.join("target");
+    // The engine's server, on a port of its own: beside a web run, or another run, its default
+    // one is taken.
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port().to_string())
+        .map_err(|e| format!("could not find a free port for the hot-reload engine: {e}"))?;
     let (lines_in, lines) = std::sync::mpsc::channel::<crate::hot::DxLine>();
     let start = |link: &DevLink| -> Result<Child, String> {
         crate::hot::clear_dependency_archives(&target);
@@ -638,6 +664,8 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
                 "false",
                 "--open",
                 "true",
+                "--port",
+                &port,
             ])
             .args(options.mode.eq(&Mode::Release).then_some("--release"))
             .current_dir(&shadow)
@@ -1111,6 +1139,11 @@ fn run_android_hot(
         package,
         &project.root.join("res"),
         &config_changes,
+        project
+            .deeplink
+            .as_deref()
+            .and_then(|link| crate::platforms::Deeplink::parse(link).ok())
+            .as_ref(),
     )?;
     let mirror = mirror_sources(project, &shadow)?;
     let link = DevLink::open()?;
@@ -1121,7 +1154,7 @@ fn run_android_hot(
         "android",
         options.mode,
     );
-    let target = project.target_dir()?.join("frus-hot").join("target");
+    let target = crate::hot::session_root(project)?.join("target");
     // The engine's server, which the application reaches through `adb reverse` on this port.
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))
         .and_then(|listener| listener.local_addr())
@@ -1583,7 +1616,7 @@ fn run_web_hot(
     let engine = crate::hot::engine()?;
     let shadow = crate::hot::shadow(project)?;
     let mirror = mirror_sources(project, &shadow)?;
-    let target = project.target_dir()?.join("frus-hot").join("target");
+    let target = crate::hot::session_root(project)?.join("target");
     // The engine's own server: only its socket is used, by this run.
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))
         .and_then(|listener| listener.local_addr())

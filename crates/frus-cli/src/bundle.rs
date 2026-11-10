@@ -35,6 +35,24 @@ pub(crate) fn info_plist(project: &Project, executable: &str, declared: &[Declar
         ("NSPrincipalClass", Entry::Text("NSApplication")),
         ("NSHighResolutionCapable", Entry::True),
     ];
+    // The application's own link scheme (milestone 791): macOS opens `myapp://…` with it.
+    let scheme = project
+        .deeplink
+        .as_deref()
+        .and_then(|link| crate::platforms::Deeplink::parse(link).ok())
+        .and_then(|link| link.scheme().map(str::to_string));
+    let url_types = scheme.map(|scheme| {
+        format!(
+            "<array>\n\t\t<dict>\n\t\t\t<key>CFBundleURLName</key>\n\t\t\t<string>{}</string>\n\
+             \t\t\t<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\t\t\t\t<string>{}</string>\n\
+             \t\t\t</array>\n\t\t</dict>\n\t</array>",
+            xml_escape(&identifier),
+            xml_escape(&scheme)
+        )
+    });
+    if let Some(url_types) = &url_types {
+        entries.push(("CFBundleURLTypes", Entry::Raw(url_types)));
+    }
     for (key, reason) in usage_strings(declared) {
         entries.push((key, Entry::Text(reason)));
         // macOS before 10.14 read the location's reason from its older key; the shell accepts
@@ -56,6 +74,7 @@ pub(crate) fn info_plist(project: &Project, executable: &str, declared: &[Declar
                 plist.push_str(&format!("\t<string>{}</string>\n", xml_escape(text)))
             }
             Entry::True => plist.push_str("\t<true/>\n"),
+            Entry::Raw(xml) => plist.push_str(&format!("\t{xml}\n")),
         }
     }
     plist.push_str("</dict>\n</plist>\n");
@@ -65,6 +84,8 @@ pub(crate) fn info_plist(project: &Project, executable: &str, declared: &[Declar
 enum Entry<'a> {
     Text(&'a str),
     True,
+    /// A value written as XML already: an array.
+    Raw(&'a str),
 }
 
 /// Makes `dir/name.app` around a copy of `program`, replacing one already there, and returns
@@ -183,6 +204,31 @@ mod tests {
         let none = info_plist(&project, "tides", &parse(&[]).unwrap());
         assert!(!none.contains("UsageDescription"));
         assert!(none.contains("CFBundleExecutable"));
+        assert!(!none.contains("CFBundleURLTypes"));
+
+        // The application's own links (milestone 791): macOS hands it `tides://…`.
+        let mut linked = project.clone();
+        linked.deeplink = Some("tides".into());
+        let plist = info_plist(&linked, "tides", &[]);
+        assert!(
+            plist.contains(
+                "<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tides</string>"
+            ),
+            "{plist}"
+        );
+        assert_eq!(
+            plist.matches("<dict>").count(),
+            plist.matches("</dict>").count()
+        );
+        assert_eq!(
+            plist.matches("<array>").count(),
+            plist.matches("</array>").count()
+        );
+        // A host's https links are not a scheme of the application's.
+        linked.deeplink = Some("https://tides.example".into());
+        assert!(!info_plist(&linked, "tides", &[]).contains("CFBundleURLTypes"));
     }
 
     /// **The bundle is laid out as macOS reads it**, made again over an old one, on any system.
