@@ -19,18 +19,30 @@ const MINIMUM_MACOS: &str = "10.15";
 
 /// The bundle's `Info.plist`, for a program called `executable`.
 pub(crate) fn info_plist(project: &Project, executable: &str, declared: &[Declared]) -> String {
-    let version = project.version.as_deref().unwrap_or("0.1.0");
+    // The version people see and the build's number, `--build-name` and `--build-number`
+    // when given (milestone 790); the name, a flavor's when it has one.
+    let version = project.version_name();
+    let build = project
+        .build_number()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| version.clone());
+    let name = project
+        .variant
+        .flavor
+        .as_ref()
+        .and_then(|f| f.app_name.clone())
+        .unwrap_or_else(|| project.package.clone());
     let identifier = project.bundle_identifier();
     let mut entries: Vec<(&str, Entry)> = vec![
         ("CFBundleDevelopmentRegion", Entry::Text("en")),
         ("CFBundleExecutable", Entry::Text(executable)),
         ("CFBundleIdentifier", Entry::Text(&identifier)),
         ("CFBundleInfoDictionaryVersion", Entry::Text("6.0")),
-        ("CFBundleName", Entry::Text(&project.package)),
-        ("CFBundleDisplayName", Entry::Text(&project.package)),
+        ("CFBundleName", Entry::Text(&name)),
+        ("CFBundleDisplayName", Entry::Text(&name)),
         ("CFBundlePackageType", Entry::Text("APPL")),
-        ("CFBundleShortVersionString", Entry::Text(version)),
-        ("CFBundleVersion", Entry::Text(version)),
+        ("CFBundleShortVersionString", Entry::Text(&version)),
+        ("CFBundleVersion", Entry::Text(&build)),
         ("LSMinimumSystemVersion", Entry::Text(MINIMUM_MACOS)),
         ("NSPrincipalClass", Entry::Text("NSApplication")),
         ("NSHighResolutionCapable", Entry::True),
@@ -162,6 +174,63 @@ mod tests {
             location = 'Shows the tide where you are'\n\
             notifications = true\n";
         Project::from_manifest(Path::new("."), manifest).unwrap()
+    }
+
+    /// **A flavor and a version reach the plist** (milestone 790): the flavor's name is the
+    /// bundle's, `--build-name` its short version, `--build-number` its build, the id suffix
+    /// its identifier's.
+    #[test]
+    fn the_info_plist_carries_the_variant() {
+        let manifest = "[package]
+name = \"tides\"
+version = \"1.2.0\"
+
+            [package.metadata.android]
+package = \"com.acme.tides_app\"
+
+            [package.metadata.frus.flavors.dev]
+app_name = \"Tides Dev\"
+            application_id_suffix = \".dev\"
+";
+        let mut project = Project::from_manifest(Path::new("."), manifest).unwrap();
+        crate::variant::Variant {
+            flavor: Some("dev".into()),
+            build_name: Some("2.5.0".into()),
+            build_number: Some(77),
+            ..crate::variant::Variant::default()
+        }
+        .apply(crate::cargo::Mode::Release, &mut project, Path::new("."))
+        .unwrap();
+        let plist = info_plist(&project, "tides", &[]);
+        for entry in [
+            "	<key>CFBundleName</key>
+	<string>Tides Dev</string>
+",
+            "	<key>CFBundleDisplayName</key>
+	<string>Tides Dev</string>
+",
+            "	<key>CFBundleShortVersionString</key>
+	<string>2.5.0</string>
+",
+            "	<key>CFBundleVersion</key>
+	<string>77</string>
+",
+        ] {
+            assert!(
+                plist.contains(entry),
+                "{entry} missing from
+{plist}"
+            );
+        }
+        assert!(
+            plist.contains(&format!(
+                "<key>CFBundleIdentifier</key>
+	<string>{}</string>",
+                project.bundle_identifier()
+            )),
+            "{plist}"
+        );
+        assert!(project.bundle_identifier().ends_with(".dev"), "{plist}");
     }
 
     /// **The usage strings are in the plist, escaped**: a reason with `<`, `&` or quotes must

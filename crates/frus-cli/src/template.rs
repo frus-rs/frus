@@ -29,6 +29,7 @@ pub static FILES: &[TemplateFile] = files!["template":
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     ".gitignore",
+    ".mcp.json",
     "Cargo.toml.liquid",
     "README.md",
     "cargo-generate.toml",

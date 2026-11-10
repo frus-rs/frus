@@ -408,7 +408,12 @@ fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> std
         body.len()
     )?;
     stream.write_all(body)?;
-    stream.flush()
+    stream.flush()?;
+    // End the answer with a FIN before the socket is dropped: closing a socket that still holds
+    // unread bytes resets the connection on Windows, and a client reading to the end then gets
+    // "connection reset" instead of the answer it was sent.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    Ok(())
 }
 
 /// The file a request path names in `site`: under a mount's folder when it starts with the

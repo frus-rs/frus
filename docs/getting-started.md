@@ -601,6 +601,10 @@ Those are the numbers for a counter app. The whole widget gallery — every scre
 `frus-demo` — is a 4.9 MB APK, because almost all of it is the framework and the
 framework is the same size either way.
 
+Profile builds (`--profile`), flavors, values given at build time, the version, App Bundles,
+one APK per processor and installers are in [Build modes, flavors and
+releases](guide/build-variants.md).
+
 The generated project already carries the `[profile.release]` that gets you there:
 link-time optimisation, one codegen unit, no unwinding tables, and the symbols
 stripped. Keep it.

@@ -56,6 +56,8 @@ pub(crate) struct RunOptions {
     pub simulate: Option<String>,
     /// `--web`: a simulated device in a browser instead of a desktop window (milestone 724).
     pub web: bool,
+    /// `--flavor`, `--define`, `--build-name`, `--build-number` (milestone 790).
+    pub variant: crate::variant::Variant,
 }
 
 impl RunOptions {
@@ -75,6 +77,12 @@ fn hot_wanted(
     device: &str,
 ) -> Result<bool, String> {
     match asked {
+        // A profile build measures the application as it ships; patching it would not.
+        Some(true) if mode == Mode::Profile => Err(
+            "--hot and --profile: a profile build runs as it ships, and is restarted to reload \
+             (`r`)"
+                .into(),
+        ),
         Some(true) if !hot_here => Err(format!(
             "--hot patches the code of a running application on the desktop, the web and Android \
              only, for now; on {device} use `r`, which reloads with the state kept"
@@ -238,7 +246,11 @@ pub(crate) fn run(options: &RunOptions) -> Result<ExitCode, String> {
 
 fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
-    let project = Project::find(&here)?;
+    let mut project = Project::find(&here)?;
+    // The flavor, the defines and the version, given to every build this run makes.
+    options.variant.apply(options.mode, &mut project, &here)?;
+    crate::variant::export(&project);
+    let project = project;
     let devices = devices::discover();
     let wanted = options.devices.first().map(String::as_str);
     let device = devices::select(&devices, wanted)?;
@@ -273,6 +285,23 @@ fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
             | Kind::Simulated { .. }
     );
     let mut hot = hot_wanted(options.hot, options.mode, hot_here, &device.name)?;
+    // The hot-reload engine makes its own Android package, without the flavor's id, name and
+    // resources: such a flavor restarts to reload instead.
+    let android = matches!(device.kind, Kind::Android { .. } | Kind::Emulator { .. });
+    if hot && android && project.android_overrides() {
+        if options.hot == Some(true) {
+            return Err(
+                "--hot on Android builds the engine's own package, which cannot carry the \
+                 flavor's id, name, resources or version: run without --hot"
+                    .into(),
+            );
+        }
+        report::say(
+            "This flavor changes the Android package (its id, name, resources or version), \
+             which hot reload's own package cannot carry: `r` reloads instead, every state kept.",
+        );
+        hot = false;
+    }
     // By default, a machine the engine cannot be installed on still runs: with restarts, said
     // once. Asked for with `--hot`, its absence is an error, as before.
     if hot && options.hot.is_none() {
@@ -301,9 +330,10 @@ fn run_session(options: &RunOptions) -> Result<ExitCode, String> {
         Kind::Host => run_desktop(&project, options),
         // A simulation is a debug build's: a released application never stands in for another
         // device, and the shell ignores `FRUS_DEVICE` there.
-        Kind::Simulated { .. } if options.mode == Mode::Release => Err(format!(
-            "{} is simulated by a debug build: run it without --release",
-            device.name
+        Kind::Simulated { .. } if options.mode != Mode::Debug => Err(format!(
+            "{} is simulated by a debug build: run it without --{}",
+            device.name,
+            options.mode.name()
         )),
         Kind::Simulated { profile } => {
             let options = RunOptions {
@@ -375,6 +405,10 @@ fn serve_devtools(relay: Relay, project: &Project, device: &str, platform: &str,
                 platform: platform.to_string(),
             },
         );
+        // Noted where a client that did not start this run can find it (`frus mcp`).
+        if let Ok(target) = project.target_dir() {
+            devtools::record(&target, &project.root);
+        }
     }
 }
 
@@ -665,7 +699,7 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
                 "--bin",
                 &project.lib,
                 "--features",
-                "frus/hot-reload",
+                &hot_features(project),
                 "--interactive",
                 "false",
                 "--open",
@@ -894,7 +928,7 @@ fn locate_errors(project: &Project, shadow: &Path, target: &Path) {
             "--bin",
             &project.lib,
             "--features",
-            "frus/hot-reload",
+            &hot_features(project),
         ])
         .current_dir(shadow)
         .env("CARGO_TARGET_DIR", target)
@@ -1068,6 +1102,13 @@ fn run_android(
     Ok(end)
 }
 
+/// The features a hot-reload build turns on: the engine's, and the flavor's.
+fn hot_features(project: &Project) -> String {
+    let mut features = vec!["frus/hot-reload".to_string()];
+    features.extend(project.variant.features.iter().cloned());
+    features.join(",")
+}
+
 /// The Rust target for an Android ABI (`getprop ro.product.cpu.abi`).
 pub(crate) fn android_rust_target(abi: &str) -> Option<String> {
     let target = match abi {
@@ -1198,7 +1239,7 @@ fn run_android_hot(
                 "--bin",
                 &project.lib,
                 "--features",
-                "frus/hot-reload",
+                &hot_features(project),
                 "--interactive",
                 "false",
                 "--open",
@@ -1666,7 +1707,7 @@ fn run_web_hot(
                 "--bin",
                 &project.lib,
                 "--features",
-                "frus/hot-reload",
+                &hot_features(project),
                 "--interactive",
                 "false",
                 "--open",
@@ -1871,6 +1912,10 @@ mod tests {
         assert_eq!(hot(Some(false), Mode::Debug, false), Ok(false));
         // `--hot` patches a release build too, and is an error where it cannot.
         assert_eq!(hot(Some(true), Mode::Release, true), Ok(true));
+        assert!(hot(Some(true), Mode::Profile, true)
+            .unwrap_err()
+            .contains("--profile"));
+        assert_eq!(hot(None, Mode::Profile, true), Ok(false));
         assert!(hot(Some(true), Mode::Debug, false)
             .unwrap_err()
             .contains("on the device use `r`"));

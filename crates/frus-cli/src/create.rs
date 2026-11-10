@@ -1229,6 +1229,13 @@ mod tests {
         // GitHub's own `${{ … }}` survives.
         assert!(file(&files, ".github/workflows/release.yml")
             .contains("${{ needs.meta.outputs.name }}"));
+        // An agent's client finds `frus mcp` in the application's `.mcp.json` (milestone 789).
+        let mcp = crate::json::parse(file(&files, ".mcp.json")).unwrap();
+        let server = mcp.get("mcpServers").and_then(|s| s.get("frus")).unwrap();
+        assert_eq!(
+            server.get("command").and_then(crate::json::Value::as_str),
+            Some("frus")
+        );
     }
 
     #[test]

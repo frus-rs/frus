@@ -684,7 +684,7 @@ pub(crate) fn place_dxc(dir: &Path) {
 
 /// `url` to `file`, with curl's progress bar — curl ships with Windows 10 and later, macOS and
 /// every Linux.
-fn download(url: &str, file: &Path) -> Result<(), String> {
+pub(crate) fn download(url: &str, file: &Path) -> Result<(), String> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -698,7 +698,7 @@ fn download(url: &str, file: &Path) -> Result<(), String> {
 }
 
 /// Unpacks a `.zip` or `.tar.gz` into `dir`, with the system's own tool.
-fn extract(archive: &Path, dir: &Path) -> Result<(), String> {
+pub(crate) fn extract(archive: &Path, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let zip = archive.extension().is_some_and(|e| e == "zip");
     let mut command = if cfg!(windows) {

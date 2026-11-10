@@ -14,6 +14,7 @@
 //! adds no build system of its own: everything it does can be done by hand.
 
 mod analyze;
+mod android_pack;
 mod app_links;
 mod build;
 mod bundle;
@@ -28,10 +29,13 @@ mod devtools;
 mod doctor;
 mod emulators;
 mod hot;
+mod installer;
 mod json;
 mod keys;
+mod mcp;
 mod permissions;
 mod platforms;
+mod png;
 mod project;
 mod report;
 mod run;
@@ -42,6 +46,8 @@ mod size;
 mod socket;
 mod template;
 mod testing;
+mod variant;
+mod windows_package;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -56,7 +62,8 @@ Usage:
   frus create <directory> [options]   start a new application
   frus devices                        list what the application can run on
   frus run [options] [-- <args>]      build it, start it on a device, show its log
-  frus build <apk|web|desktop>        build what you ship, in release
+  frus build <target> [options]       build what you ship: apk, appbundle, web, desktop,
+                                      installer; in release
   frus doctor [-v] [--fix]            what this machine has for frus, and what it lacks
   frus emulators [--launch <id>|--create]  the emulators: list, start, make
   frus clean                          delete the application's builds
@@ -64,6 +71,7 @@ Usage:
   frus analyze [--fix]                clippy and rustfmt, everything to fix listed together
   frus size <target|file>             what the shipped binary is made of, crate by crate
   frus daemon                         JSON lines for an editor: devices, as they come and go
+  frus mcp                            an MCP server: AI agents run, inspect and drive the application
   frus help [<command>]               print this, or a command's options
   frus --version                      print the version
 ";
@@ -85,6 +93,17 @@ Options:
                            platform, every log here with its device in front, and
                            every key (r, R, q…) for all of them
       --release            a release build (default: debug)
+      --profile            optimised as a release is, the frames timed and the symbols
+                           kept: to measure performance; no hot reload
+      --flavor <name>      a flavor the application declares in its Cargo.toml
+                           ([package.metadata.frus.flavors.<name>]): its name, id,
+                           resources, features and defines; `frus::flavor()` in code
+      --define <KEY=VALUE> a value for the code, read by `frus::define!`; repeatable
+      --define-from-file <file>
+                           every KEY=VALUE of a .env file, or of a JSON object
+      --build-name <x.y.z> the version people see (default: Cargo.toml's)
+      --build-number <n>   the number stores order releases by: Android's version code
+                           (default: the version's +n, or one derived from it)
       --port <port>        the port the web build is served on (default: 8080)
       --no-hot             restart to reload (`r`) instead of patching the running
                            application; hot reload is the default for a debug build
@@ -104,8 +123,23 @@ Examples:
   frus run -d edge --release
   frus run -d iphone-15
   frus run -d iphone-15 --web
+  frus run --flavor dev --define API_URL=http://localhost:3000
+  frus run -d android --profile
   frus run -d all
   frus run -d windows -d android -d edge
+";
+
+const MCP_USAGE: &str = "frus mcp — a Model Context Protocol server for AI coding agents
+
+Usage:
+  frus mcp
+
+An agent's client starts it and talks to it on standard input and output. Its tools
+start the application (`frus run`) or attach to one that runs, read its widget tree
+and log, tap, scroll, type, take screenshots, hot reload after an edit, run the tests.
+Add it to a project with a `.mcp.json` (`frus create` writes one):
+
+  {\"mcpServers\": {\"frus\": {\"command\": \"frus\", \"args\": [\"mcp\"]}}}
 ";
 
 const EMULATORS_USAGE: &str = "\
@@ -140,20 +174,44 @@ const BUILD_USAGE: &str = "\
 frus build — build what you ship, for one platform
 
 Usage:
-  frus build <target> [--debug]
+  frus build <target> [options]
 
 Targets:
   apk        the Android package (cargo-apk; a release needs a signing key)
+  appbundle  the Android App Bundle (.aab) a store takes, signed with the release key
   web        the site: web/, with the application compiled into web/pkg/
   desktop    the program for this computer (also: windows, linux, macos)
+  installer  the program in this system's installer: a setup program (Windows),
+             a .deb (Linux), a disk image (macOS); others with --format
 
 Options:
-      --debug             a debug build instead of release
-      --analyze-size      what the release binary is made of, crate by crate, and the
-                          fonts and assets inside it: a table here, the whole as JSON
-                          (see `frus help size`)
-      --compare <json>    with --analyze-size: what changed since that analysis
-  -h, --help              print this
+      --release            a release build (the default)
+      --profile            optimised, the frames timed and the symbols kept
+      --debug              a debug build
+      --split-per-abi      with apk: one APK per processor, each smaller
+      --format <kind>      with installer: nsis or msix (Windows), deb, rpm or
+                           appimage (Linux), dmg (macOS)
+      --flavor <name>      a flavor the application declares in its Cargo.toml
+                           ([package.metadata.frus.flavors.<name>]): its name, id,
+                           resources, features and defines; `frus::flavor()` in code
+      --define <KEY=VALUE> a value for the code, read by `frus::define!`; repeatable
+      --define-from-file <file>
+                           every KEY=VALUE of a .env file, or of a JSON object
+      --build-name <x.y.z> the version people see (default: Cargo.toml's)
+      --build-number <n>   the number stores order releases by: Android's version code
+                           (default: the version's +n, or one derived from it)
+      --analyze-size       what the release binary is made of, crate by crate, and the
+                           fonts and assets inside it: a table here, the whole as JSON
+                           (see `frus help size`)
+      --compare <json>     with --analyze-size: what changed since that analysis
+  -h, --help               print this
+
+Examples:
+  frus build apk --split-per-abi
+  frus build appbundle --flavor prod --build-name 1.4.0 --build-number 23
+  frus build installer
+  frus build installer --format msix
+  frus build apk --analyze-size
 ";
 
 const SIZE_USAGE: &str = "\
@@ -242,6 +300,8 @@ enum Command {
     Create(Options),
     Devices,
     Daemon,
+    Mcp,
+    McpHelp,
     Doctor(doctor::Options),
     DoctorHelp,
     Emulators(emulators::Action),
@@ -255,7 +315,7 @@ enum Command {
         fix: bool,
     },
     Run(run::RunOptions),
-    Build(build::Target, cargo::Mode),
+    Build(build::Request),
     /// `frus build <target> --analyze-size`, `frus size` (milestone 791).
     Size(size::Options),
     SizeHelp,
@@ -296,6 +356,11 @@ fn main() -> ExitCode {
         }
         Ok(Command::Run(options)) => outcome(run::run(&options)),
         Ok(Command::Daemon) => outcome(daemon::daemon()),
+        Ok(Command::Mcp) => outcome(mcp::mcp()),
+        Ok(Command::McpHelp) => {
+            print!("{MCP_USAGE}");
+            ExitCode::SUCCESS
+        }
         Ok(Command::Doctor(options)) => doctor::doctor(options),
         Ok(Command::Emulators(action)) => outcome(emulators::emulators(action)),
         Ok(Command::Clean) => outcome(clean::clean()),
@@ -309,7 +374,7 @@ fn main() -> ExitCode {
             print!("{DOCTOR_USAGE}");
             ExitCode::SUCCESS
         }
-        Ok(Command::Build(target, mode)) => outcome(build::build(target, mode)),
+        Ok(Command::Build(request)) => outcome(build::build(request)),
         Ok(Command::Size(options)) => outcome(size::size(&options)),
         Ok(Command::SizeHelp) => {
             print!("{SIZE_USAGE}");
@@ -347,6 +412,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
             Some("devices") => Ok(Command::DevicesHelp),
             Some("doctor") => Ok(Command::DoctorHelp),
             Some("emulators") => Ok(Command::EmulatorsHelp),
+            Some("mcp") => Ok(Command::McpHelp),
             Some("size") => Ok(Command::SizeHelp),
             Some(other) => Err(format!("no command `{other}`")),
         },
@@ -359,6 +425,11 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
         },
         Some("run") => parse_run(args),
         Some("daemon") => Ok(Command::Daemon),
+        Some("mcp") => match args.next().as_ref().and_then(|a| a.to_str()) {
+            None => Ok(Command::Mcp),
+            Some("-h" | "--help") => Ok(Command::McpHelp),
+            Some(other) => Err(format!("frus mcp takes no `{other}`")),
+        },
         Some("doctor") => parse_doctor(args),
         Some("emulators") => parse_emulators(args),
         Some("test") => {
@@ -533,8 +604,10 @@ fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         hot: None,
         simulate: None,
         web: false,
+        variant: variant::Variant::default(),
     };
     let mut port = None;
+    let mut mode = None;
     while let Some(arg) = args.next() {
         let text = arg
             .into_string()
@@ -559,10 +632,19 @@ fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
                 .and_then(|value| value.into_string().ok())
                 .ok_or_else(|| format!("{flag} needs a value")),
         };
+        // `--release`, `--profile`, `--flavor`, `--define`…: shared with `frus build`.
+        if variant::parse_flag(
+            &flag,
+            inline.is_some(),
+            &mut value,
+            &mut options.variant,
+            &mut mode,
+        )? {
+            continue;
+        }
         match flag.as_str() {
             "-h" | "--help" => return Ok(Command::RunHelp),
             "-d" | "--device" => options.devices.push(value("--device")?),
-            "--release" if inline.is_none() => options.mode = cargo::Mode::Release,
             "--machine" if inline.is_none() => options.machine = true,
             "--hot" | "--no-hot" if inline.is_none() => {
                 if options.hot.is_some() {
@@ -584,6 +666,7 @@ fn parse_run(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     if let Some(port) = port {
         options.port = port;
     }
+    options.mode = mode.unwrap_or(cargo::Mode::Debug);
     Ok(Command::Run(options))
 }
 
@@ -611,32 +694,66 @@ fn forwarded_run_args(args: &[OsString]) -> Vec<String> {
 }
 
 fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut args = args.peekable();
     let mut target = None;
-    let mut mode = cargo::Mode::Release;
+    let mut mode = None;
+    let mut variant = variant::Variant::default();
+    let mut split_per_abi = false;
+    let mut format = None;
     let mut analyze = false;
     let mut compare = None;
-    let mut args = args.peekable();
     while let Some(arg) = args.next() {
-        let text = arg.to_string_lossy();
-        match text.as_ref() {
+        let text = arg.to_string_lossy().into_owned();
+        let (flag, inline) = match text.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_string(), Some(value.to_string()))
+            }
+            _ => (text.clone(), None),
+        };
+        let mut value = |flag: &str| match &inline {
+            Some(value) => Ok(value.clone()),
+            None => args
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .ok_or_else(|| format!("{flag} needs a value")),
+        };
+        if variant::parse_flag(&flag, inline.is_some(), &mut value, &mut variant, &mut mode)? {
+            continue;
+        }
+        match flag.as_str() {
             "-h" | "--help" => return Ok(Command::BuildHelp),
-            "--debug" => mode = cargo::Mode::Debug,
-            "--analyze-size" => analyze = true,
+            "--split-per-abi" if inline.is_none() => split_per_abi = true,
+            "--analyze-size" if inline.is_none() => analyze = true,
             "--compare" => set_once(
                 &mut compare,
-                PathBuf::from(args.next().ok_or("--compare needs a file")?),
+                PathBuf::from(value("--compare")?),
                 "--compare",
             )?,
+            "--format" => set_once(
+                &mut format,
+                installer::Format::parse(&value("--format")?)?,
+                "--format",
+            )?,
             flag if flag.starts_with('-') => {
-                return Err(format!("frus build has no option `{flag}`"));
+                return Err(format!("frus build has no option `{text}`"));
             }
             word => set_once(&mut target, build::Target::parse(word)?, "the target")?,
         }
     }
-    let target = target.ok_or("frus build needs a target: `frus build apk`, `web` or `desktop`")?;
+    let target = target.ok_or(
+        "frus build needs a target: `frus build apk`, `appbundle`, `web`, `desktop` or `installer`",
+    )?;
     if analyze || compare.is_some() {
-        if mode == cargo::Mode::Debug {
-            return Err("--analyze-size measures the release build: leave out --debug".into());
+        if mode.is_some_and(|m| m != cargo::Mode::Release) {
+            return Err(
+                "--analyze-size measures the release build: leave out --debug and --profile".into(),
+            );
+        }
+        if split_per_abi || format.is_some() || variant != variant::Variant::default() {
+            return Err(
+                "--analyze-size measures the plain release build: leave out --split-per-abi,                  --format, --flavor, --define and the version"
+                    .into(),
+            );
         }
         return Ok(Command::Size(size::Options {
             build: Some(target),
@@ -644,7 +761,13 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
             compare,
         }));
     }
-    Ok(Command::Build(target, mode))
+    Ok(Command::Build(build::Request {
+        target,
+        mode: mode.unwrap_or(cargo::Mode::Release),
+        split_per_abi,
+        format,
+        variant,
+    }))
 }
 
 /// `frus size <apk|web|desktop|file> [--compare old.json]`.
@@ -697,7 +820,7 @@ fn plural(count: usize, word: &str) -> String {
     }
 }
 
-fn set_once<T>(slot: &mut Option<T>, value: T, what: &str) -> Result<(), String> {
+pub(crate) fn set_once<T>(slot: &mut Option<T>, value: T, what: &str) -> Result<(), String> {
     if slot.is_some() {
         return Err(format!("{what} is given twice"));
     }
@@ -962,6 +1085,27 @@ mod tests {
         assert!(error("run --hot --no-hot").contains("one of them"));
         assert!(error("run --no-hot --no-hot").contains("one of them"));
         assert!(error("run --hot=yes").contains("no option"));
+
+        let profile = run_options("run --profile --flavor dev --define=API_URL=http://x:1/");
+        assert_eq!(profile.mode, cargo::Mode::Profile);
+        assert_eq!(profile.variant.flavor.as_deref(), Some("dev"));
+        assert_eq!(
+            profile.variant.defines,
+            [variant::Define::Value(
+                "API_URL".into(),
+                "http://x:1/".into()
+            )]
+        );
+        assert!(error("run --release --profile").contains("one mode at a time"));
+        let numbered = run_options("run --build-name 2.0.0 --build-number 3");
+        assert_eq!(numbered.variant.build_name.as_deref(), Some("2.0.0"));
+    }
+
+    fn build_request(line: &str) -> build::Request {
+        match parse(args(line)) {
+            Ok(Command::Build(request)) => request,
+            other => panic!("{line}: {other:?}"),
+        }
     }
 
     /// `-d` as often as there are devices, or `all`; each device's own run gets the rest of the
@@ -979,22 +1123,62 @@ mod tests {
         assert_eq!(all.devices, ["all", "edge"]);
         assert!(all.machine);
         assert_eq!(all.forwarded, ["--no-hot"]);
+        // The variant reaches every device's run (milestone 790).
+        let flavored =
+            run_options("run -d all --flavor dev --define API_URL=x --build-number 4 --profile");
+        assert_eq!(flavored.variant.flavor.as_deref(), Some("dev"));
+        assert_eq!(flavored.mode, cargo::Mode::Profile);
+        assert_eq!(
+            flavored.forwarded,
+            [
+                "--flavor",
+                "dev",
+                "--define",
+                "API_URL=x",
+                "--build-number",
+                "4",
+                "--profile"
+            ]
+        );
     }
 
     #[test]
     fn build_options_parse() {
+        let apk = build_request("build apk");
+        assert_eq!(apk.target, build::Target::Apk);
+        assert_eq!(apk.mode, cargo::Mode::Release);
+        assert!(!apk.split_per_abi);
+        assert_eq!(apk.variant, variant::Variant::default());
+        assert_eq!(build_request("build --debug web").mode, cargo::Mode::Debug);
         assert_eq!(
-            parse(args("build apk")),
-            Ok(Command::Build(build::Target::Apk, cargo::Mode::Release))
+            build_request("build web --profile").mode,
+            cargo::Mode::Profile
         );
-        assert_eq!(
-            parse(args("build --debug web")),
-            Ok(Command::Build(build::Target::Web, cargo::Mode::Debug))
-        );
+        let split = build_request("build apk --split-per-abi --flavor=prod --build-number 9");
+        assert!(split.split_per_abi);
+        assert_eq!(split.variant.flavor.as_deref(), Some("prod"));
+        assert_eq!(split.variant.build_number, Some(9));
+        let bundle = build_request("build appbundle --define A=1 --define-from-file x.env");
+        assert_eq!(bundle.target, build::Target::AppBundle);
+        assert_eq!(bundle.variant.defines.len(), 2);
         let error = |line| parse(args(line)).unwrap_err();
         assert!(error("build").contains("needs a target"));
         assert!(error("build apk web").contains("given twice"));
         assert!(error("build ios").contains("not `ios`"));
+        assert!(error("build apk --debug --profile").contains("one mode at a time"));
+        assert!(error("build apk --split-per-abi=yes").contains("no option"));
+        assert!(error("build apk --flavor").contains("needs a value"));
+        assert_eq!(apk.format, None);
+        assert_eq!(
+            build_request("build installer --format msix").format,
+            Some(installer::Format::Msix)
+        );
+        assert_eq!(
+            build_request("build installer --format=appimage").format,
+            Some(installer::Format::AppImage)
+        );
+        assert!(error("build installer --format zip").contains("not `zip`"));
+        assert!(error("build installer --format deb --format rpm").contains("given twice"));
     }
 
     #[test]

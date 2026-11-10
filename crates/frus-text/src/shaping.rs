@@ -26,6 +26,14 @@ use unicode_script::Script;
 /// The language text is shaped in when its style names none: the application's.
 static DEFAULT_LOCALE: RwLock<Option<&'static str>> = RwLock::new(None);
 
+thread_local! {
+    /// What this thread last set, which it reads before the process-wide value: a thread that
+    /// sets the language sees its own choice even while another thread sets a different one
+    /// (each test's shell, run side by side). Other threads read the process-wide value.
+    static THREAD_LOCALE: std::cell::Cell<Option<Option<&'static str>>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Sets the language text is shaped in when its style names none — the application's locale,
 /// a BCP 47 tag such as `ja` or `zh-Hant-TW`. The shell sets it from the locale the
 /// application resolved, so an application does not call this itself.
@@ -39,10 +47,10 @@ static DEFAULT_LOCALE: RwLock<Option<&'static str>> = RwLock::new(None);
 /// ```
 pub fn set_default_locale(tag: &str) {
     let wanted = TextShaping::NONE.with_locale(tag).locale();
-    let mut current = DEFAULT_LOCALE.write().unwrap_or_else(|e| e.into_inner());
-    if *current != wanted {
-        *current = wanted;
-        drop(current);
+    let before = default_locale();
+    THREAD_LOCALE.with(|own| own.set(Some(wanted)));
+    *DEFAULT_LOCALE.write().unwrap_or_else(|e| e.into_inner()) = wanted;
+    if before != wanted {
         // Measurements taken in the old language may have used other faces.
         super::forget_measurements();
     }
@@ -50,7 +58,9 @@ pub fn set_default_locale(tag: &str) {
 
 /// The language text is shaped in when its style names none, if one was set.
 pub fn default_locale() -> Option<&'static str> {
-    *DEFAULT_LOCALE.read().unwrap_or_else(|e| e.into_inner())
+    THREAD_LOCALE
+        .with(|own| own.get())
+        .unwrap_or_else(|| *DEFAULT_LOCALE.read().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// The language `shaping` puts its text in: its own, or the application's.
@@ -845,5 +855,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A thread keeps the language it set while another thread sets its own: the shell of one
+    /// test no longer changes what another test's shell shapes in.
+    #[test]
+    fn a_thread_keeps_the_language_it_set() {
+        set_default_locale("fr");
+        std::thread::spawn(|| {
+            set_default_locale("ja");
+            assert_eq!(default_locale(), Some("ja"));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(default_locale(), Some("fr"));
+        // A thread that set nothing reads the process-wide value: the last one set.
+        let seen = std::thread::spawn(default_locale).join().unwrap();
+        assert_eq!(seen, Some("ja"));
     }
 }

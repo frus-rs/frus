@@ -126,7 +126,7 @@ fn tags(devices: &[Device]) -> Vec<String> {
 }
 
 /// A directory name for a device's run: its id, with what a path cannot hold made `_`.
-fn slot(device: &Device) -> String {
+pub(crate) fn slot(device: &Device) -> String {
     device
         .id
         .chars()
