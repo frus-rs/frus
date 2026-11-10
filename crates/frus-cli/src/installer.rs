@@ -107,6 +107,14 @@ fn four_part_version(name: &str, number: Option<u32>) -> String {
         .join(".")
 }
 
+/// The last part of a Windows path, on whatever system the script is written: `\` and `/`
+/// both separate, as they do on Windows (`Path::file_name` elsewhere sees `C:\t\a.dll` as
+/// one name). makensis also runs on Linux and macOS, and the script must not depend on it.
+fn windows_file_name(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    text.rsplit(['\\', '/']).next().unwrap_or(&text).to_string()
+}
+
 /// A value inside an NSIS string: `$` and `"` escaped.
 fn nsis_text(text: &str) -> String {
     text.replace('$', "$$").replace('"', "$\\\"")
@@ -115,9 +123,8 @@ fn nsis_text(text: &str) -> String {
 pub(crate) fn nsis_script(project: &Project, exe: &Path, extra: &[PathBuf], out: &Path) -> String {
     let name = nsis_text(&project.display_name());
     let version = nsis_text(&project.version_name());
-    let exe_name = exe
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    let exe_name = Some(windows_file_name(exe))
+        .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{}.exe", project.package));
     // The key the system's list of programs knows it by: the application id.
     let key = format!(
@@ -130,9 +137,10 @@ pub(crate) fn nsis_script(project: &Project, exe: &Path, extra: &[PathBuf], out:
     }
     let mut removes = format!("  Delete \"$INSTDIR\\{exe_name}\"\n");
     for file in extra {
-        if let Some(n) = file.file_name() {
-            removes.push_str(&format!("  Delete \"$INSTDIR\\{}\"\n", n.to_string_lossy()));
-        }
+        removes.push_str(&format!(
+            "  Delete \"$INSTDIR\\{}\"\n",
+            windows_file_name(file)
+        ));
     }
     format!(
         r#"; Written by `frus build installer`: a per-user install, no administrator needed.
@@ -441,6 +449,13 @@ mod tests {
         assert!(script
             .contains(r#"CreateShortcut "$SMPROGRAMS\My App $$Dev.lnk" "$INSTDIR\my_app.exe""#));
         assert_eq!(file_stem(&project), "My-App-Dev");
+        // The same script on every system: no full path where a file name belongs.
+        assert!(!script.contains(r"$INSTDIR\C:"), "{script}");
+        assert_eq!(windows_file_name(Path::new(r"C:\t\a.dll")), "a.dll");
+        assert_eq!(
+            windows_file_name(Path::new("/t/release/app.exe")),
+            "app.exe"
+        );
     }
 
     #[test]
