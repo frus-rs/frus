@@ -210,8 +210,18 @@ pub(crate) fn run(options: &RunOptions) -> Result<ExitCode, String> {
     if options.machine {
         report::machine(format!("frus-run-{}", std::process::id()));
     }
+    // `q` is heard from now on: pressed while the application builds, it stops the build.
+    keys::start();
     let result = run_session(options);
     keys::restore();
+    // Stopped while building, as asked: an end, not a failure.
+    let result = match result {
+        Err(error) if error == crate::cargo::CANCELLED || crate::cargo::cancelled() => {
+            report::say("Stopped before the application was up.");
+            Ok(ExitCode::SUCCESS)
+        }
+        other => other,
+    };
     report::event(
         "app.stop",
         object([("error", result.as_ref().err().map(String::as_str).into())]),
@@ -689,6 +699,11 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
             if restarting.is_none() {
                 return Err(format!("the hot-reload engine stopped ({status})"));
             }
+        }
+        // `q` while the engine builds: the build goes, and the run ends.
+        if keys.is_none() && crate::cargo::cancelled() {
+            crate::hot::stop(&mut dx);
+            return Err(crate::cargo::CANCELLED.into());
         }
         let Some(keys) = keys.as_ref() else {
             std::thread::sleep(Duration::from_millis(100));
@@ -1225,6 +1240,12 @@ fn run_android_hot(
                 break ExitCode::SUCCESS;
             }
         }
+        // `q` while the engine builds: the build goes, and the run ends.
+        if keys.is_none() && crate::cargo::cancelled() {
+            crate::hot::stop(&mut dx);
+            let _ = logcat.kill();
+            return Err(crate::cargo::CANCELLED.into());
+        }
         let Some(keys) = keys.as_ref() else {
             std::thread::sleep(Duration::from_millis(100));
             continue;
@@ -1589,6 +1610,10 @@ fn run_web_hot(
     loop {
         if let Some(status) = dx.try_wait().map_err(|e| e.to_string())? {
             return Err(format!("the hot-reload engine stopped ({status})"));
+        }
+        if crate::cargo::cancelled() {
+            crate::hot::stop(&mut dx);
+            return Err(crate::cargo::CANCELLED.into());
         }
         match lines.recv_timeout(Duration::from_millis(200)) {
             Ok(crate::hot::DxLine::Launched) => break,

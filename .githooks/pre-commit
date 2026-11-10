@@ -10,7 +10,7 @@ missing=()
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   case "$f" in
-    crates/frus-cli/template/*) continue ;;   # exempt: user-facing template
+    crates/frus-cli/template/*|crates/frus-cli/template-package/*|crates/frus-cli/template-plugin/*) continue ;;   # exempt: user-facing templates
     crates/*.rs|crates/*/*.rs)  ;;            # enforce only under crates/
     *) continue ;;
   esac

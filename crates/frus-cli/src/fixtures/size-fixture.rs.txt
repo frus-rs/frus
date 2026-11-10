@@ -1,0 +1,14 @@
+// A tiny crate whose object file is the Mach-O fixture of frus-cli's size tests.
+#![no_std]
+
+pub static TABLE: [u32; 64] = [7; 64];
+
+#[inline(never)]
+pub fn add(a: u32, b: u32) -> u32 {
+    a.wrapping_add(b).rotate_left(3) ^ TABLE[(a % 64) as usize]
+}
+
+#[inline(never)]
+pub fn sum(values: &[u32]) -> u32 {
+    values.iter().fold(0, |acc, v| add(acc, *v))
+}

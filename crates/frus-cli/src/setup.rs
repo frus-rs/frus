@@ -453,7 +453,7 @@ pub(crate) fn find_java() -> Option<PathBuf> {
 }
 
 /// The highest-versioned directory in `dir` (`ndk/27.0.12077973`, `build-tools/35.0.0`).
-fn newest_version_dir(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn newest_version_dir(dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)

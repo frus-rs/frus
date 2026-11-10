@@ -1,0 +1,26 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2021"
+# `frus create --description` writes it.
+description = "A frus plugin"
+# The oldest compiler frus builds with. Raise it when you need a newer one.
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+keywords = ["frus", "plugin"]
+# Compiles `android/java` into the dex the library carries, when built for Android.
+build = "build.rs"
+
+# A plugin: what the platform does, called from Rust. Each platform has its side — Android's
+# in Java (`android/java`), the others in Rust — and one function for the application:
+# `{{crate_name}}::platform_version()`.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+frus = "0.5"
+
+# Android: the Java side is reached through JNI, in the activity frus runs in.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

@@ -6,8 +6,69 @@
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::SystemTime;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
+
+/// Set by `q` (or an editor's `app.stop`) while something is being built: the build is stopped
+/// rather than waited for (milestone 791).
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// What a build stopped by `q` returns: `frus run` ends there, as asked, and not as a failure.
+pub(crate) const CANCELLED: &str = "stopped while building (q)";
+
+/// Asks the build under way, and every one after it, to stop.
+pub(crate) fn cancel() {
+    CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// Whether `q` was pressed.
+pub(crate) fn cancelled() -> bool {
+    CANCEL.load(Ordering::SeqCst)
+}
+
+/// Waits for `child`, or stops it — and the compilers it started — once `q` is pressed.
+fn wait_or_cancel(child: &mut Child) -> Result<ExitStatus, String> {
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+        if cancelled() {
+            stop_tree(child);
+            return Err(CANCELLED.into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Ends a build: cargo and what it runs. On Windows the whole tree at once; elsewhere cargo is
+/// interrupted as Ctrl+C would, and stops its compilers itself.
+fn stop_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        for _ in 0..50 {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 use crate::project::{json_string, Project};
 use crate::setup;
@@ -46,15 +107,20 @@ pub(crate) fn build_desktop(project: &Project, mode: Mode) -> Result<PathBuf, St
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("could not run cargo: {e}"))?;
-    let mut executable = None;
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some(path) = executable_of(&line) {
-                executable = Some(PathBuf::from(path));
+    // Read on a thread of its own, so that `q` is heard while cargo works.
+    let reader = child.stdout.take().map(|stdout| {
+        std::thread::spawn(move || {
+            let mut executable = None;
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(path) = executable_of(&line) {
+                    executable = Some(PathBuf::from(path));
+                }
             }
-        }
-    }
-    let status = child.wait().map_err(|e| e.to_string())?;
+            executable
+        })
+    });
+    let status = wait_or_cancel(&mut child)?;
+    let executable = reader.and_then(|r| r.join().ok()).flatten();
     if !status.success() {
         return Err("the build failed".into());
     }
@@ -226,9 +292,18 @@ pub(crate) fn build_apk(
     }
     run(&mut command)?;
     // Only an APK written by this build: a failed one must never install yesterday's.
-    newest_apk(&project.target_dir()?.join(mode.dir()).join("apk"), started).ok_or_else(|| {
-        "cargo-apk finished but wrote no new .apk in the target directory".to_string()
-    })
+    let apk = newest_apk(&project.target_dir()?.join(mode.dir()).join("apk"), started).ok_or_else(
+        || "cargo-apk finished but wrote no new .apk in the target directory".to_string(),
+    )?;
+    // `autoVerify` on the filters of `https` links, which cargo-apk cannot write (milestone
+    // 791). Without it the package still works, the links opening with a question.
+    if let Err(error) = crate::app_links::verify_https_links(project, &apk, mode) {
+        crate::report::warn(&format!(
+            "the https links are not marked for verification ({error}): Android will ask which \
+             application opens them"
+        ));
+    }
+    Ok(apk)
 }
 
 /// The `.apk` in `dir` written after `since`, the newest if several.
@@ -250,9 +325,10 @@ pub(crate) fn run(command: &mut Command) -> Result<(), String> {
     if crate::report::is_machine() {
         command.stdout(std::io::stderr());
     }
-    let status = command
-        .status()
+    let mut child = command
+        .spawn()
         .map_err(|e| format!("could not run {program}: {e}"))?;
+    let status = wait_or_cancel(&mut child)?;
     if status.success() {
         Ok(())
     } else {

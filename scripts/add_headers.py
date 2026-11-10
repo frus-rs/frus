@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()          # e.g. .../frus/crates
 EXCLUDE_PARTS = {"target"}
-EXCLUDE_DIRS = [ (ROOT / "frus-cli" / "template").resolve() ]
+EXCLUDE_DIRS = [ (ROOT / "frus-cli" / d).resolve() for d in ("template", "template-package", "template-plugin") ]
 
 SPDX = "SPDX-License-Identifier: MIT OR Apache-2.0"
 COPYRIGHT = "Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>"
