@@ -71,6 +71,9 @@ mod command;
 // Watching the device's networks (milestone 777).
 mod connectivity;
 mod data_dir;
+/// DevTools' service in the application (milestone 788): debug builds only.
+#[cfg(debug_assertions)]
+mod devtools;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 mod file_dialog;
 mod file_drop;

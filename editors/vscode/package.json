@@ -111,6 +111,11 @@
         "category": "frus"
       },
       {
+        "command": "frus.openDevTools",
+        "title": "Open DevTools",
+        "category": "frus"
+      },
+      {
         "command": "frus.screenshot",
         "title": "Save Screenshot",
         "category": "frus"
@@ -170,6 +175,10 @@
         },
         {
           "command": "frus.restart",
+          "when": "inDebugMode && debugType == 'frus'"
+        },
+        {
+          "command": "frus.openDevTools",
           "when": "inDebugMode && debugType == 'frus'"
         },
         {

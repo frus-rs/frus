@@ -359,6 +359,9 @@ fn drive(sessions: &mut [Session], lines: &Receiver<Line>) -> Result<ExitCode, S
             Action::Help => report::say(run::KEYS),
             Action::Clear => run::clear_screen(),
             Action::Missing(why) => report::say(why),
+            Action::DevTools => report::say(
+                "each device has its own DevTools: open the address printed under its name",
+            ),
             Action::Reload | Action::Restart => {
                 let full = action == Action::Restart;
                 if !full && sessions.iter().any(|s| s.hot && !s.done) {

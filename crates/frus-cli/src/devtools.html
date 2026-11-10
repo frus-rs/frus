@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frus DevTools</title>
+<style>
+  :root {
+    --bg: #f7f7f9; --panel: #ffffff; --text: #1d1d22; --muted: #6a6a75; --line: #dedee5;
+    --accent: #3d63dd; --accent-text: #ffffff; --hover: #eef1fb; --selected: #dfe6fb;
+    --bad: #d93838; --good: #2f9e57; --build: #8a63d2; --layout: #3d63dd; --render: #e08a2c;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171b; --panel: #1f1f25; --text: #e6e6ea; --muted: #9a9aa6; --line: #34343d;
+      --accent: #7b9cff; --accent-text: #0f1220; --hover: #2a2d3a; --selected: #2f3a5e;
+      --bad: #ff6b6b; --good: #5fd08a; --build: #b394ff; --layout: #7b9cff; --render: #ffb25e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif;
+    display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .run { color: var(--muted); }
+  header .status { margin-left: auto; color: var(--muted); }
+  header .status.bad { color: var(--bad); }
+  nav { display: flex; gap: 4px; }
+  nav button { border: 0; background: none; color: var(--muted); padding: 6px 10px;
+    border-radius: 6px; font: inherit; cursor: pointer; }
+  nav button.on { background: var(--selected); color: var(--text); }
+  main { flex: 1; min-height: 0; display: flex; }
+  section { display: none; flex: 1; min-height: 0; min-width: 0; }
+  section.on { display: flex; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 8px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); }
+  button.tool { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 6px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button.tool.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  input[type=search], select { border: 1px solid var(--line); background: var(--panel);
+    color: var(--text); border-radius: 6px; padding: 4px 8px; font: inherit; }
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .scroll { overflow: auto; flex: 1; min-height: 0; }
+  #tree-pane { flex: 1 1 50%; border-right: 1px solid var(--line); }
+  #details-pane { flex: 1 1 50%; }
+  .node { font-family: var(--mono); white-space: nowrap; padding: 1px 8px; cursor: pointer; }
+  .node:hover { background: var(--hover); }
+  .node.sel { background: var(--selected); }
+  .node .text { color: var(--good); }
+  .node .key { color: var(--render); }
+  .node .sem { color: var(--accent); }
+  .node .toggle { display: inline-block; width: 1.2em; color: var(--muted); }
+  table.props { border-collapse: collapse; width: 100%; font-family: var(--mono); }
+  table.props td { padding: 2px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.props td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
+  h2 { font-size: 13px; margin: 12px 8px 4px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .empty { color: var(--muted); padding: 16px; }
+  a { color: var(--accent); }
+  #shot { max-width: 100%; display: block; margin: 8px; border: 1px solid var(--line); }
+  #perf { flex-direction: column; }
+  #chart { width: 100%; height: 260px; display: block; }
+  .stats { display: flex; gap: 24px; padding: 8px 16px; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 20px; font-weight: 600; }
+  .stat span { color: var(--muted); }
+  .legend { display: flex; gap: 16px; padding: 0 16px 8px; color: var(--muted); flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+  #settings { flex-direction: column; padding: 8px 16px; gap: 16px; overflow: auto; }
+  .setting { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .setting label { min-width: 160px; }
+  #logs { flex-direction: column; }
+  #log { font-family: var(--mono); white-space: pre-wrap; padding: 8px; }
+  #log .error { color: var(--bad); }
+  @media (max-width: 700px) {
+    main { flex-direction: column; }
+    #inspector.on { flex-direction: column; }
+    #tree-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>frus DevTools</h1>
+  <span class="run" id="run"></span>
+  <nav>
+    <button data-tab="inspector" class="on">Inspector</button>
+    <button data-tab="perf">Performance</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="logs">Logs</button>
+  </nav>
+  <span class="status" id="status">connecting…</span>
+</header>
+<main>
+  <section id="inspector" class="on">
+    <div class="pane" id="tree-pane">
+      <div class="toolbar">
+        <button class="tool" id="select-mode" title="Tap a widget in the application to select it">Select widget</button>
+        <button class="tool" id="refresh">Refresh tree</button>
+        <input type="search" id="filter" placeholder="Filter: type, text, label, key">
+      </div>
+      <div class="scroll" id="tree"><div class="empty">Loading the widget tree…</div></div>
+    </div>
+    <div class="pane" id="details-pane">
+      <div class="toolbar">
+        <button class="tool" id="screenshot">Screenshot</button>
+        <button class="tool" id="reload">Hot reload</button>
+        <button class="tool" id="restart">Restart</button>
+      </div>
+      <div class="scroll" id="details"><div class="empty">Select a widget in the tree, or turn on "Select widget" and tap one in the application.</div></div>
+    </div>
+  </section>
+  <section id="perf">
+    <div class="toolbar">
+      <button class="tool" id="perf-pause">Pause</button>
+      <button class="tool" id="perf-clear">Clear</button>
+      <span style="color: var(--muted)">Each bar is a frame: building the tree, layout and paint, rendering. Red: the frame's own work over the 16.7 ms budget of 60 Hz, or a frame late.</span>
+    </div>
+    <div class="stats" id="perf-stats"></div>
+    <div class="legend">
+      <span><i style="background: var(--build)"></i>build</span>
+      <span><i style="background: var(--layout)"></i>layout + paint</span>
+      <span><i style="background: var(--render)"></i>render: drawing, then (faint) waiting for the GPU and the display</span>
+      <span><i style="background: var(--bad)"></i>jank</span>
+    </div>
+    <canvas id="chart"></canvas>
+  </section>
+  <section id="settings">
+    <div class="setting"><label>Animation speed</label>
+      <span id="speeds"></span></div>
+    <div class="setting"><label for="debug-paint">Debug paint (layout bounds)</label>
+      <input type="checkbox" id="debug-paint"></div>
+    <div class="setting"><label for="inspector-overlay">Inspector overlay (hover card)</label>
+      <input type="checkbox" id="inspector-overlay"></div>
+    <div class="setting"><label for="perf-overlay">Performance overlay</label>
+      <input type="checkbox" id="perf-overlay"></div>
+    <div class="setting"><label for="brightness">Brightness</label>
+      <select id="brightness"><option value="light">light</option><option value="dark">dark</option></select></div>
+    <div class="setting"><label for="platform">Platform the widgets behave as</label>
+      <select id="platform">
+        <option value="android">Android</option><option value="ios">iOS</option>
+        <option value="windows">Windows</option><option value="macos">macOS</option>
+        <option value="linux">Linux</option><option value="fuchsia">Fuchsia</option>
+      </select></div>
+    <div class="setting"><label for="text-scale">Text size</label>
+      <select id="text-scale">
+        <option value="0.85">85%</option><option value="1">100%</option>
+        <option value="1.3">130%</option><option value="2">200%</option>
+      </select></div>
+  </section>
+  <section id="logs">
+    <div class="toolbar">
+      <input type="search" id="log-filter" placeholder="Filter the log">
+      <label><input type="checkbox" id="log-errors"> errors and warnings only</label>
+      <button class="tool" id="log-clear">Clear</button>
+    </div>
+    <div class="scroll"><div id="log"></div></div>
+  </section>
+</main>
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...children) => {
+    const node = Object.assign(document.createElement(tag), props);
+    for (const child of children) node.append(child);
+    return node;
+  };
+
+  // One call of the protocol: `{"result": …}` or a thrown error.
+  async function call(method, params = {}) {
+    const answer = await fetch('/api', {
+      method: 'POST',
+      headers: { 'X-Frus-DevTools': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, params }),
+    });
+    const body = await answer.json();
+    if (body.error !== undefined) throw new Error(body.error);
+    return body.result;
+  }
+
+  function status(text, bad = false) {
+    $('status').textContent = text;
+    $('status').className = 'status' + (bad ? ' bad' : '');
+  }
+
+  // --- Tabs ---
+  let tab = 'inspector';
+  for (const button of document.querySelectorAll('nav button')) {
+    button.onclick = () => {
+      tab = button.dataset.tab;
+      for (const b of document.querySelectorAll('nav button')) b.classList.toggle('on', b === button);
+      for (const s of document.querySelectorAll('main section')) s.classList.toggle('on', s.id === tab);
+      if (tab === 'settings') loadState();
+      if (tab === 'perf') drawChart();
+    };
+  }
+
+  // --- Inspector ---
+  let nodes = [];
+  let selected = null;
+  let selectMode = false;
+  const collapsed = new Set();
+
+  function describe(node) {
+    const parts = [el('span', { className: 'name' }, node.name)];
+    if (node.key) parts.push(el('span', { className: 'key' }, ` key=${node.key}`));
+    if (node.text) parts.push(el('span', { className: 'text' }, ` "${node.text.slice(0, 60)}"`));
+    if (node.semantics && node.semantics.label && node.semantics.label !== node.text)
+      parts.push(el('span', { className: 'sem' }, ` [${node.semantics.role}: ${node.semantics.label}]`));
+    return parts;
+  }
+
+  function hasChildren(i) { return i + 1 < nodes.length && nodes[i + 1].parent === i; }
+
+  function renderTree() {
+    const filter = $('filter').value.trim().toLowerCase();
+    const tree = $('tree');
+    tree.replaceChildren();
+    if (!nodes.length) { tree.append(el('div', { className: 'empty' }, 'Nothing laid out yet.')); return; }
+    const hidden = new Set();
+    nodes.forEach((node, i) => {
+      if (node.parent !== null && (hidden.has(node.parent) || collapsed.has(nodes[node.parent].id))) {
+        hidden.add(i);
+        return;
+      }
+      if (filter) {
+        const words = [node.name, node.text, node.key, node.semantics && node.semantics.label]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!words.includes(filter)) return;
+      }
+      const toggle = el('span', { className: 'toggle' }, hasChildren(i) ? (collapsed.has(node.id) ? '▸' : '▾') : '');
+      toggle.onclick = (event) => {
+        event.stopPropagation();
+        if (collapsed.has(node.id)) collapsed.delete(node.id); else collapsed.add(node.id);
+        renderTree();
+      };
+      const row = el('div', { className: 'node' + (node.id === selected ? ' sel' : '') }, toggle, ...describe(node));
+      row.style.paddingLeft = (8 + (filter ? 0 : node.depth * 14)) + 'px';
+      row.onclick = () => select(node.id);
+      tree.append(row);
+    });
+    const chosen = tree.querySelector('.sel');
+    if (chosen) chosen.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function loadTree() {
+    try {
+      const answer = await call('tree');
+      nodes = answer.nodes;
+      if (answer.selected !== undefined && answer.selected !== null) selected = answer.selected;
+      renderTree();
+      status(`${nodes.length} widgets, ${Math.round(answer.size.width)}×${Math.round(answer.size.height)}`);
+    } catch (error) {
+      status(error.message, true);
+    }
+  }
+
+  function row(table, name, value) {
+    if (value === undefined || value === null || value === '') return;
+    table.append(el('tr', {}, el('td', {}, name), el('td', {}, typeof value === 'object' ? JSON.stringify(value) : String(value))));
+  }
+
+  async function select(id) {
+    selected = id;
+    renderTree();
+    try {
+      await call('select', { id });
+      const node = await call('node', { id });
+      const details = $('details');
+      details.replaceChildren();
+      const r = node.rect;
+      const general = el('table', { className: 'props' });
+      row(general, 'type', node.name);
+      row(general, 'id', node.id);
+      row(general, 'key', node.key);
+      row(general, 'text', node.text);
+      row(general, 'position', `${r.x.toFixed(1)}, ${r.y.toFixed(1)}`);
+      row(general, 'size', `${r.width.toFixed(1)} × ${r.height.toFixed(1)}`);
+      row(general, 'depth', node.depth);
+      details.append(el('h2', {}, 'Widget'), general);
+      const style = el('table', { className: 'props' });
+      const s = node.style;
+      row(style, 'width', s.width); row(style, 'height', s.height);
+      row(style, 'min width', s.minWidth); row(style, 'min height', s.minHeight);
+      row(style, 'max width', s.maxWidth); row(style, 'max height', s.maxHeight);
+      row(style, 'padding (l t r b)', s.padding.join(', '));
+      row(style, 'margin (l t r b)', s.margin.join(', '));
+      row(style, 'flex grow / shrink', `${s.flexGrow} / ${s.flexShrink}`);
+      row(style, 'flex basis', s.flexBasis);
+      row(style, 'direction', s.direction);
+      row(style, 'justify', s.justify);
+      row(style, 'align', s.align);
+      row(style, 'align self', s.alignSelf);
+      row(style, 'gap', s.gap);
+      row(style, 'aspect ratio', s.aspectRatio);
+      row(style, 'wrap', s.wrap ? 'yes' : '');
+      row(style, 'grid columns', s.gridColumns);
+      details.append(el('h2', {}, 'Layout'), style);
+      if (node.semantics) {
+        const sem = el('table', { className: 'props' });
+        for (const [k, v] of Object.entries(node.semantics)) row(sem, k, Array.isArray(v) ? v.join(', ') : v);
+        details.append(el('h2', {}, 'Semantics'), sem);
+      }
+      if (node.ancestors.length) {
+        const chain = el('div', { className: 'node' });
+        chain.style.whiteSpace = 'normal';
+        node.ancestors.slice().reverse().forEach((a, i) => {
+          const link = el('a', { href: '#' }, a.name);
+          link.onclick = (event) => { event.preventDefault(); select(a.id); };
+          if (i) chain.append(' › ');
+          chain.append(link);
+        });
+        details.append(el('h2', {}, 'Ancestors'), chain);
+      }
+      if (node.children.length) {
+        const list = el('div');
+        for (const c of node.children) {
+          const link = el('a', { href: '#', className: 'node', style: 'display:block' }, c.name);
+          link.onclick = (event) => { event.preventDefault(); select(c.id); };
+          list.append(link);
+        }
+        details.append(el('h2', {}, 'Children'), list);
+      }
+      const actions = el('div', { className: 'toolbar' });
+      const tap = el('button', { className: 'tool' }, 'Tap it');
+      tap.onclick = () => call('tap', { id }).then(() => setTimeout(loadTree, 300)).catch((e) => status(e.message, true));
+      actions.append(tap);
+      details.append(actions);
+    } catch (error) {
+      status(error.message, true);
+    }
+  }
+
+  $('refresh').onclick = loadTree;
+  $('filter').oninput = renderTree;
+  $('select-mode').onclick = async () => {
+    selectMode = !selectMode;
+    $('select-mode').classList.toggle('on', selectMode);
+    try { await call('set', { selectMode }); } catch (error) { status(error.message, true); }
+  };
+  $('screenshot').onclick = async () => {
+    try {
+      const shot = await call('screenshot');
+      const details = $('details');
+      details.replaceChildren(el('h2', {}, 'Screenshot'), el('img', { id: 'shot', src: 'data:image/png;base64,' + shot.data }));
+    } catch (error) { status(error.message, true); }
+  };
+  $('reload').onclick = () => call('reload').then(() => status('reloading…'));
+  $('restart').onclick = () => call('restart').then(() => status('restarting…'));
+
+  // In select mode, the application says what was tapped: the tree follows.
+  async function followSelection() {
+    if (!selectMode || tab !== 'inspector') return;
+    try {
+      const state = await call('state');
+      if (state.selected && state.selected !== selected) {
+        await loadTree();
+        select(state.selected);
+      }
+    } catch (_) {}
+  }
+  setInterval(followSelection, 500);
+
+  // --- Performance ---
+  let frames = [];
+  let lastFrame = undefined;
+  let paused = false;
+  const KEEP = 600;
+  $('perf-pause').onclick = () => {
+    paused = !paused;
+    $('perf-pause').textContent = paused ? 'Resume' : 'Pause';
+  };
+  $('perf-clear').onclick = () => { frames = []; drawChart(); };
+
+  async function pollFrames() {
+    if (paused || tab !== 'perf') return;
+    try {
+      const answer = await call('frames', lastFrame === undefined ? {} : { after: lastFrame });
+      if (answer.frames.length) {
+        lastFrame = answer.frames[answer.frames.length - 1].number;
+        frames = frames.concat(answer.frames).slice(-KEEP);
+      }
+      drawChart(answer.budget);
+    } catch (error) { status(error.message, true); }
+  }
+  setInterval(pollFrames, 500);
+
+  function color(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function drawChart(budget = 1000 / 60) {
+    const canvas = $('chart');
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const g = canvas.getContext('2d');
+    g.scale(ratio, ratio);
+    g.clearRect(0, 0, width, height);
+    const top = 50; // ms at the top of the chart
+    const y = (ms) => height - Math.min(ms, top) / top * height;
+    const bar = Math.max(2, width / Math.max(frames.length, 120));
+    const start = width - frames.length * bar;
+    let janks = 0, worst = 0, total = 0;
+    frames.forEach((f, i) => {
+      const x = start + i * bar;
+      const build = f.build || 0;
+      // The CPU's part: what the frame itself cost. The rest of the render is waiting for
+      // the GPU and the display, which a frame on time spends too.
+      const cpu = build + f.layoutPaint + f.draw;
+      const waiting = Math.max(0, f.render - f.draw);
+      // Late: a frame that came more than one and a half frames after the one before it,
+      // within a run of frames (a gap over 250 ms is a pause, not a missed frame).
+      const late = f.interval > budget * 1.5 && f.interval < 250;
+      const jank = cpu > budget || late;
+      if (jank) janks++;
+      worst = Math.max(worst, cpu);
+      total += cpu;
+      let at = 0;
+      for (const [ms, name, alpha] of [[build, '--build', 1], [f.layoutPaint, '--layout', 1], [f.draw, '--render', 1], [waiting, '--render', 0.35]]) {
+        g.fillStyle = color(jank && alpha === 1 ? '--bad' : name);
+        g.globalAlpha = alpha;
+        g.fillRect(x, y(at + ms), bar * 0.8, y(at) - y(at + ms));
+        at += ms;
+      }
+      g.globalAlpha = 1;
+    });
+    g.strokeStyle = color('--muted');
+    g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(0, y(budget)); g.lineTo(width, y(budget)); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = color('--muted');
+    g.fillText(`${budget.toFixed(1)} ms`, 4, y(budget) - 4);
+    // The frame rate while drawing: the gaps of a pause are not frames.
+    const intervals = frames.map((f) => f.interval).filter((v) => v > 0 && v < 250);
+    const average = intervals.length ? intervals.reduce((a, b) => a + b, 0) / intervals.length : 0;
+    const stats = $('perf-stats');
+    const stat = (value, label) => el('div', { className: 'stat' }, el('b', {}, value), el('span', {}, label));
+    stats.replaceChildren(
+      stat(String(frames.length), 'frames shown'),
+      stat(average ? (1000 / average).toFixed(0) : '–', 'fps (while drawing)'),
+      stat(frames.length ? (total / frames.length).toFixed(1) + ' ms' : '–', 'average CPU cost'),
+      stat(worst ? worst.toFixed(1) + ' ms' : '–', 'worst CPU cost'),
+      stat(String(janks), 'janky frames'),
+    );
+  }
+  window.addEventListener('resize', () => drawChart());
+
+  // --- Settings ---
+  const SPEEDS = [1, 0.5, 0.2, 0.1];
+  for (const speed of SPEEDS) {
+    const button = el('button', { className: 'tool', title: `Animations at ${speed}×` }, `${speed}×`);
+    button.dataset.speed = speed;
+    button.onclick = () => set({ animationSpeed: speed });
+    $('speeds').append(button, ' ');
+  }
+  function show(state) {
+    for (const button of $('speeds').children)
+      button.classList.toggle('on', Math.abs(Number(button.dataset.speed) - state.animationSpeed) < 1e-3);
+    $('debug-paint').checked = state.debugPaint;
+    $('inspector-overlay').checked = state.inspector;
+    $('perf-overlay').checked = state.performanceOverlay;
+    $('brightness').value = state.brightness;
+    if (state.platform) $('platform').value = state.platform;
+    const scale = [...$('text-scale').options].find((o) => Math.abs(Number(o.value) - state.textScale) < 1e-3);
+    if (scale) $('text-scale').value = scale.value;
+    selectMode = state.selectMode;
+    $('select-mode').classList.toggle('on', selectMode);
+  }
+  async function loadState() {
+    try { show(await call('state')); } catch (error) { status(error.message, true); }
+  }
+  async function set(params) {
+    try { show(await call('set', params)); } catch (error) { status(error.message, true); }
+  }
+  $('debug-paint').onchange = (e) => set({ debugPaint: e.target.checked });
+  $('inspector-overlay').onchange = (e) => set({ inspector: e.target.checked });
+  $('perf-overlay').onchange = (e) => set({ performanceOverlay: e.target.checked });
+  $('brightness').onchange = (e) => set({ brightness: e.target.value });
+  $('platform').onchange = (e) => set({ platform: e.target.value });
+  $('text-scale').onchange = (e) => set({ textScale: Number(e.target.value) });
+
+  // --- Logs ---
+  let logAfter = undefined;
+  let logLines = [];
+  function renderLog() {
+    const filter = $('log-filter').value.toLowerCase();
+    const errorsOnly = $('log-errors').checked;
+    const log = $('log');
+    log.replaceChildren(...logLines
+      .filter((l) => (!errorsOnly || l.error) && (!filter || l.text.toLowerCase().includes(filter)))
+      .map((l) => el('div', { className: l.error ? 'error' : '' }, l.text)));
+  }
+  async function pollLogs() {
+    try {
+      const answer = await call('logs', logAfter === undefined ? {} : { after: logAfter });
+      if (answer.lines.length) {
+        logAfter = answer.lines[answer.lines.length - 1].number;
+        logLines = logLines.concat(answer.lines).slice(-5000);
+        if (tab === 'logs') {
+          const scroller = $('log').parentElement;
+          const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+          renderLog();
+          if (atEnd) scroller.scrollTop = scroller.scrollHeight;
+        }
+      }
+    } catch (_) {}
+  }
+  setInterval(pollLogs, 1000);
+  $('log-filter').oninput = renderLog;
+  $('log-errors').onchange = renderLog;
+  $('log-clear').onclick = () => { logLines = []; renderLog(); };
+
+  // --- Start ---
+  (async () => {
+    try {
+      const run = await call('status');
+      $('run').textContent = `${run.app} on ${run.device}`;
+      document.title = `${run.app} · frus DevTools`;
+      const hello = await call('hello');
+      if (hello.protocol !== 1) status(`this page speaks protocol 1, the application ${hello.protocol}`, true);
+      await loadTree();
+      if (selected) select(selected);
+      loadState();
+      // `#perf`, `#settings`, `#logs` in the address open that view.
+      const asked = document.querySelector(`nav button[data-tab="${location.hash.slice(1)}"]`);
+      if (asked) asked.click();
+    } catch (error) {
+      status(error.message, true);
+      setTimeout(() => location.reload(), 3000);
+    }
+  })();
+})();
+</script>
+</body>
+</html>

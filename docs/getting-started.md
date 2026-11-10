@@ -490,7 +490,8 @@ back on the same page, with the window where it was, and with the state of every
 that keeps one. `R` does the same with every state afresh, and `q` quits. Other keys look into
 the running application: `w` prints the widget tree, `p` outlines every widget, `i` opens the
 inspector, `o` and `b` switch the platform and the brightness, `P` shows what each frame
-costs, `s` saves a screenshot; `h` lists them all. A state keeps itself by saying what to keep,
+costs, `s` saves a screenshot, `v` opens [DevTools](guide/devtools.md) in the browser; `h`
+lists them all. A state keeps itself by saying what to keep,
 as text, and taking it back:
 
 ```rust

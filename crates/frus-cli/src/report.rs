@@ -147,6 +147,7 @@ pub(crate) fn warn(message: &str) {
 
 /// A line of the application's own log: its output, the phone's logcat, the browser's console.
 pub(crate) fn app_log(text: &str, error: bool) {
+    crate::devtools::remember(text, error);
     if is_machine() {
         event(
             "app.log",

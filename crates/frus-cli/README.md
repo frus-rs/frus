@@ -119,6 +119,7 @@ While it runs, keys drive it:
 | `o` | **switch the platform** the widgets behave as: Android, iOS, Windows, macOS, Linux, Fuchsia (debug builds) |
 | `b` | **switch the brightness**: light or dark, for an application with a theme for each |
 | `P` | the **performance panel**: what the last frame cost, building, laying out and painting, rendering, on the GPU, and two graphs of the last 90 frames — the interface and the drawing — against a 60 Hz frame's budget, late frames in red; the frame statistics in the log |
+| `v` | **DevTools** in the browser (debug builds): the live widget tree with each widget's box, layout style and semantics, a select mode that picks a widget by tapping it in the application, a chart of every frame's cost, the animation speed and the other switches, the log. Its address is printed when the application starts (`app.devTools` with `--machine`); its protocol, which other clients can use to find, tap, scroll, type and take screenshots, is in `docs/guide/devtools.md` |
 
 The keys that look into the application reach it through the channel it reports on, and it
 carries them out on its next frame: a socket on a desktop, a file in its own storage on Android

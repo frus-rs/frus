@@ -28,6 +28,8 @@ const COMMANDS_PATH: &str = "/__frus/commands";
 const SCREENSHOT_PATH: &str = "/__frus/screenshot";
 /// Where the page asks for the latest hot-reload patch (`frus run --hot`, milestone 679).
 const PATCH_PATH: &str = "/__frus/patch";
+/// Where the page posts DevTools' answers (milestone 788).
+const DEVTOOLS_PATH: &str = "/__frus/devtools";
 
 /// The script added to the page under `frus run --hot`: it asks for the latest patch until the
 /// shell can take one (`window.__frusPatch`), then for each newer one. A page that loads asks
@@ -87,6 +89,9 @@ const CONSOLE_BRIDGE: &str = r#"<script>(() => {
   // The page's picture, which the application reads from its canvas on `s`.
   window.__frusScreenshot = (data) =>
     fetch('/__frus/screenshot', { method: 'POST', body: data }).catch(() => {});
+  // DevTools' answers, which the shell hands here (milestone 788).
+  window.__frusDevtoolsReply = (answer) =>
+    fetch('/__frus/devtools', { method: 'POST', body: answer }).catch(() => {});
   // What the keys of `frus run` ask: the inspector, debug paint, a tree printed… The shell
   // defines `__frusCommand` once the application has started.
   setInterval(() => fetch('/__frus/commands', { cache: 'no-store' })
@@ -106,6 +111,8 @@ pub(crate) struct Server {
     screenshot_to: Arc<Mutex<Option<PathBuf>>>,
     /// The latest hot-reload patch (`frus run --hot`).
     pub patches: PatchSlot,
+    /// DevTools' answers, posted by the page (milestone 788).
+    answers: Arc<crate::devtools::Answers>,
 }
 
 impl Server {
@@ -127,6 +134,21 @@ impl Server {
     pub(crate) fn command(&self, command: &str) {
         if let Ok(mut queue) = self.commands.lock() {
             queue.push(command.to_string());
+        }
+    }
+
+    /// How DevTools reaches the page (milestone 788): its requests are commands, `devtools
+    /// <json>`, and the page posts the answers back.
+    pub(crate) fn relay(&self) -> crate::devtools::Relay {
+        let commands = self.commands.clone();
+        crate::devtools::Relay::Lines {
+            send: Box::new(move |line: &str| {
+                commands
+                    .lock()
+                    .map(|mut queue| queue.push(line.to_string()))
+                    .is_ok()
+            }),
+            answers: self.answers.clone(),
         }
     }
 }
@@ -201,6 +223,8 @@ pub(crate) fn start_site(site: Site, port: u16) -> Result<Server, String> {
     let shots = screenshot_to.clone();
     let patches = PatchSlot::default();
     let patch_slot = patches.clone();
+    let answers = Arc::new(crate::devtools::Answers::default());
+    let answered = answers.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
             let site = site.clone();
@@ -211,8 +235,17 @@ pub(crate) fn start_site(site: Site, port: u16) -> Result<Server, String> {
             let queued = queued.clone();
             let shots = shots.clone();
             let patch_slot = patch_slot.clone();
+            let answered = answered.clone();
             std::thread::spawn(move || {
-                let _ = handle(stream, &site, &build, &queued, &shots, &patch_slot);
+                let _ = handle(
+                    stream,
+                    &site,
+                    &build,
+                    &queued,
+                    &shots,
+                    &patch_slot,
+                    &answered,
+                );
             });
         }
     });
@@ -223,6 +256,7 @@ pub(crate) fn start_site(site: Site, port: u16) -> Result<Server, String> {
         commands,
         screenshot_to,
         patches,
+        answers,
     })
 }
 
@@ -234,6 +268,7 @@ fn handle(
     commands: &Mutex<Vec<String>>,
     screenshot_to: &Mutex<Option<PathBuf>>,
     patches: &PatchSlot,
+    answers: &crate::devtools::Answers,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
@@ -272,6 +307,13 @@ fn handle(
         if let (Some(png), Some(target)) = (png, target) {
             std::fs::write(&target, png)?;
         }
+        return respond(&mut stream, "204 No Content", "text/plain", b"");
+    }
+    if method == "POST" && path == DEVTOOLS_PATH {
+        // A screenshot of a large canvas is a few megabytes as base64.
+        let mut body = vec![0; length.min(64 << 20)];
+        reader.read_exact(&mut body)?;
+        answers.deliver(&String::from_utf8_lossy(&body));
         return respond(&mut stream, "204 No Content", "text/plain", b"");
     }
     if path == BUILD_PATH {

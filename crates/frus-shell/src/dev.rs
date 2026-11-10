@@ -118,7 +118,15 @@ impl DevChannel {
         let _ = stream.set_nodelay(true);
         // What `frus run` asks: `save <file>`, before it stops the application.
         if let Ok(reading) = stream.try_clone() {
+            // Where DevTools' answers are written: the same socket.
+            #[cfg(debug_assertions)]
+            let reading_writer = reading.try_clone();
             std::thread::spawn(move || {
+                #[cfg(debug_assertions)]
+                let Ok(reading_writer) = reading_writer
+                else {
+                    return;
+                };
                 for line in BufReader::new(reading).lines().map_while(Result::ok) {
                     if let Some(path) = line.strip_prefix("save ") {
                         if let Ok(mut slot) = SAVE_TO.lock() {
@@ -127,6 +135,26 @@ impl DevChannel {
                         crate::dev_commands::wake();
                     } else if let Some(command) = line.strip_prefix("do ") {
                         crate::dev_commands::push_command(command);
+                    } else if let Some(body) = line.strip_prefix("devtools ") {
+                        // A request of DevTools', answered on the same socket (milestone 788).
+                        #[cfg(debug_assertions)]
+                        if let Ok(writer) = reading_writer.try_clone() {
+                            crate::devtools::push(crate::devtools::Request::new(
+                                body.to_string(),
+                                move |answer| {
+                                    let mut writer = writer;
+                                    let _ = writer.write_all(
+                                        format!(
+                                            "devtools {answer}
+"
+                                        )
+                                        .as_bytes(),
+                                    );
+                                },
+                            ));
+                        }
+                        #[cfg(not(debug_assertions))]
+                        let _ = body;
                     }
                 }
             });

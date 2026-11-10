@@ -17,6 +17,22 @@ use std::io::{IsTerminal, Read};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 
+/// Where a key pressed by something other than the keyboard goes: DevTools' reload button.
+static PRESSED: Mutex<Option<Sender<char>>> = Mutex::new(None);
+
+/// Presses `key` as if it had been typed: DevTools asks for a reload this way (milestone 788).
+pub(crate) fn press(key: char) {
+    if let Some(send) = PRESSED.lock().ok().and_then(|slot| slot.clone()) {
+        let _ = send.send(key);
+    }
+}
+
+fn pressed_too(send: &Sender<char>) {
+    if let Ok(mut slot) = PRESSED.lock() {
+        *slot = Some(send.clone());
+    }
+}
+
 /// The keys, heard from the start of a run (see [`start`]) and handed to it once its
 /// application is up.
 static EARLY: Mutex<Option<Receiver<char>>> = Mutex::new(None);
@@ -50,6 +66,7 @@ fn open() -> Receiver<char> {
         return commands();
     }
     let (send, receive) = mpsc::channel();
+    pressed_too(&send);
     let raw = std::io::stdin().is_terminal() && terminal::raw();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin().lock();
@@ -78,6 +95,7 @@ fn open() -> Receiver<char> {
 /// An editor's commands, as the keys they stand for.
 fn commands() -> Receiver<char> {
     let (send, receive) = mpsc::channel();
+    pressed_too(&send);
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in std::io::BufRead::lines(stdin.lock()).map_while(Result::ok) {

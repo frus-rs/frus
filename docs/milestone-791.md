@@ -253,8 +253,8 @@ What the first part left, taken up again:
   own lockfile has) when the application asks for the template's `wasm-bindgen = "0.2"`.
 - **Desktop hot engine on its own port**, as before, and the shadow per device.
 
-How it was tested, second part (`cargo test -p frus-cli`: 167 pass; the VS Code extension's
-tests: 29 pass, the new one included):
+How it was tested, second part (`cargo test -p frus-cli`: 172 pass with master merged in; the VS Code extension's
+tests: 30 pass, the new one included):
 
 - `q` during the hot builds of `-d windows -d edge` stopped both runs ("Stopped before the
   application was up", twice); `a_build_is_stopped_when_asked` ends a 60-second process within a
