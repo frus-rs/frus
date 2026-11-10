@@ -211,28 +211,6 @@ projects made by the new `frus create` against this checkout:
 
 ## Not done
 
-- **`autoVerify` in the APK cargo-apk builds.** cargo-apk 0.10's intent filter has no field for
-  it, so an `https` filter in a `frus build apk` package is not verified: Android before 12 asks
-  which application opens the link, Android 12 and later opens it in the browser until the person
-  turns the link on in the application's settings ("Open by default"). The hot-reload engine's
-  manifest, which frus writes, has it.
-- **Windows and Linux scheme registration.** A scheme is registered when an application is
-  installed (a registry key, a `.desktop` file); frus records the scheme in the manifest for an
-  installer to read, and does not write to the registry itself.
-- **`--template package|plugin`.** frus has no plugin system for a template to start from, and a
-  package template would be a library crate with no platform files; left for when there is a
-  need.
-- **iOS** in `--platforms`: refused with the reason until the iOS shell exists.
-- **The size of a macOS program** is not broken down: Mach-O's symbol table has no sizes, and no
-  Mac was at hand to check a reader against; `frus size` says the format is not read.
-- **The web's size is the module before wasm-bindgen**, which trims a little more.
-- **Hot reload on several devices was not run end to end.** Each device's run keeps its own
-  shadow package and build (`FRUS_RUN_SESSION`), which is what lets one save patch every device,
-  but the checks above used `--no-hot` (reload by rebuilding): a first hot build per device in a
-  fresh directory was more than this machine could fit in the session. Hot reload on one device
-  is unchanged, apart from the desktop engine's own free port.
-- **`q` while a device's run is still building** is acted on once its application is up: a run
-  reads the commands sent to it only from then on. Ctrl+C ends everything at once.
-- **`-d all` leaves out the browsers**, as said above; `-d all -d edge` adds one.
-- **The editor extensions** start one run per debug session; a launch with `deviceId: "all"`
-  works through the parent run, but the session ends when the first device's run ends.
+See "Second part" below: most of what was left here was done after the first pull request.
+
+FOLLOWUP

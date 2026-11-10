@@ -434,6 +434,18 @@ fn android_manifest(config_changes: &str, deeplink: Option<&crate::platforms::De
 /// program built from `src/lib.rs`, and its relative paths made absolute from `root`.
 /// The program is named after the library (`my_app`, not `my-app`): on the web the engine names
 /// the page's module after it, and the page loads `pkg/<library>.js`.
+/// The wasm-bindgen the hot-reload engine reads the output of, with the crates that must match
+/// it: the engine parses the module wasm-bindgen writes, and the output of 0.2.130 (the newest
+/// when milestone 791 was written) imports an exception tag its parser refuses ("exceptions
+/// proposal not enabled"), so a new application's first hot web build failed. The shadow package
+/// pins them; the application's own builds keep what its lockfile says.
+const ENGINE_WASM_CRATES: [(&str, &str); 4] = [
+    ("wasm-bindgen", "0.2.127"),
+    ("js-sys", "0.3.104"),
+    ("web-sys", "0.3.104"),
+    ("wasm-bindgen-futures", "0.4.77"),
+];
+
 pub(crate) fn shadow_manifest(manifest: &str, root: &Path, bin: &str) -> String {
     let mut out = String::from(
         "# Written by `frus run --hot` (milestone 670) from the application's own manifest:\n\
@@ -448,6 +460,17 @@ pub(crate) fn shadow_manifest(manifest: &str, root: &Path, bin: &str) -> String 
             has_workspace |= trimmed == "[workspace]";
         }
         if skipping {
+            continue;
+        }
+        // The template's `wasm-bindgen = "0.2"`: the versions the engine reads, instead of the
+        // newest. A version the application asks for itself is left as it is.
+        if trimmed == "wasm-bindgen = \"0.2\"" {
+            out.push_str(
+                "# Pinned by `frus run --hot`: the wasm-bindgen whose output the hot-reload engine reads.\n",
+            );
+            for (name, version) in ENGINE_WASM_CRATES {
+                out.push_str(&format!("{name} = \"={version}\"\n"));
+            }
             continue;
         }
         out.push_str(&absolute_paths(line, root));
@@ -927,6 +950,22 @@ resources = "res"
         // The application's own files of these names are never linked over the written ones.
         assert!(is_kept_out(ANDROID_MANIFEST));
         std::fs::remove_dir_all(&shadow).unwrap();
+    }
+
+    /// **A new application's hot web build** (milestone 791): its `wasm-bindgen = "0.2"` resolves
+    /// to the newest, whose output the engine cannot read; the shadow pins the engine's.
+    #[test]
+    fn the_shadow_pins_the_wasm_bindgen_the_engine_reads() {
+        let manifest = "[package]\nname = \"a\"\n\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nwasm-bindgen = \"0.2\"\n";
+        let out = shadow_manifest(manifest, Path::new("/apps/a"), "a");
+        assert!(out.contains("wasm-bindgen = \"=0.2.127\"\n"), "{out}");
+        assert!(out.contains("js-sys = \"=0.3.104\"\n"));
+        assert!(!out.contains("wasm-bindgen = \"0.2\"\n"));
+        // The application's own choice stays.
+        let own = manifest.replace("\"0.2\"", "\"0.2.130\"");
+        assert!(
+            shadow_manifest(&own, Path::new("/apps/a"), "a").contains("wasm-bindgen = \"0.2.130\"")
+        );
     }
 
     #[test]

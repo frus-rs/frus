@@ -855,11 +855,25 @@ fn locate_errors(project: &Project, shadow: &Path, target: &Path) {
         .current_dir(shadow)
         .env("CARGO_TARGET_DIR", target)
         .stdin(Stdio::null())
-        .output();
-    let Ok(output) = output else {
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn();
+    let Ok(mut check) = output else {
         return;
     };
-    let text = String::from_utf8_lossy(&output.stderr);
+    // Read aside, and the check waited for the way a build is: `q` stops it too. A check of a
+    // whole package can take minutes, and `q` was not heard during it.
+    let reader = check.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+            text
+        })
+    });
+    if crate::cargo::wait_or_cancel(&mut check).is_err() {
+        return;
+    }
+    let text = reader.and_then(|r| r.join().ok()).unwrap_or_default();
     let located: Vec<String> = text
         .lines()
         .filter_map(|line| crate::hot::located_error(line, shadow, &project.root))

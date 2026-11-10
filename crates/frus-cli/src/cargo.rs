@@ -28,12 +28,17 @@ pub(crate) fn cancelled() -> bool {
 }
 
 /// Waits for `child`, or stops it — and the compilers it started — once `q` is pressed.
-fn wait_or_cancel(child: &mut Child) -> Result<ExitStatus, String> {
+pub(crate) fn wait_or_cancel(child: &mut Child) -> Result<ExitStatus, String> {
+    wait_or(child, &CANCEL)
+}
+
+/// Waits for `child`, or stops it once `cancel` is set.
+fn wait_or(child: &mut Child, cancel: &AtomicBool) -> Result<ExitStatus, String> {
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             return Ok(status);
         }
-        if cancelled() {
+        if cancel.load(Ordering::SeqCst) {
             stop_tree(child);
             return Err(CANCELLED.into());
         }
@@ -339,6 +344,48 @@ pub(crate) fn run(command: &mut Command) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`q` stops a build** (milestone 791): a process that would run for a minute is ended
+    /// within a moment of the flag, and the wait says it was stopped; one left alone ends as it
+    /// does.
+    #[test]
+    fn a_build_is_stopped_when_asked() {
+        let long = || {
+            let mut command = if cfg!(windows) {
+                let mut c = Command::new("ping");
+                c.args(["-n", "60", "127.0.0.1"]);
+                c
+            } else {
+                let mut c = Command::new("sleep");
+                c.arg("60");
+                c
+            };
+            command.stdout(Stdio::null()).spawn().unwrap()
+        };
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let mut child = long();
+        let setter = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            setter.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(wait_or(&mut child, &flag), Err(CANCELLED.to_string()));
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(child.try_wait().unwrap().is_some(), "the process is gone");
+
+        let quick = if cfg!(windows) {
+            Command::new("cmd").args(["/C", "exit 0"]).spawn()
+        } else {
+            Command::new("true").spawn()
+        };
+        let status = wait_or(&mut quick.unwrap(), &AtomicBool::new(false)).unwrap();
+        assert!(status.success());
+    }
 
     #[test]
     fn the_executable_comes_from_the_artifact_message() {
