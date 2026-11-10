@@ -41,7 +41,10 @@ any release may break.
   `versionCode`, the macOS `Info.plist` and the installers. New artifacts: `frus build
   appbundle` (an Android App Bundle made with bundletool, fetched on first use, signed with the
   release key), `frus build apk --split-per-abi`, and `frus build installer` (a per-user NSIS
-  setup program on Windows, a `.deb` on Linux, a disk image on macOS). Guide page:
+  setup program on Windows, a `.deb` on Linux, a disk image on macOS; `--format msix`, `rpm` or
+  `appimage` for the others). On Windows, the program, the setup program and the MSIX package
+  are signed with `signtool` when a certificate is configured
+  (`[package.metadata.frus.windows.signing]` or `FRUS_WINDOWS_CERTIFICATE*`). Guide page:
   `docs/guide/build-variants.md`.
 - **DevTools** (J788). `frus run` serves DevTools on `localhost` for a debug build, and `v` opens
   it in the browser (in VS Code, **frus: Open DevTools**; with `--machine`, the `app.devTools`

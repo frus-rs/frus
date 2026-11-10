@@ -16,7 +16,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::cargo;
 use crate::project::Project;
 
 /// The NuGet package of the SDK's build tools fetched when no Windows SDK is installed.
@@ -312,7 +311,7 @@ pub(crate) fn appx_manifest(
     let name = xml(&project.display_name());
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
-<!-- Written by `frus build installer --format msix`. -->
+<!-- Written by frus build installer, as an MSIX package. -->
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
@@ -417,13 +416,32 @@ pub(crate) fn msix(
     ));
     let _ = std::fs::remove_file(&package);
     let makeappx = sdk_tool("makeappx.exe")?;
-    let mut pack = Command::new(makeappx);
-    pack.args(["pack", "/o", "/d"])
+    // makeappx prints every file it packs, and its errors in the same stream: kept quiet, and
+    // shown when it fails.
+    let packed = Command::new(&makeappx)
+        .args(["pack", "/o", "/d"])
         .arg(&layout)
         .arg("/p")
         .arg(&package)
-        .stdout(std::process::Stdio::null());
-    cargo::run(&mut pack)?;
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", makeappx.display()))?;
+    if !packed.status.success() {
+        let text = String::from_utf8_lossy(&packed.stdout);
+        let errors: Vec<&str> = text.lines().filter(|line| line.contains("error")).collect();
+        return Err(format!(
+            "makeappx could not make the package from {}:
+{}",
+            layout.display(),
+            if errors.is_empty() {
+                text.trim().to_string()
+            } else {
+                errors.join(
+                    "
+",
+                )
+            }
+        ));
+    }
     sign(&signing, &package)?;
     Ok(package)
 }
@@ -558,6 +576,11 @@ mod tests {
         assert!(manifest
             .contains(r#"Executable="my_app.exe" EntryPoint="Windows.FullTrustApplication""#));
         assert!(manifest.contains(r#"<rescap:Capability Name="runFullTrust" />"#));
+        // XML forbids `--` inside a comment: makeappx refuses such a manifest.
+        for comment in manifest.split("<!--").skip(1) {
+            let body = comment.split("-->").next().unwrap();
+            assert!(!body.contains("--"), "{body}");
+        }
         assert_eq!(identity_name("ab"), "ab-app");
         assert_eq!(publisher_display_name("CN=Acme Ltd, O=Acme"), "Acme Ltd");
         assert_eq!(

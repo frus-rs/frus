@@ -174,15 +174,30 @@ hot reload off for that run with a message: the hot-reload engine builds its own
 - **Windows: NSIS.** It produces a single setup program, installs per user (into
   `%LOCALAPPDATA%\Programs`, Start menu shortcut, uninstaller registered under `HKCU`), needs no
   administrator to make or to install, and its compiler is a 2.5 MB zip that runs where it is
-  unpacked, fetched the first time. MSIX was set aside: a package only installs once its
-  signing certificate is trusted, which needs an administrator or a bought certificate, and
-  testing it here would need both. WiX/MSI needs a .NET tool or a larger toolset, and a
-  per-user MSI is awkward. The setup program carries DirectX's shader compiler DLLs beside the
-  program, as `frus build desktop` places them.
+  unpacked, fetched the first time. WiX/MSI was not made: it needs a .NET tool or a larger
+  toolset, and a per-user MSI is awkward. The setup program carries DirectX's shader compiler
+  DLLs beside the program, as `frus build desktop` places them.
+- **Windows: MSIX** (`--format msix`, `windows_package.rs`): the program, the DLLs and the
+  launcher icons (44, 150 px and the store logo, scaled from the application's icon) in a
+  layout with an `AppxManifest.xml` (identity from the Android package or the crate name,
+  version `x.y.z.<build number>`, `runFullTrust`), packed by `makeappx` and signed by
+  `signtool`. Both come with the Windows SDK; when none is installed, the SDK's build tools
+  (a NuGet package, about 22 MB) are fetched into `~/.frus/tools`. A package must be signed, so
+  `--format msix` without a certificate is an error saying how to configure one. The
+  publisher must be the certificate's subject: read from the certificate when not given.
+- **Windows signing**: one configuration, `[package.metadata.frus.windows.signing]` or the
+  `FRUS_WINDOWS_*` variables (a `.pfx` and its password from the environment only, or a
+  thumbprint in the user's store; a timestamp server; the publisher). When configured, the
+  program is signed before it is packaged, then the setup program or the package.
 - **Linux: a `.deb`**, written by the CLI itself (an `ar` archive of `debian-binary`,
   `control.tar.gz`, `data.tar.gz`, the tarballs made with the system's `tar`), so it needs no
-  `dpkg-deb`: the program in `/usr/bin`, a desktop entry, the launcher icon. AppImage was not
-  done (it needs `appimagetool` and a runtime).
+  `dpkg-deb`: the program in `/usr/bin`, a desktop entry, the launcher icon.
+- **Linux: an `.rpm`** (`--format rpm`): the same tree, described by a spec `rpmbuild` packs
+  (the version's `-` becomes `~`; the build number is the release). rpmbuild is not fetched: it
+  comes from the distribution, and the error says which package to install.
+- **Linux: an AppImage** (`--format appimage`): an AppDir (`AppRun`, the desktop entry, the
+  icon, `usr/bin`) made into one file by `appimagetool` 1.9.1 and its runtime, both fetched the
+  first time.
 - **macOS: a disk image** with `hdiutil`, holding the `.app` frus already makes (whose
   `Info.plist` now carries the flavor's name, `--build-name` and `--build-number`).
 
@@ -233,28 +248,62 @@ Real runs, on a project made by `frus create` against this branch (`vapp`, flavo
   `/usr/bin/vapp`, the desktop entry and the 192 px icon; `dpkg -i` installed it, the installed
   program drew its first frame (llvmpipe), `apt-get remove` took it away. WSL had no network
   that day: built offline from `cargo vendor`.
+- **Android, on the test phone** (Huawei STK-L21): the App Bundle installed through bundletool
+  (`build-apks` for the phone's spec, then `adb install-multiple`) and the arm64 split APK, each
+  started and read `mode=release flavor=dev API_URL=https://dev.example.com
+  version=1.4.0+23`. The profile APK
+  of the `prod` flavor (`frus build apk --profile --flavor prod --build-name 3.0.0
+  --build-number 12`, 41 MB for two ABIs) read `mode=profile flavor=prod
+  API_URL=https://example.com version=3.0.0+12`, and logcat carried the `frus::frames` line
+  (59 fps) with no variable set; idle, the process used no CPU (its CPU time stayed at 9 s) and
+  132 MB PSS. Every test package was uninstalled afterwards.
+- **The web**: `frus build web --flavor dev --define API_URL=https://web.example.com
+  --build-name 4.0.0 --build-number 40`, served locally and opened in headless Edge: the page
+  read the flavor, the define and the version.
+- **MSIX**: `frus build installer --format msix --flavor prod --build-name 3.2.0
+  --build-number 9`, with a self-signed test certificate (`CN=frus test signing`) given by
+  thumbprint, fetched the SDK's build tools, signed `vapp.exe` and wrote `vapp-3.2.0.msix`
+  (17.6 MB) signed by that certificate. The first run failed: the manifest's comment held
+  `--format`, and XML forbids `--` inside a comment; makeappx's message was thrown away, so frus
+  only said "makeappx failed". Both fixed: the comment, and makeappx's error lines are now part
+  of frus's message (a unit test checks the comments). Installing the signed file was refused,
+  as expected, since the test certificate is not trusted; trusting it needs a change to the
+  machine's certificate stores, which was not done. The same layout was registered instead
+  (`Add-AppxPackage -Register`, developer mode): package `com.frustest.vapp` 3.2.0.9, publisher
+  `CN=frus test signing`; started through its application identity, it read `mode=release
+  flavor=prod … version=3.2.0+9`; `Remove-AppxPackage` took it away.
+- **Signed setup program**: the same command with `--format nsis` signed `vapp.exe` and
+  `vapp-3.2.0-setup.exe`; both carry the test certificate's signature, the installed program
+  too. `/S` install and uninstall as before.
+- **`.rpm` and AppImage** (WSL, Ubuntu, offline from `cargo vendor`): `frus build installer
+  --format rpm --flavor prod --build-name 3.1.0 --build-number 7` wrote
+  `vapp-3.1.0-7.x86_64.rpm` (8.7 MB): `rpm -qip` reads name `vapp`, version 3.1.0, release 7,
+  and the files `/usr/bin/vapp`, the desktop entry and the 192 px icon. `--format appimage`
+  fetched nothing (appimagetool and its runtime placed beforehand, WSL having no network) and
+  wrote `vapp-3.1.0-x86_64.AppImage` (8.9 MB); started, it drew its first frame (llvmpipe) and
+  was still running 20 s later. The `.deb` of the same run: version `3.1.0+7`, the same three
+  files.
+- **The example projects**: the eight projects under `frus-examples` (`cargo test --no-run`),
+  the gallery's wasm build and forge compile against this branch.
+- **macOS**: `cargo check -p frus-cli --target aarch64-apple-darwin` passes; the `Info.plist`
+  version and the `hdiutil` command line are unit-tested.
 - `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`;
   `cargo clippy -p frus-shell -p frus --no-deps --target aarch64-linux-android -- -D warnings`;
-  `cargo test -p frus-cli` (150), `-p frus-shell --lib` (547), `-p frus --doc` (69): all pass.
+  `cargo test -p frus-cli` (194), `-p frus-shell --lib` (547), `-p frus --doc` (69): all pass.
 
 ## Not done
 
-- **Installing the bundle and the split APKs on a device.** The test phone (and the two
-  emulators) dropped off adb before the install, and did not come back while this was written:
-  the packages were checked with `aapt2 dump badging`, `apksigner` and `jarsigner`, not
-  installed. A profile or flavored APK was not run on Android either.
 - **macOS**: the disk image and the `Info.plist` version are written by code that was not run
-  (no Mac here); only the unit tests cover them.
-- **The web**: defines reach the `.wasm` through the build's environment like any other build,
-  but no web build was run with them.
-- **Linux**: the installed program was seen to draw a frame; its text (flavor, version) was not
-  read.
-- **The example projects** (outside the workspace) were not rebuilt. `frus::main!` now records
-  the build information; a project made by `frus create` builds with it, the eight examples were
-  not compiled against this branch.
-- **Signing installers**: neither the setup program nor the disk image is signed; SmartScreen
-  and Gatekeeper warn. The Windows program itself has no version resource.
-- **Other formats**: MSIX, MSI, AppImage, `.rpm`, Flatpak and Snap are not made.
+  (no Mac here); the CLI compiles for macOS and the unit tests cover them. The disk image is not
+  signed or notarized: Gatekeeper warns.
+- **Installing the signed MSIX file itself**: the self-signed test certificate is not trusted
+  on this machine, and trusting it was not done; the package was checked by registering the same
+  layout in developer mode. With a certificate from a certificate authority, the file installs
+  as is; that was not tried (no such certificate here).
+- **Linux**: the installed `.deb` program was seen to draw a frame; its text (flavor, version)
+  was not read.
+- **The Windows program has no version resource** (the template has no build script).
+- **Other formats**: MSI, Flatpak and Snap are not made.
 - **Hot reload with a flavor that changes the Android package** stays off (restarts instead):
   the hot-reload engine builds its own package.
 - **iOS**: flavors and versions do not reach an iOS package; frus does not package for iOS yet.

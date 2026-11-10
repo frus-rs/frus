@@ -137,6 +137,7 @@ frus build appbundle              # target/release/apk/<name>.aab, for a store
 frus build web
 frus build desktop
 frus build installer              # Windows: a setup program; Linux: a .deb; macOS: a .dmg
+frus build installer --format msix # also msix (Windows), rpm or appimage (Linux)
 ```
 
 **The App Bundle** is what Google Play takes. `frus` builds the libraries with cargo-apk as for
@@ -153,17 +154,29 @@ java -jar ~/.frus/tools/bundletool-all-1.18.3.jar install-apks --apks=app.apks
 **One APK per processor** is smaller to download than one carrying every processor's library.
 The manifest's `build_targets` say which.
 
-**The installers** need no administrator, to be made or installed:
+**The installers** need no administrator to be made. `--format` picks another form than the
+system's default:
 
-- *Windows*: a setup program made with NSIS (fetched the first time, about 2.5 MB). It installs
-  for the current user into `%LOCALAPPDATA%\Programs`, adds a Start menu entry and an
-  uninstaller to the system's list, and carries DirectX's fast shader compiler beside the
+- *Windows*: a setup program made with NSIS (the default; fetched the first time, about 2.5 MB).
+  It installs for the current user into `%LOCALAPPDATA%\Programs`, adds a Start menu entry and
+  an uninstaller to the system's list, and carries DirectX's fast shader compiler beside the
   program. `setup.exe /S` installs without a question.
-- *Linux*: a `.deb` holding the program in `/usr/bin`, a desktop entry and the launcher icon.
-  `sudo apt install ./<name>_<version>_amd64.deb`.
+- *Windows, `--format msix`*: an MSIX package, made with the Windows SDK's `makeappx` (the SDK's
+  build tools are fetched the first time, about 22 MB, when no SDK is installed). A package
+  must be signed (see below), and Windows installs it only once its certificate is trusted: a
+  certificate bought from a certificate authority, or, for a test certificate, one placed in the
+  machine's Trusted People by an administrator.
+- *Linux*: a `.deb` (the default) holding the program in `/usr/bin`, a desktop entry and the
+  launcher icon. `sudo apt install ./<name>_<version>_amd64.deb`.
+- *Linux, `--format rpm`*: the same files in an `.rpm`, made with `rpmbuild` (`sudo dnf install
+  rpm-build`, or `sudo apt install rpm`).
+- *Linux, `--format appimage`*: one file that runs on most distributions, made with
+  `appimagetool` (fetched the first time).
 - *macOS*: the `.app` in a disk image with a link to Applications.
 
-None of them is signed: Windows SmartScreen and macOS Gatekeeper warn the first time.
+On Windows, the program, the setup program and the MSIX package are signed when a certificate
+is configured (see [Signing](#signing)); otherwise SmartScreen warns the first time. The disk
+image is not signed: Gatekeeper warns.
 
 ## Signing
 
@@ -190,3 +203,19 @@ The key's password is the keystore's. The bundle is signed with the first privat
 keystore. A profile build is signed with `[package.metadata.android.signing.profile]` (or
 `CARGO_APK_PROFILE_KEYSTORE`) when there is one, and with the debug key otherwise; `frus run
 --release` falls back to the debug key too, since it only installs the package.
+
+On Windows, `frus build installer` signs the program, the setup program and the MSIX package
+with `signtool` (from the Windows SDK, or its build tools fetched the first time) when a
+certificate is configured, in the environment or in the manifest:
+
+```toml
+[package.metadata.frus.windows.signing]
+certificate = "signing.pfx"        # a certificate file, relative to Cargo.toml; or
+# thumbprint = "7FB9…"             # a certificate of your store (Cert:\CurrentUser\My)
+timestamp_url = "http://timestamp.digicert.com"   # so the signature outlives the certificate
+# publisher = "CN=Example Ltd"     # the MSIX publisher; read from the certificate when absent
+```
+
+The variables are `FRUS_WINDOWS_CERTIFICATE`, `FRUS_WINDOWS_CERTIFICATE_THUMBPRINT`,
+`FRUS_WINDOWS_TIMESTAMP_URL` and `FRUS_WINDOWS_PUBLISHER`. The certificate file's password is
+read from `FRUS_WINDOWS_CERTIFICATE_PASSWORD` only, never from the manifest.

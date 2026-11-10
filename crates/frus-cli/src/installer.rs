@@ -718,7 +718,7 @@ fn appimage_tools() -> Result<(PathBuf, PathBuf), String> {
     let runtime = root.join(format!("runtime-{APPIMAGE_RUNTIME_VERSION}-{arch}"));
     if !tool.is_file() || !runtime.is_file() {
         crate::report::say(&format!(
-            "Fetching appimagetool {APPIMAGETOOL_VERSION}, which makes AppImages (about 10 MB, \
+            "Fetching appimagetool {APPIMAGETOOL_VERSION}, which makes AppImages (about 16 MB, \
              once)…"
         ));
         crate::setup::download(
