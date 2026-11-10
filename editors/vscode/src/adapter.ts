@@ -9,6 +9,8 @@
 //   restart (toolbar)     → app.restart with fullRestart: true
 //   `hotReload` (custom)  → app.restart with fullRestart: false
 //   `key` (custom)        → app.key: any other key of the run's, `{ key: "p" }`
+//   app.devTools          → its address kept, said in the console, and a `frus.devTools` event
+//   `devTools` (custom)   → answered with that address, `{ uri }`
 //   disconnect/terminate  → app.stop, then the process is ended if it lingers
 //   app.stop              → its error, if any, in the console
 //   exit                  → the exit code (and, on a failure, the last error), then terminated
@@ -95,6 +97,8 @@ export class FrusDebugAdapter {
   private nextCommandId = 1;
   private ended = false;
   private ending = new RunEnding();
+  /** Where the run serves DevTools, once it says. */
+  private devTools: string | undefined;
 
   constructor(private readonly spawner: Spawner = defaultSpawner) {}
 
@@ -159,6 +163,9 @@ export class FrusDebugAdapter {
         this.key(String((message.arguments as { key?: string } | undefined)?.key ?? ""));
         respond();
         break;
+      case "devTools":
+        respond({ uri: this.devTools });
+        break;
       case "disconnect":
       case "terminate":
         this.stop();
@@ -218,6 +225,11 @@ export class FrusDebugAdapter {
         break;
       case "app.started":
         this.output("The application is running. Saving a Rust file reloads it.\n", "console");
+        break;
+      case "app.devTools":
+        this.devTools = String(params.uri);
+        this.output(`DevTools: ${this.devTools} (frus: Open DevTools)\n`, "console");
+        this.event("frus.devTools", { uri: this.devTools });
         break;
       case "app.restarted": {
         const what = params.fullRestart ? "Restarted" : "Reloaded";

@@ -193,6 +193,19 @@ test("end to end with the real frus", { skip: !frusExe || !app, timeout: 1_200_0
   assert.ok(logs > 0, "the application's log reached the Debug Console");
 });
 
+test("the address of DevTools is kept, said, and handed to the extension", async () => {
+  const { frus, messages, request } = session();
+  request("launch", { frus: "frus", cwd: "." });
+  request("devTools");
+  assert.equal(messages.filter((m) => m.command === "devTools").pop().body.uri, undefined);
+  frus.say({ event: "app.devTools", params: { appId: "a", uri: "http://127.0.0.1:9100/?token=t" } });
+  await tick();
+  assert.ok(outputs(messages, "console").join("").includes("DevTools: http://127.0.0.1:9100/?token=t"));
+  assert.equal(messages.find((m) => m.event === "frus.devTools").body.uri, "http://127.0.0.1:9100/?token=t");
+  request("devTools");
+  assert.equal(messages.filter((m) => m.command === "devTools").pop().body.uri, "http://127.0.0.1:9100/?token=t");
+});
+
 test("the other keys of the run go to it by their letter", async () => {
   const { frus, request } = session();
   request("launch", { frus: "frus", cwd: "." });

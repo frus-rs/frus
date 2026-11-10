@@ -64,6 +64,15 @@ pub(crate) fn start() -> Option<String> {
     let _ = window.add_event_listener_with_callback("pagehide", keep.as_ref().unchecked_ref());
     keep.forget();
     let command = Closure::<dyn FnMut(String)>::new(|command: String| {
+        // A request of DevTools', answered through the page (milestone 788).
+        #[cfg(debug_assertions)]
+        if let Some(body) = command.strip_prefix("devtools ") {
+            crate::devtools::push(crate::devtools::Request::new(
+                body.to_string(),
+                devtools_reply,
+            ));
+            return;
+        }
         crate::dev_commands::push_command(&command);
     });
     let _ = js_sys::Reflect::set(&window, &"__frusCommand".into(), command.as_ref());
@@ -99,6 +108,30 @@ pub(crate) fn send_screenshot(window: &winit::window::Window) {
         }
         None => log::warn!(target: "frus::dev", "this page is not served by frus run"),
     }
+}
+
+/// Hands DevTools' answer to the page's `window.__frusDevtoolsReply`, which posts it to `frus
+/// run` (milestone 788).
+#[cfg(debug_assertions)]
+fn devtools_reply(answer: String) {
+    let Some(page) = web_sys::window() else {
+        return;
+    };
+    let reply = js_sys::Reflect::get(&page, &"__frusDevtoolsReply".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    if let Some(reply) = reply {
+        let _ = reply.call1(&page, &answer.into());
+    }
+}
+
+/// The canvas as a PNG, base64, without the `data:` URL's prefix: DevTools' screenshot
+/// (milestone 788). Read in the task that drew it, as [`send_screenshot`] does.
+#[cfg(debug_assertions)]
+pub(crate) fn canvas_png(window: &winit::window::Window) -> Option<String> {
+    use winit::platform::web::WindowExtWebSys;
+    let data = window.canvas()?.to_data_url().ok()?;
+    data.split_once("base64,").map(|(_, png)| png.to_string())
 }
 
 /// After a frame: the states as they are now, for the reload that may come.

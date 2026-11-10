@@ -73,6 +73,16 @@ impl Why {
     fn has(self, other: Why) -> bool {
         self.0 & other.0 != 0
     }
+
+    /// The reasons' names: `["app", "runtime"]`.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    pub(crate) fn names(self) -> Vec<&'static str> {
+        Self::NAMES
+            .iter()
+            .filter(|(why, _)| self.has(*why))
+            .map(|(_, name)| *name)
+            .collect()
+    }
 }
 
 impl std::ops::BitOr for Why {

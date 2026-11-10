@@ -65,6 +65,10 @@ impl Default for PlatformSettings {
 }
 use crate::gesture::{PointerEvent, PointerKind, PressRecognizer};
 
+/// DevTools' requests, answered against each frame (milestone 788).
+#[cfg(debug_assertions)]
+mod devtools;
+
 /// What a key asks of the clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ClipCommand {
@@ -1088,6 +1092,10 @@ pub struct App<A: Application> {
     inspector: bool,
     /// A tree dump to print on the next inspected frame.
     inspector_dump: bool,
+    /// What DevTools asked and holds: requests to answer, a widget selected, the frames
+    /// recorded (milestone 788).
+    #[cfg(debug_assertions)]
+    devtools: crate::devtools::DevTools,
     /// What the keys of `frus run` turned on or asked for (milestone 668); see
     /// [`App::take_dev_commands`].
     debug: DebugAsks,
@@ -1465,6 +1473,8 @@ impl<A: Application> App<A> {
             reported_overflows: std::cell::RefCell::new(std::collections::HashSet::new()),
             inspector: false,
             inspector_dump: false,
+            #[cfg(debug_assertions)]
+            devtools: Default::default(),
             debug: DebugAsks::default(),
             shift: false,
             ctrl: false,
@@ -1624,7 +1634,7 @@ impl<A: Application> App<A> {
     /// Puts `value` in the field `id`, for an assistive technology that set it (milestone 710):
     /// through the message typing it would have produced, as an autofill or an undo does — so
     /// a field that refuses typing refuses this too — with the caret after what arrived.
-    #[cfg(any(desktop, android, test, feature = "testing"))]
+    #[cfg(any(desktop, android, test, feature = "testing", debug_assertions))]
     fn set_value_for_assistive_tech(&mut self, id: WidgetId, value: String) {
         let message = self
             .tree
@@ -3273,99 +3283,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     dx = dy;
                     dy = 0.0;
                 }
-                // Over an interactive viewport the wheel **zooms**, anchored at the
-                // pointer and bounded by the widget's min and max scales.
-                if let Some((id, viewport)) = self
-                    .ui
-                    .as_ref()
-                    .and_then(|ui| ui.interactive_at(self.cursor))
-                {
-                    let (min, max) = self
-                        .tree
-                        .as_ref()
-                        .and_then(|tree| find_widget(tree.as_ref(), id))
-                        .and_then(|w| w.interactive())
-                        .unwrap_or((0.5, 4.0));
-                    // Wheel up (`dy > 0`) zooms in, in gentle steps of about 1.1× a notch.
-                    let factor = (1.0 + dy * 0.1 / SCROLL_SPEED).clamp(0.2, 5.0);
-                    // Zooming cuts off a fling in progress.
-                    self.runtime.interactive_velocity.remove(&id);
-                    let view = self.runtime.interactive.entry(id).or_default();
-                    // Zoom anchored at the pointer, then bounded to the frame.
-                    *view = view
-                        .zoom_at(factor, self.cursor, min, max)
-                        .clamped(viewport);
-                    self.request_redraw();
-                    return;
-                }
-                // A wheel asks the same question a finger does, and the reference gates it
-                // the same way: an area with everything already in sight takes no offset,
-                // and the notch belongs to whatever is behind it.
-                let hit = {
-                    let scroll = &self.runtime.scroll;
-                    self.ui.as_ref().and_then(|ui| {
-                        ui.scroll_chain(self.cursor).find(|area| {
-                            area.accepts_user_offset(
-                                scroll.get(&area.id).copied().unwrap_or((0.0, 0.0)),
-                            )
-                        })
-                    })
-                };
-                if let Some(area) = hit {
-                    // Scrolling with inertia: the wheel pushes the TARGET and the
-                    // spring eases across to it. How far past the ends that target
-                    // may go is the physics' call — a little elastic overshoot where
-                    // the platform bounces, none at all where it does not.
-                    let id = area.id;
-                    let physics = area.physics;
-                    let over = if physics.allows_overscroll() {
-                        SCROLL_OVER
-                    } else {
-                        0.0
-                    };
-                    // A notch of the wheel is a new intent: it takes over from the
-                    // momentum of the last gesture.
-                    self.runtime.stop_scroll_fling(id);
-                    let current = self.runtime.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-                    // A screen delta into offsets: the content moves opposite the number,
-                    // and a reversed axis counts from the other end. One function, so a
-                    // reversed area is right at every one of the places this happens.
-                    let (ddx, ddy) = area.offset_delta((dx, dy));
-                    let target = self.runtime.scroll_target.entry(id).or_insert(current);
-                    let (wanted_x, wanted_y) = (target.0 + ddx, target.1 + ddy);
-                    target.0 = wanted_x.clamp(-over, area.max_x + over);
-                    target.1 = wanted_y.clamp(-over, area.max_y + over);
-                    let refused = (wanted_x - target.0, wanted_y - target.1);
-                    self.runtime.scroll_velocity.entry(id).or_insert((0.0, 0.0));
-                    // A notch that asks to go past the end deserves the same
-                    // acknowledgement a finger gets: the wheel is a gesture too.
-                    let cursor = self.cursor;
-                    for (refused, vertical, extent) in [
-                        (refused.0, false, area.viewport.width),
-                        (refused.1, true, area.viewport.height),
-                    ] {
-                        if refused.abs() < 1e-3 {
-                            continue;
-                        }
-                        let edge = area.refused_edge(vertical, refused);
-                        let (offset, cross) =
-                            frus_widgets::glow_cross_axis(area.viewport, edge, cursor);
-                        self.runtime.glow_pull(
-                            id,
-                            area.overscroll,
-                            edge,
-                            refused,
-                            extent,
-                            offset,
-                            cross,
-                        );
-                        // A wheel has no "lift off", so the pull is released at once
-                        // and simply fades — otherwise it would hang until the hold
-                        // timer expired.
-                        self.runtime.glow_scroll_end(id);
-                    }
-                    self.request_redraw();
-                }
+                self.wheel_scroll(dx, dy);
             }
 
             WindowEvent::RedrawRequested => {
@@ -3381,6 +3299,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 }
                 // Measured only when asked: a clock read per stage is cheap, but not free.
                 let measuring = self.frame_stats.enabled();
+                // DevTools' performance view measures them too (milestone 788).
+                #[cfg(debug_assertions)]
+                let measuring = measuring || self.devtools.measuring();
                 let frame_start = measuring.then(Instant::now);
                 // The stages are timed for the first frame too, whose line breaks the launch
                 // down (milestone 696); after it, one atomic load.
@@ -3426,8 +3347,17 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 {
                     self.runtime.selection_toolbar = None;
                 }
-                // Occluded window: rendering is suspended, resuming on Occluded(false).
-                if self.occluded {
+                // Occluded window: rendering is suspended, resuming on Occluded(false) — but
+                // a request of DevTools' is answered all the same: the window it asks about
+                // may well be behind the browser that asks (milestone 788).
+                #[cfg(debug_assertions)]
+                let devtools_waiting = {
+                    self.take_devtools();
+                    !self.devtools.pending.is_empty()
+                };
+                #[cfg(not(debug_assertions))]
+                let devtools_waiting = false;
+                if self.occluded && !devtools_waiting {
                     return;
                 }
                 let size = self
@@ -3438,6 +3368,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // Minimised, or zero-sized: nothing to draw, which avoids GPU errors.
                 if size.width == 0 || size.height == 0 {
                     self.last_frame = None; // no dt jump when it is restored
+                                            // DevTools is answered from the last frame laid out.
+                    #[cfg(debug_assertions)]
+                    self.answer_devtools();
                     return;
                 }
                 // The interface is described in **logical** pixels; the GPU output is
@@ -3624,6 +3557,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let asked = self.app.effects();
                 self.run_command(asked);
                 self.take_dev_commands();
+                #[cfg(debug_assertions)]
+                self.take_devtools();
                 #[cfg(web)]
                 self.sync_address();
                 #[cfg(any(desktop, android))]
@@ -3886,6 +3821,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     || self.debug.outlines
                     || self.inspector_dump
                     || self.debug.focus_dump;
+                // And DevTools, to answer about the widgets or highlight one (milestone 788).
+                #[cfg(debug_assertions)]
+                let inspected = inspected || self.devtools.wants_nodes();
                 let (ui, scene) = if inspected {
                     let (ui, nodes) = frus_widgets::build_ui_inspected(
                         tree,
@@ -3903,7 +3841,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         log::info!(target: "frus::inspector", "focus, in tab order:
 {}", dump_focus(&nodes, &focusable, self.runtime.input.focused));
                     }
-                    let mut scene = if self.inspector {
+                    #[cfg(debug_assertions)]
+                    let highlighted = self.devtools_highlight(&nodes).copied();
+                    #[cfg(not(debug_assertions))]
+                    let highlighted: Option<frus_widgets::InspectorNode> = None;
+                    let mut scene = if self.inspector || highlighted.is_some() {
                         // The card goes over the application's text, which a scene draws after
                         // its shapes: the application's frame as one layer, under it.
                         on_top_of(ui.scene())
@@ -3918,6 +3860,20 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                             &theme,
                             &mut scene,
                         );
+                    }
+                    // The widget DevTools selected, or the one under the pointer in its
+                    // select mode.
+                    if let Some(node) = &highlighted {
+                        frus_widgets::paint_highlight(
+                            node,
+                            Size::new(width, height),
+                            &theme,
+                            &mut scene,
+                        );
+                    }
+                    #[cfg(debug_assertions)]
+                    {
+                        self.devtools.nodes = nodes;
                     }
                     // Scene: logical → physical (DPI × density).
                     (ui, scene.scaled(scale))
@@ -4028,6 +3984,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 if let Some(path) = self.debug.screenshot.take() {
                     write_screenshot(&scene, shot.0, shot.1, &path);
                 }
+                #[cfg(all(desktop, debug_assertions))]
+                devtools::answer_screenshots(
+                    std::mem::take(&mut self.devtools.screenshots),
+                    &scene,
+                    shot.0,
+                    shot.1,
+                );
                 #[cfg(not(desktop))]
                 let _ = shot;
                 let mut device_lost = false;
@@ -4051,6 +4014,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                             crate::web_dev::send_screenshot(window);
                         }
                     }
+                    #[cfg(all(web, debug_assertions))]
+                    devtools::answer_screenshots(
+                        std::mem::take(&mut self.devtools.screenshots),
+                        self.window.as_deref(),
+                    );
                     if let Some(at) = render_start {
                         self.frame_costs.render = at.elapsed().as_secs_f32() * 1000.0;
                         let timings = renderer.last_timings();
@@ -4299,6 +4267,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         .filter(|(on, _)| *on)
                         .fold(Why::NONE, |all, (_, why)| all | why);
                     self.frame_stats.frame(start, self.frame_costs);
+                    #[cfg(debug_assertions)]
+                    if self.devtools.measuring() {
+                        self.devtools.frames.push(start, &self.frame_costs);
+                    }
                     if self.debug.performance {
                         if let Some((_, before)) = self.debug.last_costs {
                             let gap = start.saturating_duration_since(before).as_secs_f32();
@@ -4317,6 +4289,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // The title bar's line, shared with the content when it asks (milestone 640).
                 #[cfg(windows)]
                 self.sync_title_bar();
+                // What DevTools asked of this frame, against what it laid out (milestone 788).
+                #[cfg(debug_assertions)]
+                self.answer_devtools();
+                #[cfg(all(not(any(desktop, web)), debug_assertions))]
+                devtools::answer_screenshots(std::mem::take(&mut self.devtools.screenshots));
             }
 
             _ => {}
@@ -5100,6 +5077,185 @@ impl<A: Application> App<A> {
             .max(1.0)
     }
 
+    /// **A key pressed**, with the modifiers the stroke names held down for it, through the
+    /// shell's own handling of a key: what a test's driver and the debugging tools press.
+    #[cfg(any(test, feature = "testing", debug_assertions))]
+    fn press_stroke(&mut self, stroke: frus_widgets::KeyStroke) {
+        use frus_widgets::ShortcutKey as K;
+        let named = |key| (WinitKey::Named(key), None);
+        let (logical_key, text) = match stroke.key {
+            K::Char(c) => {
+                let typed: winit::keyboard::SmolStr = c.to_string().into();
+                (WinitKey::Character(typed.clone()), Some(typed))
+            }
+            K::Enter => named(NamedKey::Enter),
+            K::Escape => named(NamedKey::Escape),
+            K::Tab => named(NamedKey::Tab),
+            K::Space => (WinitKey::Named(NamedKey::Space), Some(" ".into())),
+            K::Backspace => named(NamedKey::Backspace),
+            K::Delete => named(NamedKey::Delete),
+            K::Up => named(NamedKey::ArrowUp),
+            K::Down => named(NamedKey::ArrowDown),
+            K::Left => named(NamedKey::ArrowLeft),
+            K::Right => named(NamedKey::ArrowRight),
+            K::Home => named(NamedKey::Home),
+            K::End => named(NamedKey::End),
+            K::PageUp => named(NamedKey::PageUp),
+            K::PageDown => named(NamedKey::PageDown),
+            K::F(n) => named(match n {
+                1 => NamedKey::F1,
+                2 => NamedKey::F2,
+                3 => NamedKey::F3,
+                4 => NamedKey::F4,
+                5 => NamedKey::F5,
+                6 => NamedKey::F6,
+                7 => NamedKey::F7,
+                8 => NamedKey::F8,
+                9 => NamedKey::F9,
+                10 => NamedKey::F10,
+                11 => NamedKey::F11,
+                _ => NamedKey::F12,
+            }),
+        };
+        // Where a letter is on a QWERTY keyboard: the clipboard's shortcuts are read off
+        // the key's place, so that they work on any layout.
+        const LETTERS: [KeyCode; 26] = [
+            KeyCode::KeyA,
+            KeyCode::KeyB,
+            KeyCode::KeyC,
+            KeyCode::KeyD,
+            KeyCode::KeyE,
+            KeyCode::KeyF,
+            KeyCode::KeyG,
+            KeyCode::KeyH,
+            KeyCode::KeyI,
+            KeyCode::KeyJ,
+            KeyCode::KeyK,
+            KeyCode::KeyL,
+            KeyCode::KeyM,
+            KeyCode::KeyN,
+            KeyCode::KeyO,
+            KeyCode::KeyP,
+            KeyCode::KeyQ,
+            KeyCode::KeyR,
+            KeyCode::KeyS,
+            KeyCode::KeyT,
+            KeyCode::KeyU,
+            KeyCode::KeyV,
+            KeyCode::KeyW,
+            KeyCode::KeyX,
+            KeyCode::KeyY,
+            KeyCode::KeyZ,
+        ];
+        let physical_key = match stroke.key {
+            K::Char(c) if c.is_ascii_alphabetic() => {
+                PhysicalKey::Code(LETTERS[(c.to_ascii_lowercase() as u8 - b'a') as usize])
+            }
+            _ => PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+        };
+        let held = (self.ctrl, self.shift, self.alt, self.meta);
+        (self.ctrl, self.shift, self.alt, self.meta) =
+            (stroke.ctrl, stroke.shift, stroke.alt, stroke.meta);
+        self.key_down(
+            &KeyDown {
+                logical_key,
+                physical_key,
+                text,
+                repeat: false,
+            },
+            None,
+        );
+        (self.ctrl, self.shift, self.alt, self.meta) = held;
+    }
+
+    /// A scroll of `dx`, `dy` logical pixels at the pointer, as a wheel notch asks it: a zoom
+    /// over an interactive viewport, otherwise the scroll area under the pointer moved.
+    fn wheel_scroll(&mut self, dx: f32, dy: f32) {
+        // Over an interactive viewport the wheel **zooms**, anchored at the
+        // pointer and bounded by the widget's min and max scales.
+        if let Some((id, viewport)) = self
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.interactive_at(self.cursor))
+        {
+            let (min, max) = self
+                .tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), id))
+                .and_then(|w| w.interactive())
+                .unwrap_or((0.5, 4.0));
+            // Wheel up (`dy > 0`) zooms in, in gentle steps of about 1.1× a notch.
+            let factor = (1.0 + dy * 0.1 / SCROLL_SPEED).clamp(0.2, 5.0);
+            // Zooming cuts off a fling in progress.
+            self.runtime.interactive_velocity.remove(&id);
+            let view = self.runtime.interactive.entry(id).or_default();
+            // Zoom anchored at the pointer, then bounded to the frame.
+            *view = view
+                .zoom_at(factor, self.cursor, min, max)
+                .clamped(viewport);
+            self.request_redraw();
+            return;
+        }
+        // A wheel asks the same question a finger does, and the reference gates it
+        // the same way: an area with everything already in sight takes no offset,
+        // and the notch belongs to whatever is behind it.
+        let hit = {
+            let scroll = &self.runtime.scroll;
+            self.ui.as_ref().and_then(|ui| {
+                ui.scroll_chain(self.cursor).find(|area| {
+                    area.accepts_user_offset(scroll.get(&area.id).copied().unwrap_or((0.0, 0.0)))
+                })
+            })
+        };
+        if let Some(area) = hit {
+            // Scrolling with inertia: the wheel pushes the TARGET and the
+            // spring eases across to it. How far past the ends that target
+            // may go is the physics' call — a little elastic overshoot where
+            // the platform bounces, none at all where it does not.
+            let id = area.id;
+            let physics = area.physics;
+            let over = if physics.allows_overscroll() {
+                SCROLL_OVER
+            } else {
+                0.0
+            };
+            // A notch of the wheel is a new intent: it takes over from the
+            // momentum of the last gesture.
+            self.runtime.stop_scroll_fling(id);
+            let current = self.runtime.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
+            // A screen delta into offsets: the content moves opposite the number,
+            // and a reversed axis counts from the other end. One function, so a
+            // reversed area is right at every one of the places this happens.
+            let (ddx, ddy) = area.offset_delta((dx, dy));
+            let target = self.runtime.scroll_target.entry(id).or_insert(current);
+            let (wanted_x, wanted_y) = (target.0 + ddx, target.1 + ddy);
+            target.0 = wanted_x.clamp(-over, area.max_x + over);
+            target.1 = wanted_y.clamp(-over, area.max_y + over);
+            let refused = (wanted_x - target.0, wanted_y - target.1);
+            self.runtime.scroll_velocity.entry(id).or_insert((0.0, 0.0));
+            // A notch that asks to go past the end deserves the same
+            // acknowledgement a finger gets: the wheel is a gesture too.
+            let cursor = self.cursor;
+            for (refused, vertical, extent) in [
+                (refused.0, false, area.viewport.width),
+                (refused.1, true, area.viewport.height),
+            ] {
+                if refused.abs() < 1e-3 {
+                    continue;
+                }
+                let edge = area.refused_edge(vertical, refused);
+                let (offset, cross) = frus_widgets::glow_cross_axis(area.viewport, edge, cursor);
+                self.runtime
+                    .glow_pull(id, area.overscroll, edge, refused, extent, offset, cross);
+                // A wheel has no "lift off", so the pull is released at once
+                // and simply fades — otherwise it would hang until the hold
+                // timer expired.
+                self.runtime.glow_scroll_end(id);
+            }
+            self.request_redraw();
+        }
+    }
+
     fn request_redraw(&self) {
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -5284,6 +5440,11 @@ impl<A: Application> App<A> {
     /// here, with an explicit `Cancel`. The long-press recogniser is fed along the way,
     /// and the loop is woken at its deadline.
     fn pointer(&mut self, event_loop: &ActiveEventLoop, event: PointerEvent) {
+        // DevTools' select mode takes the pointer: a tap selects a widget (milestone 788).
+        #[cfg(debug_assertions)]
+        if self.devtools_pointer(&event) {
+            return;
+        }
         self.pointer_event(event);
         // Wake the loop exactly at the next deadline, and rest otherwise.
         event_loop.set_control_flow(self.idle_control_flow());
@@ -6991,6 +7152,12 @@ impl<A: Application> App<A> {
                 }
                 if let Some(dir) = storage {
                     crate::dev_commands::poll_commands(dir);
+                }
+                // DevTools reaches it on a local socket, through `adb forward` (milestone 788).
+                #[cfg(debug_assertions)]
+                {
+                    static SERVING: std::sync::Once = std::sync::Once::new();
+                    SERVING.call_once(crate::devtools::serve_on_device);
                 }
             }
         }
@@ -10982,6 +11149,8 @@ mod debug_keys_tests {
             rect: Rect::new(10.0, 20.0, 100.0, 40.0),
             name: "Button",
             depth: 3,
+            key: None,
+            style: Default::default(),
         }];
         let focus = dump_focus(&nodes, &[id, other], Some(id));
         assert_eq!(focus, "▶ Button  10,20  100×40  #12345678\n  #00000009\n");
@@ -13221,105 +13390,7 @@ pub mod testing {
         /// The system's back key is not one of them: what it does last is quit, and a
         /// driver has no loop to quit.
         pub fn key(&mut self, stroke: frus_widgets::KeyStroke) {
-            use frus_widgets::ShortcutKey as K;
-            let named = |key| (WinitKey::Named(key), None);
-            let (logical_key, text) = match stroke.key {
-                K::Char(c) => {
-                    let typed: winit::keyboard::SmolStr = c.to_string().into();
-                    (WinitKey::Character(typed.clone()), Some(typed))
-                }
-                K::Enter => named(NamedKey::Enter),
-                K::Escape => named(NamedKey::Escape),
-                K::Tab => named(NamedKey::Tab),
-                K::Space => (WinitKey::Named(NamedKey::Space), Some(" ".into())),
-                K::Backspace => named(NamedKey::Backspace),
-                K::Delete => named(NamedKey::Delete),
-                K::Up => named(NamedKey::ArrowUp),
-                K::Down => named(NamedKey::ArrowDown),
-                K::Left => named(NamedKey::ArrowLeft),
-                K::Right => named(NamedKey::ArrowRight),
-                K::Home => named(NamedKey::Home),
-                K::End => named(NamedKey::End),
-                K::PageUp => named(NamedKey::PageUp),
-                K::PageDown => named(NamedKey::PageDown),
-                K::F(n) => named(match n {
-                    1 => NamedKey::F1,
-                    2 => NamedKey::F2,
-                    3 => NamedKey::F3,
-                    4 => NamedKey::F4,
-                    5 => NamedKey::F5,
-                    6 => NamedKey::F6,
-                    7 => NamedKey::F7,
-                    8 => NamedKey::F8,
-                    9 => NamedKey::F9,
-                    10 => NamedKey::F10,
-                    11 => NamedKey::F11,
-                    _ => NamedKey::F12,
-                }),
-            };
-            // Where a letter is on a QWERTY keyboard: the clipboard's shortcuts are read off
-            // the key's place, so that they work on any layout.
-            const LETTERS: [KeyCode; 26] = [
-                KeyCode::KeyA,
-                KeyCode::KeyB,
-                KeyCode::KeyC,
-                KeyCode::KeyD,
-                KeyCode::KeyE,
-                KeyCode::KeyF,
-                KeyCode::KeyG,
-                KeyCode::KeyH,
-                KeyCode::KeyI,
-                KeyCode::KeyJ,
-                KeyCode::KeyK,
-                KeyCode::KeyL,
-                KeyCode::KeyM,
-                KeyCode::KeyN,
-                KeyCode::KeyO,
-                KeyCode::KeyP,
-                KeyCode::KeyQ,
-                KeyCode::KeyR,
-                KeyCode::KeyS,
-                KeyCode::KeyT,
-                KeyCode::KeyU,
-                KeyCode::KeyV,
-                KeyCode::KeyW,
-                KeyCode::KeyX,
-                KeyCode::KeyY,
-                KeyCode::KeyZ,
-            ];
-            let physical_key = match stroke.key {
-                K::Char(c) if c.is_ascii_alphabetic() => {
-                    PhysicalKey::Code(LETTERS[(c.to_ascii_lowercase() as u8 - b'a') as usize])
-                }
-                _ => PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
-            };
-            let held = (
-                self.shell.ctrl,
-                self.shell.shift,
-                self.shell.alt,
-                self.shell.meta,
-            );
-            (
-                self.shell.ctrl,
-                self.shell.shift,
-                self.shell.alt,
-                self.shell.meta,
-            ) = (stroke.ctrl, stroke.shift, stroke.alt, stroke.meta);
-            self.shell.key_down(
-                &KeyDown {
-                    logical_key,
-                    physical_key,
-                    text,
-                    repeat: false,
-                },
-                None,
-            );
-            (
-                self.shell.ctrl,
-                self.shell.shift,
-                self.shell.alt,
-                self.shell.meta,
-            ) = held;
+            self.shell.press_stroke(stroke);
         }
 
         /// The two handles of a selection area's touch selection, on the surface, if it has them.
