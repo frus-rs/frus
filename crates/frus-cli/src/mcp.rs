@@ -1232,6 +1232,51 @@ impl Server {
                         done.get("id").and_then(Value::as_str).unwrap_or("?")
                     ))]);
                 }
+                // An Android application's fields take their text from the input method, not
+                // from key strokes: there the field's value is extended instead.
+                let android = self
+                    .app(args, "hello", object([]))
+                    .ok()
+                    .and_then(|hello| {
+                        hello
+                            .get("platform")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .is_some_and(|platform| platform == "android");
+                if android {
+                    let target = target.ok_or(
+                        "on Android, give the field as target: its text is set rather than typed",
+                    )?;
+                    let found = self.app(args, "find", target)?;
+                    let id = found
+                        .get("nodes")
+                        .and_then(Value::as_array)
+                        .and_then(|nodes| nodes.last())
+                        .and_then(|node| node.get("id"))
+                        .and_then(Value::as_str)
+                        .ok_or("no such field on screen")?
+                        .to_string();
+                    let node = self.app(args, "node", object([("id", id.as_str().into())]))?;
+                    let value = node
+                        .get("semantics")
+                        .and_then(|s| s.get("value"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    self.app(
+                        args,
+                        "setText",
+                        object([
+                            ("target", object([("id", id.as_str().into())])),
+                            ("text", format!("{value}{typed}").into()),
+                        ]),
+                    )?;
+                    return Ok(vec![text(format!(
+                        "Entered {} characters at the end of #{id} (on Android the field's value is \
+                         set, as the input method does).",
+                        typed.chars().count()
+                    ))]);
+                }
                 let mut params = vec![("text".to_string(), Value::from(typed))];
                 if let Some(target) = target {
                     params.push(("target".into(), target));
