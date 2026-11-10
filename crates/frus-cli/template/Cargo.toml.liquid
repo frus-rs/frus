@@ -2,6 +2,8 @@
 name = "{{project-name}}"
 version = "0.1.0"
 edition = "2021"
+# `frus create --description` writes it.
+description = "A frus application"
 # The oldest compiler frus builds with. Raise it when you need a newer one.
 rust-version = "1.90"
 # An application, not a library someone depends on: `cargo publish` refuses it.
@@ -17,9 +19,22 @@ crate-type = ["rlib", "cdylib"]
 # "Building against a checkout" in the README.
 frus = "0.5"
 
-# Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
+# --- Web ---
+#
+#     frus run -d web                      # build, serve and open in a browser (debug)
+#     frus build web                       # the site you ship: web/, with web/pkg/
+#
+# The `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+
+# The web's release profile: the `.wasm` is **downloaded**, so here size comes first.
+# `frus build web` uses it; by hand:
+#
+#     cargo build --lib --target wasm32-unknown-unknown --profile web-release
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
 
 # --- Android packaging (cargo-apk) ---
 #
@@ -84,6 +99,14 @@ target_sdk_version = 34
 # path = "/absolute/path/to/release.keystore"
 # keystore_password = "..."
 
+# --- Platforms ---
+#
+# What this application is made for: `frus run -d all` runs it on every device of these, and
+# `frus run` and `frus build` refuse the others. `frus create --platforms web .` adds one later,
+# with its files.
+[package.metadata.frus]
+platforms = ["android", "web", "windows", "macos", "linux"]
+
 # --- Permissions ---
 #
 # What the application asks the person for, declared once: `frus build` and `frus run` write
@@ -122,11 +145,3 @@ lto = "fat"          # cross-crate inlining, and the dead code goes out with it
 codegen-units = 1    # a single unit: better optimisation, slower build
 panic = "abort"      # no unwinding tables (cargo ignores this for tests)
 strip = true         # symbols and debuginfo out of the shipped binary
-
-# The web's release profile: the `.wasm` is **downloaded**, so here size comes first.
-# `frus build web` uses it; by hand:
-#
-#     cargo build --lib --target wasm32-unknown-unknown --profile web-release
-[profile.web-release]
-inherits = "release"
-opt-level = "z"
