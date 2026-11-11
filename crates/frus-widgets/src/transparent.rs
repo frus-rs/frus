@@ -437,6 +437,10 @@ macro_rules! forward_transparent {
                 self.inner.continuous()
             }
 
+            fn paint_source(&self) -> Option<u64> {
+                self.inner.paint_source()
+            }
+
             fn decorative(&self) -> bool {
                 self.inner.decorative()
             }

@@ -944,11 +944,22 @@ impl Primitive {
                     Some((x0, y0, x1, y1)) => Rect::new(x0, y0, x1 - x0, y1 - y0),
                 }
             }
-            Primitive::Layer { primitives, .. } => primitives
-                .iter()
-                .map(|p| p.bounds())
-                .reduce(|a, b| a.union(b))
-                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+            Primitive::Layer {
+                primitives, filter, ..
+            } => {
+                // A shader or a GPU pass paints its own box, with or without content.
+                let own = filter
+                    .shader
+                    .as_ref()
+                    .map(|s| s.rect())
+                    .or(filter.external.as_ref().map(|e| e.rect()));
+                primitives
+                    .iter()
+                    .map(|p| p.bounds())
+                    .chain(own)
+                    .reduce(|a, b| a.union(b))
+                    .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+            }
         }
     }
 
@@ -1837,6 +1848,131 @@ impl Scene {
             transform: None,
             filter: LayerFilter {
                 blend: Some(mode),
+                ..LayerFilter::NONE
+            },
+            owner: self.current_owner,
+        });
+    }
+
+    /// **Fills `rect` with a custom shader** (milestone 792): `paint`'s `shade` colours
+    /// every pixel of the box, `uv` running from its top-left corner to its bottom-right.
+    /// Clipped by the current clip, like everything else.
+    ///
+    /// ```
+    /// use frus_core::{Rect, Scene, Shader};
+    ///
+    /// let shader = Shader::from_wgsl(
+    ///     "fn shade(f: Fragment) -> vec4<f32> { return vec4<f32>(f.uv, 0.5, 1.0); }",
+    /// )
+    /// .unwrap();
+    /// let mut scene = Scene::new();
+    /// scene.shader_rect(Rect::new(0.0, 0.0, 120.0, 80.0), &shader.paint());
+    /// assert_eq!(scene.len(), 1);
+    /// ```
+    pub fn shader_rect(&mut self, rect: Rect, paint: &crate::ShaderPaint) {
+        let paint = paint.clone().at(rect);
+        let mode = paint.blend_or(crate::BlendMode::Src);
+        self.shader_group(paint.blend(mode), self.current_clip.intersect(rect), |_| {});
+    }
+
+    /// **Fills `path` with a custom shader**: the shader spans the path's bounds and is
+    /// kept where the path covers ([`crate::BlendMode::SrcIn`] unless the paint says
+    /// otherwise), with the path's antialiased edge.
+    pub fn shader_path(&mut self, path: &Path, paint: &crate::ShaderPaint) {
+        let bounds = Primitive::Path {
+            path: path.clone(),
+            fill: None,
+            gradient: None,
+            stroke: None,
+            clip: Rect::UNBOUNDED,
+            owner: 0,
+        }
+        .bounds();
+        self.shaded(bounds, paint, |inner| inner.fill_path(path, Color::WHITE));
+    }
+
+    /// **Colours what `build` paints with a custom shader**: a text, a stroke, a group of
+    /// shapes. The shader spans `rect` and is kept where `build` paints
+    /// ([`crate::BlendMode::SrcIn`] unless the paint says otherwise), the coverage of
+    /// what was painted becoming the shader's.
+    ///
+    /// ```
+    /// use frus_core::{Color, Point, Rect, ResolvedTextStyle, Scene, Shader};
+    ///
+    /// let rainbow = Shader::from_wgsl(
+    ///     "fn shade(f: Fragment) -> vec4<f32> { return vec4<f32>(f.uv.x, 0.4, 1.0 - f.uv.x, 1.0); }",
+    /// )
+    /// .unwrap();
+    /// let mut scene = Scene::new();
+    /// scene.shaded(Rect::new(0.0, 0.0, 200.0, 40.0), &rainbow.paint(), |s| {
+    ///     s.text(Point::new(0.0, 0.0), "Hello", &ResolvedTextStyle::exact(32.0), Color::WHITE);
+    /// });
+    /// ```
+    pub fn shaded(
+        &mut self,
+        rect: Rect,
+        paint: &crate::ShaderPaint,
+        build: impl FnOnce(&mut Scene),
+    ) {
+        let paint = paint.clone().at(rect);
+        let mode = paint.blend_or(crate::BlendMode::SrcIn);
+        self.shader_group(paint.blend(mode), self.current_clip, build);
+    }
+
+    /// **A custom shader over what `build` paints**, as a mask: the subtree is read by
+    /// the shader as `child(uv)` and meets its colour by the paint's blend mode,
+    /// [`crate::BlendMode::Modulate`] unless it says otherwise, so the shader's alpha is
+    /// the subtree's transparency. The shader spans `rect`: the subtree's box.
+    pub fn shader_masked(
+        &mut self,
+        rect: Rect,
+        paint: &crate::ShaderPaint,
+        build: impl FnOnce(&mut Scene),
+    ) {
+        let paint = paint.clone().at(rect);
+        let mode = paint.blend_or(crate::BlendMode::Modulate);
+        self.shader_group(paint.blend(mode), self.current_clip, build);
+    }
+
+    /// The group every `shader_*` method makes: `build`'s content, coloured by `paint`.
+    fn shader_group(
+        &mut self,
+        paint: crate::ShaderPaint,
+        clip: Rect,
+        build: impl FnOnce(&mut Scene),
+    ) {
+        let mut inner = Scene::new();
+        inner.current_clip = self.current_clip;
+        inner.current_owner = self.current_owner;
+        inner.current_bounds = self.current_bounds;
+        build(&mut inner);
+        self.primitives.push(Primitive::Layer {
+            primitives: inner.primitives,
+            opacity: 1.0,
+            clip,
+            clip_shape: ClipShape::Rect,
+            transform: None,
+            filter: LayerFilter {
+                shader: Some(Box::new(paint)),
+                ..LayerFilter::NONE
+            },
+            owner: self.current_owner,
+        });
+    }
+
+    /// **A picture drawn on the GPU by the application** in `pass`'s box (milestone 792):
+    /// composited like an image, under the current clip. The `GpuPass` widget paints
+    /// with this.
+    pub fn external_pass(&mut self, pass: crate::ExternalPass) {
+        let clip = self.current_clip.intersect(pass.rect());
+        self.primitives.push(Primitive::Layer {
+            primitives: Vec::new(),
+            opacity: 1.0,
+            clip,
+            clip_shape: ClipShape::Rect,
+            transform: None,
+            filter: LayerFilter {
+                external: Some(Box::new(pass)),
                 ..LayerFilter::NONE
             },
             owner: self.current_owner,

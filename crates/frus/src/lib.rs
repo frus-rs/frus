@@ -58,6 +58,8 @@ pub struct GuideData;
 #[doc = include_str!("../../../docs/guide/animation.md")]
 pub struct GuideAnimation;
 #[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/shaders.md")]
+pub struct GuideShaders;
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
 #[cfg(doctest)]
@@ -66,6 +68,9 @@ pub struct GuideBuildVariants;
 #[cfg(all(doctest, feature = "testing"))]
 #[doc = include_str!("../../../docs/guide/testing.md")]
 pub struct GuideTesting;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/textures.md")]
+pub struct GuideTextures;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -134,12 +139,23 @@ pub mod fonts {
     pub use frus_text::{add_font, set_default_family, set_monospace_family};
 }
 
+// External textures (milestone 793): `textures()`, `Texture` and `ExternalTexture` come with
+// the widgets; the platform surface a decoder or camera draws into is the shell's.
+pub use frus_shell::{SurfaceFormat, TextureSurface};
+
 // The system's file dialogs (feature `file-dialogs`, desktop only): `FileDialog`.
 #[cfg(all(
     feature = "file-dialogs",
     not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
 ))]
 pub use frus_shell::FileDialog;
+
+/// **frus's own wgpu**: the version the renderer draws with, for a [`GpuPass`]. An application
+/// uses `frus::wgpu` rather than depending on `wgpu` itself, so the two never disagree.
+pub use frus_shell::wgpu;
+/// **Drawing on the GPU yourself** (milestone 792): a [`GpuPass`] box is given frus's device,
+/// queue and a picture to draw into, then composited with the widgets around it.
+pub use frus_shell::{GpuCallback, GpuPass, GpuPassContext, PassState, GPU_PASS_FORMAT};
 
 /// A page driven by a test, with no window (feature `testing`).
 #[cfg(feature = "testing")]

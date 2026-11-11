@@ -1620,6 +1620,7 @@ version = "0.5.0"
 dependencies = [
  "bytemuck",
  "log",
+ "naga",
 ]
 
 [[package]]
@@ -1704,6 +1705,7 @@ dependencies = [
  "js-sys",
  "log",
  "lyon",
+ "naga",
  "pollster 0.3.0",
  "wasm-bindgen",
  "web-time",
@@ -1756,6 +1758,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "frus-shaders"
+version = "0.5.0"
+dependencies = [
+ "frus",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "frus-shell"
 version = "0.5.0"
 dependencies = [
@@ -1783,6 +1793,7 @@ dependencies = [
  "jni 0.21.1",
  "js-sys",
  "log",
+ "ndk-context",
  "notify-rust",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",

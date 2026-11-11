@@ -27,6 +27,15 @@ pub struct ImageData {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    /// For a frame of an [external texture](crate::ExternalTexture): which frame. The
+    /// pixels then live in the texture registry, not here, and `rgba` is empty.
+    external: Option<u64>,
+}
+
+/// A fresh identity, from the counter images and external textures share: an external
+/// texture's id is the cache key of its frames, so it must never be an image's too.
+pub(crate) fn next_image_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 impl ImageData {
@@ -39,11 +48,45 @@ impl ImageData {
             "RGBA pixels must be width*height*4 bytes"
         );
         Self {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id: next_image_id(),
             width,
             height,
             rgba,
+            external: None,
         }
+    }
+
+    /// A stand-in for **frame `generation` of an external texture** (milestone 793): what
+    /// the `Texture` widget draws. It holds no pixels: the GPU
+    /// layer finds the frame in the [texture registry](crate::textures) by the texture's
+    /// id, which is this image's id too, and uploads it in place of the last one.
+    ///
+    /// Two of them are equal only for the same texture **and** the same frame, so a cache
+    /// that compares scenes sees a new frame as a change.
+    ///
+    /// ```
+    /// use frus_core::{textures, ImageData};
+    ///
+    /// let texture = textures().create();
+    /// let frame = ImageData::external(texture.id(), 1, 640, 480);
+    /// assert_eq!(frame.external_frame(), Some((texture.id(), 1)));
+    /// assert!(frame.rgba().is_empty());
+    /// ```
+    pub fn external(texture: crate::TextureId, generation: u64, width: u32, height: u32) -> Self {
+        Self {
+            id: texture.as_u64(),
+            width,
+            height,
+            rgba: Vec::new(),
+            external: Some(generation),
+        }
+    }
+
+    /// The external texture and frame this stands for, if it is one: see
+    /// [`ImageData::external`].
+    pub fn external_frame(&self) -> Option<(crate::TextureId, u64)> {
+        self.external
+            .map(|generation| (crate::TextureId::from_u64(self.id), generation))
     }
 
     /// Wraps the image in a shared handle (cheap to clone, stable for caching).
@@ -71,7 +114,8 @@ impl ImageData {
         Size::new(self.width as f32, self.height as f32)
     }
 
-    /// The RGBA bytes (sRGB), row by row.
+    /// The RGBA bytes (sRGB), row by row. Empty for an [external
+    /// frame](ImageData::external).
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
     }
@@ -81,7 +125,7 @@ impl ImageData {
 /// without comparing pixels. That keeps cache lookups and scene equality cheap.
 impl PartialEq for ImageData {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.external == other.external
     }
 }
 

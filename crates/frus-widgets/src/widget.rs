@@ -70,6 +70,9 @@ pub struct FilterContext {
     /// The identity of the nearest enclosing [`crate::BackdropGroup`], if any — the
     /// key a backdrop asking to be shared should use.
     pub backdrop_group: Option<u64>,
+    /// The frame clock, in seconds since the application started: what a custom shader's
+    /// `time` follows while it plays (milestone 792).
+    pub time: f32,
 }
 
 /// The axes a widget asks to **fill**: on each, it takes the room its parent leaves it
@@ -988,6 +991,15 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// target): the framework keeps redrawing. E.g. `CircularProgressIndicator`.
     fn continuous(&self) -> bool {
         false
+    }
+
+    /// A number standing for **what the paint reads from outside the tree**, when it reads
+    /// anything: a [`crate::Texture`] answers its texture's latest frame (milestone 793).
+    /// A repaint boundary around the widget is painted again when it changes, rather than
+    /// replayed; nothing else is asked of the frame, so a widget that answers this costs no
+    /// redraw of its own.
+    fn paint_source(&self) -> Option<u64> {
+        None
     }
 
     /// If `true`, the widget's [`continuous`](Self::continuous) animation is **decoration**:
@@ -2383,6 +2395,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn continuous(&self) -> bool {
         (**self).continuous()
+    }
+    fn paint_source(&self) -> Option<u64> {
+        (**self).paint_source()
     }
     fn decorative(&self) -> bool {
         (**self).decorative()

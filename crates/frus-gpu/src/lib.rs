@@ -23,6 +23,9 @@ pub use wgpu;
 
 mod batch;
 mod compositor;
+mod custom;
+// External texture frames (milestone 793).
+mod external;
 mod filter;
 mod gpu_timer;
 mod image;
@@ -53,6 +56,7 @@ pub fn draw_calls(scene: &Scene) -> usize {
 }
 
 // The data types — geometry, colour, scene — come from the shared foundation.
+pub use custom::{GpuCallback, GpuPassContext, PassState, GPU_PASS_FORMAT};
 pub use frus_core::{Color, Rect, Scene};
 pub use offscreen::{render_offscreen, OffscreenFrame};
 pub use pipeline_cache::set_pipeline_cache_dir;

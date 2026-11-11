@@ -89,6 +89,7 @@ mod focus;
 mod focushighlight;
 /// Form validation, pure and application-side: [`form::Rule`] and [`form::Form`].
 pub mod form;
+mod shaderview;
 mod sliver;
 mod sticky;
 mod switcher;
@@ -218,6 +219,8 @@ mod table;
 mod tabs;
 mod text;
 mod textinput;
+// External textures: video, camera, maps, native views (milestone 793).
+mod texture;
 mod theme;
 mod themebuilder;
 mod themed;
@@ -413,6 +416,13 @@ pub use focus::{
 };
 pub use focushighlight::{FocusHighlightMode, FocusHighlightStrategy};
 pub use fractional::FractionallySizedBox;
+/// Custom fragment shaders (milestone 792): a WGSL `shade` function compiled once, its
+/// uniforms and images set by name, painted by [`AnimatedShader`], [`ShaderMask::shader`]
+/// or a scene's `shader_*` methods.
+pub use frus_core::{
+    ExternalPass, Shader, ShaderError, ShaderPaint, UniformError, UniformInfo, UniformKind,
+    UniformValue, MAX_SHADER_IMAGES,
+};
 /// Lottie animations, drawn as vector paths (the `lottie` feature).
 #[cfg(feature = "lottie")]
 pub use frus_lottie::{Animation as LottieAnimation, AnimationHandle as LottieHandle, LottieError};
@@ -568,6 +578,7 @@ pub use semantics::{Description, Semantics};
 /// The JSON the preferences are kept as, for the platform layer's storages.
 #[doc(hidden)]
 pub use serde_json as __serde_json;
+pub use shaderview::AnimatedShader;
 pub use shapes::{
     CornerRounding, MaterialShapes, Morph, MorphingShape, RoundedPolygon, MORPH_POINTS,
 };
@@ -621,6 +632,7 @@ pub use textinput::{
     FIELD_OUTLINED_PADDING_TOP, FIELD_PADDING_X, FIELD_PADDING_Y, FIELD_RADIUS, FIELD_SUB_SIZE,
     FIELD_TEXT_SIZE,
 };
+pub use texture::Texture;
 pub use theme::{
     ColorScheme, TapTarget, TextTheme, Theme, ThemeMode, MIN_TAP_TARGET, SHRUNK_TAP_TARGET,
 };
@@ -730,6 +742,11 @@ pub use frus_core::{
 pub use frus_core::{
     paint_elevation, BlurStyle, BorderDirectional, BorderRadiusDirectional, BorderSide, BoxBorder,
     BoxShape, ShapeBorder,
+};
+/// External textures (milestone 793): what a producer feeds and a [`Texture`] shows.
+pub use frus_core::{
+    textures, ExternalTexture, FrameInfo, FramePlane, PixelFormat, TextureError, TextureFrame,
+    TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane, MAX_TEXTURE_SIDE,
 };
 /// The rest of the animation layer: tweens chained and curved, the scroll simulations and
 /// their constants.

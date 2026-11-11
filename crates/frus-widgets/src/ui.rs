@@ -3180,6 +3180,8 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// `walk_node` paints them.
     fn hash_statuses<H: Hasher>(&self, widget: &dyn Widget<Msg>, id: WidgetId, h: &mut H) {
         hash_status(&self.full_status(widget, id), h);
+        // What the paint reads from outside the tree: an external texture's frame.
+        widget.paint_source().hash(h);
         // Live ink is part of what the boundary paints, and it moves every frame while a
         // splash is alive. Without it here the cached primitives would be replayed and
         // the ripple would stand still — and once the ink dries the hash goes back to
@@ -3879,6 +3881,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if let Some(filter) = widget.layer_filter(crate::widget::FilterContext {
             box_rect: rects[*index].translate(translation.0, translation.1),
             backdrop_group: self.backdrop_group,
+            time: self.runtime.time,
         }) {
             // The layer keeps the **ambient** clip rather than its own box: an image
             // filter reaches past the pixels it came from, and cutting it at the box
@@ -6924,7 +6927,11 @@ fn take_owned(
                 owner,
             } => {
                 let inner = take_owned(inner, hidden, keep, taken);
-                if !inner.is_empty() {
+                // A shader filling its box or a GPU pass is something with nothing inside
+                // (milestone 792): it goes with its owner.
+                let own_paint = (filter.shader.is_some() || filter.external.is_some())
+                    && !hidden.contains(&owner);
+                if !inner.is_empty() || own_paint {
                     out.push(Primitive::Layer {
                         primitives: inner,
                         opacity,
@@ -7572,8 +7579,8 @@ fn fold_filter(
     if *opacity < 0.999 || !matches!(clip_shape, ClipShape::Rect) || transform.is_some() {
         return (group, filter, clip);
     }
-    let (inner, inner_clip) = (*inner, *inner_clip);
-    let Some(merged) = filter.merge(inner) else {
+    let (inner, inner_clip) = (inner.clone(), *inner_clip);
+    let Some(merged) = filter.clone().merge(inner) else {
         return (group, filter, clip);
     };
     let Some(Primitive::Layer { primitives, .. }) = group.into_iter().next() else {
@@ -10540,6 +10547,40 @@ mod tests {
         // The interaction maps are replayed too (a click stays routable).
         assert_eq!(ui1.hits.len(), ui2.hits.len());
         assert!(!ui2.hits.is_empty(), "the subtree's hit is indeed replayed");
+    }
+
+    /// An external texture's new frame repaints the boundary around it (milestone 793):
+    /// replayed, the boundary would keep naming the old frame, and a layer cache comparing
+    /// scenes would show it for ever.
+    #[test]
+    fn repaint_boundary_repaints_when_a_texture_gets_a_frame() {
+        let texture = frus_core::textures().create();
+        texture.push_rgba(1, 1, &[0; 4]).unwrap();
+        let tree = Container::<Msg>::new()
+            .repaint_boundary()
+            .child(crate::Texture::new(texture.id()).width(20.0).height(20.0));
+        let size = Size::new(100.0, 100.0);
+        let theme = Theme::default();
+        let rt = Runtime::default();
+        build_ui(&tree, size, &rt, &theme);
+        build_ui(&tree, size, &rt, &theme);
+        assert_eq!(
+            rt.paint_cache.borrow().last_frame_stats(),
+            (1, 0),
+            "no new frame: replayed"
+        );
+        texture.push_rgba(1, 1, &[0; 4]).unwrap();
+        let ui = build_ui(&tree, size, &rt, &theme);
+        assert_eq!(
+            rt.paint_cache.borrow().last_frame_stats(),
+            (0, 1),
+            "a new frame: painted again"
+        );
+        let frame = ui.scene().primitives().iter().find_map(|p| match p {
+            Primitive::Image { image, .. } => image.external_frame(),
+            _ => None,
+        });
+        assert_eq!(frame, Some((texture.id(), 2)));
     }
 
     #[test]

@@ -89,6 +89,7 @@ mod file_dialog;
 mod file_drop;
 mod frame_stats;
 mod gesture;
+mod gpu_pass;
 // Haptic feedback (milestone 777).
 pub mod haptics;
 #[cfg(any(web, test))]
@@ -147,6 +148,8 @@ mod startup;
 mod storage;
 // The taskbar's badge and progress (milestone 708).
 mod taskbar;
+// A platform surface feeding an external texture (milestone 793).
+mod texture_surface;
 // The tray icon (milestone 706): its description everywhere, the system's own on the desktop.
 mod tray;
 // The Web side of a reload under `frus run`: the states kept across the page's reload.
@@ -209,6 +212,13 @@ pub use command::Command;
 pub use data_dir::app_data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 pub use file_dialog::FileDialog;
+/// **frus's own wgpu**, for a [`GpuPass`]: the version the renderer draws with, so an
+/// application never pins one of its own.
+pub use frus_gpu::wgpu;
+/// A box the application draws on frus's GPU device itself (milestone 792), and what it
+/// draws with.
+pub use frus_gpu::{GpuCallback, GpuPassContext, PassState, GPU_PASS_FORMAT};
+pub use gpu_pass::GpuPass;
 pub use haptics::HapticsError;
 pub use icon::AppIcon;
 pub use link::{link_among, location_of_link};
@@ -232,6 +242,7 @@ pub use subscription::Subscription;
 pub use taskbar::{Taskbar, TaskbarProgress};
 #[cfg(any(test, feature = "testing"))]
 pub use tester::Tester;
+pub use texture_surface::{SurfaceFormat, TextureSurface};
 pub use tray::Tray;
 pub use widget_app::FrusApp;
 

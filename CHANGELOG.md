@@ -36,6 +36,28 @@ any release may break.
   `frus::register_android_view_factory`. Elsewhere the widget shows its fallback, an
   `UnsupportedView` (a labelled box in debug, nothing in release). Nothing is loaded until the
   first view is laid out.
+- **External textures: video, camera, maps, native views** (J793). `frus::textures().create()`
+  gives a texture any thread pushes RGBA, BGRA, NV12, I420 or strided YUV 4:2:0 frames into;
+  `Texture::new(id)` shows the latest at its layout size (fit, alignment, filter quality,
+  background, semantics). Frames go through a ring of recycled buffers (nothing allocated once
+  warm), only the newest is kept (older ones are counted as dropped), and one push asks for one
+  frame: an idle texture costs nothing. YUV becomes RGB on the GPU (BT.601/BT.709, limited or
+  full range); a frame of the same size is written into the texture already there. On Android,
+  `TextureSurface` is an image reader whose `ANativeWindow`, or `android.view.Surface` for Java,
+  a `MediaCodec`, a camera or a canvas draws into. `Widget::paint_source` lets a repaint boundary
+  repaint when something outside the tree changed. The demo gains an *External texture* screen.
+- **Custom fragment shaders and GPU passes** (J792). `Shader::from_wgsl` compiles an
+  application's WGSL `fn shade(frag: Fragment) -> vec4<f32>` once (validated with naga at load,
+  errors with their line and column, `Shader::placeholder` instead of a panic), its
+  `struct Uniforms` read from the source and set by name (`float`, `vec2`..`vec4`, `color`,
+  `int`, `uint`, `float_at`) plus up to four images. It paints a box (`Scene::shader_rect`,
+  `AnimatedShader`), a path (`shader_path`), text or any drawing (`shaded`), and a subtree
+  (`ShaderMask::shader`, read as `child(uv)`), with a blend mode; `AnimatedShader` and
+  `ShaderMask::playing` run `frag.time` and ask for no frame once stopped. `GpuPass` gives an
+  application frus's own device, queue, an encoder and a picture of its box to draw into, then
+  composites it like any layer; `frus::wgpu` re-exports the renderer's wgpu. On OpenGL ES and
+  WebGL 2 a shader GLSL ES cannot express is refused with its reason. Example:
+  `crates/frus-shaders`; guide: `docs/guide/shaders.md`.
 - **`frus create --template package|plugin`, verified links, `q` while building** (J791, second
   part). A package of widgets (with tests and a gallery example) and a plugin (its Android side in
   Java, compiled by its `build.rs` into a dex it loads into the activity; `Unsupported` elsewhere).
