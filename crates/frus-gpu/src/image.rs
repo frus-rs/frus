@@ -412,6 +412,24 @@ impl ImagePainter {
         }
     }
 
+    /// The texture of `image`, uploaded if it is not yet, and kept for this frame: what a
+    /// custom shader samples as `image0`..`image3` (milestone 792).
+    pub(crate) fn texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: &frus_core::ImageHandle,
+    ) -> wgpu::TextureView {
+        self.ensure_texture(
+            device,
+            queue,
+            image,
+            false,
+            sampler_index(FilterQuality::Medium),
+        );
+        self.cache[&image.id()].view.clone()
+    }
+
     /// Makes sure an image's texture is cached, with its mip chain when `chain` asks for
     /// one, and has a bind group for `sampler`; marks it used.
     fn ensure_texture(

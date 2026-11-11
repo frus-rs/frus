@@ -21,7 +21,7 @@
 
 use frus_core::{
     Backdrop, BlendMode, Color, ColorFilter, FractionalMask, ImageFilter, LayerFilter, Rect, Scene,
-    ShaderMask as MaskEffect,
+    ShaderMask as MaskEffect, ShaderPaint,
 };
 use frus_layout::Style;
 
@@ -200,21 +200,70 @@ impl<Msg: Clone> Widget<Msg> for ImageFiltered<Msg> {
 ///     .child(Text::new("gradient headline"))
 /// ```
 pub struct ShaderMask<Msg = crate::callback::Callback> {
-    mask: FractionalMask,
+    mask: MaskSource,
     blend: BlendMode,
     enabled: bool,
+    /// Whether a custom shader's clock runs (milestone 792).
+    playing: bool,
     children: Vec<Box<dyn Widget<Msg>>>,
+}
+
+/// What a [`ShaderMask`] blends over its child.
+enum MaskSource {
+    /// A fade, in fractions of the box.
+    Fade(FractionalMask),
+    /// An application's fragment shader, spanning the box (milestone 792).
+    Shader(ShaderPaint),
 }
 
 impl<Msg> ShaderMask<Msg> {
     /// Blends `mask` over the child, multiplying it in.
     pub fn new(mask: FractionalMask) -> Self {
         Self {
-            mask,
+            mask: MaskSource::Fade(mask),
             blend: BlendMode::Modulate,
             enabled: true,
+            playing: false,
             children: Vec::new(),
         }
+    }
+
+    /// **Blends an application's fragment shader over the child** (milestone 792): the
+    /// shader spans the child's box, reads it as `child(uv)`, and its colour meets it by
+    /// the blend mode — multiplying by default, so its alpha is the child's transparency.
+    /// [`ShaderMask::playing`] runs its clock.
+    ///
+    /// ```
+    /// use frus_core::{BlendMode, Shader};
+    /// use frus_widgets::{ShaderMask, Text};
+    ///
+    /// let shimmer = Shader::from_wgsl(
+    ///     "fn shade(f: Fragment) -> vec4<f32> {
+    ///          let band = smoothstep(0.0, 0.2, 0.2 - abs(f.uv.x - fract(f.time * 0.5)));
+    ///          return mix(vec4<f32>(0.4, 0.4, 0.5, 1.0), vec4<f32>(1.0), band);
+    ///      }",
+    /// )
+    /// .unwrap_or_else(Shader::placeholder);
+    /// let title: ShaderMask = ShaderMask::shader(shimmer.paint())
+    ///     .blend(BlendMode::SrcIn)
+    ///     .playing(true)
+    ///     .child(Text::new("Loading"));
+    /// ```
+    pub fn shader(paint: ShaderPaint) -> Self {
+        Self {
+            mask: MaskSource::Shader(paint),
+            blend: BlendMode::Modulate,
+            enabled: true,
+            playing: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// Runs a custom shader's clock: `Fragment::time` follows the frames, which keep
+    /// coming while it plays and stop when it does not. A fade has no clock.
+    pub fn playing(mut self, playing: bool) -> Self {
+        self.playing = playing;
+        self
     }
 
     /// A straight fade between two points of the box, from `from_color` to
@@ -279,14 +328,34 @@ impl<Msg: Clone> Widget<Msg> for ShaderMask<Msg> {
         None
     }
 
+    fn continuous(&self) -> bool {
+        self.enabled && self.playing && matches!(self.mask, MaskSource::Shader(_))
+    }
+
     fn layer_filter(&self, cx: FilterContext) -> Option<LayerFilter> {
-        self.enabled.then(|| LayerFilter {
-            mask: Some(MaskEffect {
-                // The fractions become pixels here, where the box is finally known.
-                shader: LayerFilter::resolve_mask(self.mask, cx.box_rect),
-                blend: self.blend,
-            }),
-            ..LayerFilter::NONE
+        if !self.enabled {
+            return None;
+        }
+        Some(match &self.mask {
+            MaskSource::Fade(mask) => LayerFilter {
+                mask: Some(MaskEffect {
+                    // The fractions become pixels here, where the box is finally known.
+                    shader: LayerFilter::resolve_mask(*mask, cx.box_rect),
+                    blend: self.blend,
+                }),
+                ..LayerFilter::NONE
+            },
+            MaskSource::Shader(paint) => {
+                let mut paint = paint.clone().at(cx.box_rect);
+                if self.playing {
+                    paint = paint.time(cx.time);
+                }
+                let blend = paint.blend_or(self.blend);
+                LayerFilter {
+                    shader: Some(Box::new(paint.blend(blend))),
+                    ..LayerFilter::NONE
+                }
+            }
         })
     }
 }
@@ -514,7 +583,7 @@ mod tests {
             .collect();
         assert_eq!(layers.len(), 1, "exactly one layer: {primitives:?}");
         match layers[0] {
-            Primitive::Layer { filter, .. } => *filter,
+            Primitive::Layer { filter, .. } => filter.clone(),
             _ => unreachable!(),
         }
     }

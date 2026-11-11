@@ -16,6 +16,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Screens, navigation and dialogs](navigation.md) | Routes, redirects, the `Scaffold`, dialogs and sheets |
 | [Talking to a server](network.md) | Requests, JSON, loading a screen's data, sending a form |
 | [Animation](animation.md) | Values that move to their new value, switching widgets, curves, what is animated for you |
+| [Custom shaders and drawing on the GPU](shaders.md) | Fragment shaders in WGSL for boxes, paths, text and subtrees, their uniforms and images, animating them; a `GpuPass` drawing with frus's own `wgpu` |
 | [Testing](testing.md) | Testing the state and the logic, and what the screen looks like |
 | [Build modes, flavors and releases](build-variants.md) | Debug, profile and release; flavors; values given at build time; the version; App Bundles, one APK per processor, installers; signing |
 | [DevTools](devtools.md) | The live widget tree, each frame's cost, slow animations and the log, in the browser; the protocol behind it |

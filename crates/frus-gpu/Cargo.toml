@@ -38,6 +38,12 @@ web-time = "1"
 # Blocking wait on device init: offscreen rendering has no async loop.
 pollster.workspace = true
 
+# Custom shaders on OpenGL ES and WebGL 2 (milestone 792): wgpu translates WGSL to GLSL there,
+# and a shader GLSL ES cannot express is refused with its reason before a pipeline is asked
+# for. The same naga wgpu builds for those backends; Apple's systems draw through Metal only.
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+
 # The Web (milestone 745): WebGL 2 behind WebGPU, for the browsers that offer no WebGPU —
 # Chrome on Android before Android 12, a GPU the browser blocks. For wasm32 only: native
 # builds keep their own backends.
