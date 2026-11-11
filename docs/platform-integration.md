@@ -65,6 +65,11 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   place and the maximized state it was closed with, fitted to the screens there are at the
   next start. Nothing to write; `FrusApp::remember_window(false)` turns it off, and
   `.window_size(w, h)` is the size of the first run.
+- **Video, camera and native pictures**: `frus::textures().create()` gives a texture any
+  thread pushes RGBA, BGRA, NV12 or I420 frames into, and `frus::Texture::new(id)` shows it
+  (every platform). On Android, `frus::TextureSurface` is a `Surface` for `MediaCodec`,
+  Camera2 or a media player, from the NDK or from Java, with no JNI of the application's own
+  beyond handing it over. See [the guide](guide/textures.md).
 - **Frames spent on decoration**: a spinner, a placeholder's pulse or any animation marked
   decorative (`Widget::decorative`, `AnimationHandle::decorative()`) is drawn at 30 frames a
   second when nothing else moves, not at the display's rate.
@@ -191,9 +196,9 @@ bindings: more glue, still no hand-written JavaScript.
 The honest summary of everything above is that the language question is nearly
 settled and the *coverage* question is wide open.
 
-An application needing the camera, biometrics or in-app purchases gets no help from
-frus today. Its author writes JNI by
-hand — reachable, verbose, easy to get wrong, and repeated in every application
+An application needing biometrics or in-app purchases gets no help from frus today (a
+camera or a video decoder at least has a surface to draw into, `TextureSurface`). Its author
+writes JNI by hand — reachable, verbose, easy to get wrong, and repeated in every application
 that needs the same thing. That is the actual obstacle for someone shipping a real
 application, and it is not solved by adding another widget.
 

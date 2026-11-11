@@ -65,6 +65,9 @@ pub struct GuideBuildVariants;
 #[cfg(all(doctest, feature = "testing"))]
 #[doc = include_str!("../../../docs/guide/testing.md")]
 pub struct GuideTesting;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/textures.md")]
+pub struct GuideTextures;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -132,6 +135,10 @@ pub use frus_widgets::{asset, column, row};
 pub mod fonts {
     pub use frus_text::{add_font, set_default_family, set_monospace_family};
 }
+
+// External textures (milestone 793): `textures()`, `Texture` and `ExternalTexture` come with
+// the widgets; the platform surface a decoder or camera draws into is the shell's.
+pub use frus_shell::{SurfaceFormat, TextureSurface};
 
 // The system's file dialogs (feature `file-dialogs`, desktop only): `FileDialog`.
 #[cfg(all(

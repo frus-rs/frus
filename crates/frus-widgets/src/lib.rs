@@ -219,6 +219,8 @@ mod table;
 mod tabs;
 mod text;
 mod textinput;
+// External textures: video, camera, maps, native views (milestone 793).
+mod texture;
 mod theme;
 mod themebuilder;
 mod themed;
@@ -630,6 +632,7 @@ pub use textinput::{
     FIELD_OUTLINED_PADDING_TOP, FIELD_PADDING_X, FIELD_PADDING_Y, FIELD_RADIUS, FIELD_SUB_SIZE,
     FIELD_TEXT_SIZE,
 };
+pub use texture::Texture;
 pub use theme::{
     ColorScheme, TapTarget, TextTheme, Theme, ThemeMode, MIN_TAP_TARGET, SHRUNK_TAP_TARGET,
 };
@@ -737,6 +740,11 @@ pub use frus_core::{
 pub use frus_core::{
     paint_elevation, BlurStyle, BorderDirectional, BorderRadiusDirectional, BorderSide, BoxBorder,
     BoxShape, ShapeBorder,
+};
+/// External textures (milestone 793): what a producer feeds and a [`Texture`] shows.
+pub use frus_core::{
+    textures, ExternalTexture, FrameInfo, FramePlane, PixelFormat, TextureError, TextureFrame,
+    TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane, MAX_TEXTURE_SIDE,
 };
 /// The rest of the animation layer: tweens chained and curved, the scroll simulations and
 /// their constants.

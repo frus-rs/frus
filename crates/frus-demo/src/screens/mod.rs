@@ -23,6 +23,7 @@ mod sheet;
 mod task;
 mod todo;
 mod tour;
+mod video;
 mod wizard;
 
 pub(crate) use board::*;
@@ -38,6 +39,7 @@ pub(crate) use sheet::*;
 pub(crate) use task::*;
 pub(crate) use todo::*;
 pub(crate) use tour::*;
+pub(crate) use video::*;
 pub(crate) use wizard::*;
 
 use crate::prelude::*;
@@ -76,6 +78,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("tour", |_, _| TourPage.into_widget()),
         GoRoute::new("sheet", |_, _| SheetPage.into_widget()),
         GoRoute::new("licenses", |_, _| LicensesPage.into_widget()),
+        GoRoute::new("video", |_, _| VideoPage.into_widget()),
         GoRoute::new("native", |_, _| NativePage.into_widget()),
         task,
     ])])

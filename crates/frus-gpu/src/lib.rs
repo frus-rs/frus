@@ -24,6 +24,8 @@ pub use wgpu;
 mod batch;
 mod compositor;
 mod custom;
+// External texture frames (milestone 793).
+mod external;
 mod filter;
 mod gpu_timer;
 mod image;

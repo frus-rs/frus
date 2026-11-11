@@ -993,6 +993,15 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// A number standing for **what the paint reads from outside the tree**, when it reads
+    /// anything: a [`crate::Texture`] answers its texture's latest frame (milestone 793).
+    /// A repaint boundary around the widget is painted again when it changes, rather than
+    /// replayed; nothing else is asked of the frame, so a widget that answers this costs no
+    /// redraw of its own.
+    fn paint_source(&self) -> Option<u64> {
+        None
+    }
+
     /// If `true`, the widget's [`continuous`](Self::continuous) animation is **decoration**:
     /// it shows that something is going on — an indeterminate indicator turning, a
     /// placeholder shimmering, a pulse — and nobody follows it frame by frame (milestone 783).
@@ -2386,6 +2395,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn continuous(&self) -> bool {
         (**self).continuous()
+    }
+    fn paint_source(&self) -> Option<u64> {
+        (**self).paint_source()
     }
     fn decorative(&self) -> bool {
         (**self).decorative()
