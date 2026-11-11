@@ -81,6 +81,7 @@ mod file_dialog;
 mod file_drop;
 mod frame_stats;
 mod gesture;
+mod gpu_pass;
 // Haptic feedback (milestone 777).
 pub mod haptics;
 #[cfg(any(web, test))]
@@ -191,6 +192,13 @@ pub use command::Command;
 pub use data_dir::app_data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
 pub use file_dialog::FileDialog;
+/// **frus's own wgpu**, for a [`GpuPass`]: the version the renderer draws with, so an
+/// application never pins one of its own.
+pub use frus_gpu::wgpu;
+/// A box the application draws on frus's GPU device itself (milestone 792), and what it
+/// draws with.
+pub use frus_gpu::{GpuCallback, GpuPassContext, PassState, GPU_PASS_FORMAT};
+pub use gpu_pass::GpuPass;
 pub use haptics::HapticsError;
 pub use icon::AppIcon;
 pub use link::{link_among, location_of_link};

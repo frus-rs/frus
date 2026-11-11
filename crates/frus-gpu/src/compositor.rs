@@ -56,6 +56,11 @@ const QUAD_VERTICES: &[QuadVertex] = &[
 ];
 const QUAD_VERTEX_COUNT: u32 = 6;
 
+/// The unit quad's vertex layout, shared with the custom pipelines (milestone 792).
+pub(crate) fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    QuadVertex::layout()
+}
+
 /// A composite instance: the clip, the **inverse** transform (screen → texture)
 /// and the group opacity.
 #[repr(C)]
@@ -196,6 +201,9 @@ struct LayerComposite {
     filter: LayerFilter,
     /// Where its texture lies on the target, when it is not the whole of it.
     region: Option<[f32; 4]>,
+    /// An application's shader or GPU pass colouring it, through a pipeline of its own
+    /// (milestone 792).
+    custom: Option<crate::custom::CustomDraw>,
 }
 
 /// **The part of the target a layer can draw on**, in whole pixels: its clip, held to the
@@ -242,6 +250,12 @@ fn layer_region(
         return None;
     }
     Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+/// Whether a layer is only an application's shader filling its box, or a GPU pass: it has
+/// no content of its own to render before it is composited (milestone 792).
+fn custom_only(filter: &LayerFilter, primitives: &[Primitive]) -> bool {
+    filter.external.is_some() || (filter.shader.is_some() && primitives.is_empty())
 }
 
 /// Whether a primitive can be drawn moved: everything but a layer that needs the whole
@@ -411,6 +425,8 @@ struct CompositePainter {
     /// This frame's filter parameters, one aligned slot per layer.
     filter_buffer: wgpu::Buffer,
     filter_capacity: usize,
+    /// The layers an application's shader or GPU pass colours (milestone 792).
+    pub(crate) custom: crate::custom::CustomPainter,
 }
 
 impl CompositePainter {
@@ -650,7 +666,17 @@ impl CompositePainter {
             &[255, 255, 255, 255],
         );
 
+        let custom = crate::custom::CustomPainter::new(
+            device,
+            queue,
+            format,
+            sample_count,
+            cache,
+            &viewport_layout,
+            &texture_layout,
+        );
         Self {
+            custom,
             pipeline,
             pipeline_src,
             viewport_buffer,
@@ -736,6 +762,8 @@ impl CompositePainter {
             let group = self.bind_group(device, i, &layer.view, &layer.mask, &white);
             self.bind_groups.push(group);
         }
+        let custom: Vec<_> = layers.iter().map(|l| l.custom.as_ref()).collect();
+        self.custom.prepare(device, queue, &custom);
     }
 
     /// The bind group of draw `index`: its texture, its clip mask, its slot of the filter
@@ -817,6 +845,16 @@ impl CompositePainter {
         // `None` rather than `Some(false)`, so the first draw always sets a pipeline.
         let mut bound: Option<bool> = None;
         for i in range {
+            if self.custom.takes(i) {
+                // An application's shader: its own pipeline, the same quad and instance.
+                if self.custom.bind(pass, i) {
+                    pass.set_bind_group(1, &self.bind_groups[i], &[]);
+                    let inst = i as u32;
+                    pass.draw(0..QUAD_VERTEX_COUNT, inst..inst + 1);
+                }
+                bound = None;
+                continue;
+            }
             let replace = replace_at == Some(i);
             if bound != Some(replace) {
                 pass.set_pipeline(if replace {
@@ -833,7 +871,7 @@ impl CompositePainter {
     }
 }
 
-fn comp_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn comp_instance_layout() -> wgpu::VertexBufferLayout<'static> {
     const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         1 => Float32x4,
         2 => Float32x4,
@@ -1018,22 +1056,34 @@ impl Painters {
             {
                 let region = layer_region(*clip, clip_shape, transform, filter, primitives, w, h);
                 let (rw, rh) = region.map_or((w, h), |r| (r.width as u32, r.height as u32));
-                let local = into_region(primitives, region);
-                let view = self.layer_texture(
-                    device,
-                    queue,
-                    format,
-                    layer_index,
-                    &local,
-                    filter.image.filter(|f| !f.is_identity()),
-                    rw,
-                    rh,
-                );
+                // A shader filling a box and a GPU pass have no content to render first
+                // (milestone 792); they take no slot of the layer cache either.
+                let bare = custom_only(filter, primitives);
+                let view = if bare {
+                    self.composite.white_mask_view()
+                } else {
+                    let local = into_region(primitives, region);
+                    let view = self.layer_texture(
+                        device,
+                        queue,
+                        format,
+                        layer_index,
+                        &local,
+                        filter.image.filter(|f| !f.is_identity()),
+                        rw,
+                        rh,
+                    );
+                    layer_index += 1;
+                    view
+                };
                 let mut entry = self.layer_entry(
                     device, queue, format, view, *opacity, *clip, clip_shape, transform, filter, w,
                     h,
                 );
                 entry.region = region.map(|r| r.to_array());
+                if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
+                    continue;
+                }
                 let first_draw = draws.len();
                 // The backdrop goes **first**: it is a picture of what was already
                 // there, and the layer is painted over it. It borrows the layer's clip
@@ -1061,6 +1111,7 @@ impl Painters {
                         inverse: frus_core::Affine::IDENTITY.m,
                         filter: LayerFilter::NONE,
                         region: None,
+                        custom: None,
                     });
                 } else if filter.blend.is_some() {
                     // A layer that blends reads what is under it: the frame is cut at it
@@ -1073,11 +1124,12 @@ impl Painters {
                 }
                 draws.push(entry);
                 layer_draws.insert(scene_index, first_draw..draws.len());
-                layer_index += 1;
             }
         }
         // Forget vanished layers: the scene has fewer than it had last frame.
         self.layer_cache.truncate(layer_index);
+        // Every GPU pass of the frame has run: the pictures of those gone go.
+        self.composite.custom.end_frame();
         // Each layer set the painters to its own size: the frame is the surface's again.
         self.set_viewport(queue, w as f32, h as f32);
 
@@ -1338,9 +1390,10 @@ impl Painters {
                 image: None,
                 backdrop: None,
                 blend: filter.blend.filter(|_| filter.backdrop.is_none()),
-                ..*filter
+                ..filter.clone()
             },
             region: None,
+            custom: None,
         }
     }
 
@@ -1425,6 +1478,51 @@ impl Painters {
                 }
             }
         }
+    }
+
+    /// Gives `entry` its custom draw when its layer is an application's shader or GPU pass
+    /// (milestone 792): runs the pass, puts the paint's images on the GPU. `false` when
+    /// the layer is to draw nothing — a pass with no picture — and is to be left out.
+    #[allow(clippy::too_many_arguments)]
+    fn attach_custom(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        entry: &mut LayerComposite,
+        filter: &LayerFilter,
+        bare: bool,
+        w: u32,
+        h: u32,
+    ) -> bool {
+        if let Some(pass) = &filter.external {
+            return match self.composite.custom.run_pass(device, queue, pass) {
+                Some(view) => {
+                    entry.custom = Some(crate::custom::CustomDraw::external(pass, view));
+                    true
+                }
+                None => false,
+            };
+        }
+        let Some(paint) = &filter.shader else {
+            return true;
+        };
+        let images = paint.images().each_ref().map(|i| {
+            i.as_ref()
+                .map(|img| self.image.texture_view(device, queue, img))
+        });
+        let region = entry
+            .region
+            .unwrap_or([0.0, 0.0, w.max(1) as f32, h.max(1) as f32]);
+        entry.custom = Some(crate::custom::CustomDraw::shader(
+            paint, !bare, region, images,
+        ));
+        true
+    }
+
+    /// Whether a custom pipeline was made since the last call, so that the pipeline cache
+    /// is worth writing again (milestone 792).
+    pub(crate) fn take_new_pipelines(&mut self) -> bool {
+        self.composite.custom.take_new_pipelines()
     }
 
     /// The staging texture a frame with backdrops is built in, created on demand and
@@ -1582,21 +1680,29 @@ impl Painters {
             {
                 let region = layer_region(*clip, clip_shape, transform, filter, inner, w, h);
                 let (rw, rh) = region.map_or((w, h), |r| (r.width as u32, r.height as u32));
-                let local = into_region(inner, region);
-                let mut texture = self.render_group(device, queue, format, &local, rw, rh);
-                if let Some(f) = filter.image.filter(|f| !f.is_identity()) {
-                    texture = self
-                        .filter
-                        .apply(device, queue, format, &texture, f, rw, rh);
-                }
-                // The view holds a reference to its texture, so the texture outlives
-                // this loop without being named again.
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let bare = custom_only(filter, inner);
+                let view = if bare {
+                    self.composite.white_mask_view()
+                } else {
+                    let local = into_region(inner, region);
+                    let mut texture = self.render_group(device, queue, format, &local, rw, rh);
+                    if let Some(f) = filter.image.filter(|f| !f.is_identity()) {
+                        texture = self
+                            .filter
+                            .apply(device, queue, format, &texture, f, rw, rh);
+                    }
+                    // The view holds a reference to its texture, so the texture outlives
+                    // this loop without being named again.
+                    texture.create_view(&wgpu::TextureViewDescriptor::default())
+                };
                 let mut entry = self.layer_entry(
                     device, queue, format, view, *opacity, *clip, clip_shape, transform, filter, w,
                     h,
                 );
                 entry.region = region.map(|r| r.to_array());
+                if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
+                    continue;
+                }
                 nested_of.insert(scene_index, nested.len());
                 if filter.blend.is_some() && filter.backdrop.is_none() {
                     cuts.push(Cut {

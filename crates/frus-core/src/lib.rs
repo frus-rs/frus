@@ -31,6 +31,7 @@ mod platform;
 mod responsive;
 mod scene;
 mod semantics;
+mod shader;
 mod shape;
 mod text_shaping;
 mod text_style;
@@ -81,6 +82,10 @@ pub use scene::{
     TextBlock,
 };
 pub use semantics::{Role, SemanticsProperties, Toggled};
+pub use shader::{
+    ExternalPass, Shader, ShaderError, ShaderPaint, UniformError, UniformInfo, UniformKind,
+    UniformValue, MAX_SHADER_IMAGES,
+};
 pub use shape::{BorderSide, ShapeBorder};
 pub use text_shaping::{FontTag, TextShaping};
 pub use text_style::{

@@ -1,0 +1,61 @@
+[package]
+name = "frus-shaders"
+description = "frus — custom fragment shaders and a GPU pass, as an application uses them (milestone 792)"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+# An example application, never a crate someone depends on.
+publish = false
+
+# Library: `rlib` for the desktop binary, `cdylib` (the `.so`) for Android.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# **A single dependency**: the `frus` facade re-exports the shell, the widgets and
+# `main!` — plus anyhow and log. An app declares nothing else, wasm-bindgen for the Web
+# aside.
+frus = { path = "../frus" }
+
+# Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+# --- Android packaging (cargo-apk) ---
+[package.metadata.android]
+package = "com.frus.shaders"
+build_targets = ["aarch64-linux-android"]
+# The launch theme lives here — see `res/values/styles.xml`.
+resources = "res"
+
+[package.metadata.android.application]
+label = "frus shaders"
+# The launcher icon: the frus logo by default, `res/mipmap-*/ic_launcher.png` — replace those
+# five files to change it. (On Android the icon is the manifest's, not the running code's.)
+icon = "@mipmap/ic_launcher"
+
+# The application's own theme, whose only job is the **window background**: what is on
+# screen between Android opening the window and the first frame being drawn. Left to the
+# platform's, a dark application opens with a full-screen white flash on a device in
+# light mode. See `res/values/styles.xml`; it is NoActionBar, which matters for the safe
+# area as well (milestone 288).
+theme = "@style/LaunchTheme"
+
+# The configuration changes followed in place (see frus-demo's manifest).
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|mcc|mnc|touchscreen|navigation|colorMode|fontWeightAdjustment|grammaticalGender"
+
+# The activity enters frus first (milestone 762): frus then answers Android's request for the
+# application's saved state itself, on every Android version, so state restoration works
+# before Android 10 too. Needs a frus newer than 0.5.0, which defines that function.
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.func_name"
+value = "frus_native_activity_on_create"
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 34

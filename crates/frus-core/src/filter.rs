@@ -591,7 +591,10 @@ impl Backdrop {
 /// Everything a layer applies to its own pixels at compositing time. All three are
 /// optional and independent; [`LayerFilter::is_none`] is the fast path the renderer
 /// takes when nothing is asked for, which is nearly always.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+///
+/// Not `Copy` since milestone 792: a custom shader and a GPU pass carry shared data.
+/// Cloning one is a few reference counts.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LayerFilter {
     /// Treats the layer as an image: a blur, a dilate, an erode.
     pub image: Option<ImageFilter>,
@@ -608,6 +611,15 @@ pub struct LayerFilter {
     /// written in, the way a paint's blend mode does in the reference. The layer's clip
     /// shape is its coverage: outside it, what was there stays.
     pub blend: Option<BlendMode>,
+    /// **An application's fragment shader** painting the layer (milestone 792): its
+    /// colour meets the layer's content by the paint's blend mode — a mask over a
+    /// subtree, the colour of a shape or a text, or a fill of its box when the layer is
+    /// empty. It shares the layer with nothing but a clip. Boxed, so that every other
+    /// layer of a scene stays as small as it was.
+    pub shader: Option<Box<crate::ShaderPaint>>,
+    /// **A picture the application draws on the GPU itself** (milestone 792): the layer is
+    /// that picture, composited like an image, clipped and transformed like any layer.
+    pub external: Option<Box<crate::ExternalPass>>,
 }
 
 impl LayerFilter {
@@ -619,6 +631,8 @@ impl LayerFilter {
         mask: None,
         backdrop: None,
         blend: None,
+        shader: None,
+        external: None,
     };
 
     /// `true` when this layer asks for no effect, so compositing can take its
@@ -629,6 +643,8 @@ impl LayerFilter {
             && self.mask.is_none()
             && self.backdrop.is_none()
             && self.blend.is_none()
+            && self.shader.is_none()
+            && self.external.is_none()
     }
 
     /// Folds `other` into this filter, keeping what is already set.
@@ -647,8 +663,13 @@ impl LayerFilter {
     /// A blend mode shares with nothing but nothing either. It is how the whole layer
     /// meets what is under it, so a filter folded in beside it would be applied before
     /// or after the blend depending on which widget it came from.
+    ///
+    /// A shader or a GPU pass shares with nothing but nothing either: what it paints is
+    /// the layer's colour, and an effect beside it would apply before or after it
+    /// depending on which widget it came from.
     pub fn merge(self, other: LayerFilter) -> Option<LayerFilter> {
-        let blended = |f: &LayerFilter| f.blend.is_some();
+        let blended =
+            |f: &LayerFilter| f.blend.is_some() || f.shader.is_some() || f.external.is_some();
         if (blended(&self) && !other.is_none()) || (blended(&other) && !self.is_none()) {
             return None;
         }
@@ -669,6 +690,8 @@ impl LayerFilter {
             mask: self.mask.or(other.mask),
             backdrop: self.backdrop.or(other.backdrop),
             blend: self.blend.or(other.blend),
+            shader: self.shader.or(other.shader),
+            external: self.external.or(other.external),
         })
     }
 
@@ -687,6 +710,8 @@ impl LayerFilter {
                 ..b
             }),
             blend: self.blend,
+            shader: self.shader.map(|s| Box::new((*s).scaled_xy(sx, sy))),
+            external: self.external.map(|e| Box::new((*e).scaled_xy(sx, sy))),
         }
     }
 
@@ -698,6 +723,8 @@ impl LayerFilter {
                 shader: m.shader.translated(dx, dy),
                 blend: m.blend,
             }),
+            shader: self.shader.map(|s| Box::new((*s).translated(dx, dy))),
+            external: self.external.map(|e| Box::new((*e).translated(dx, dy))),
             ..self
         }
     }
@@ -843,7 +870,7 @@ mod tests {
             color: Some(ColorFilter::grayscale()),
             ..LayerFilter::NONE
         };
-        assert!(backdrop.merge(grey).is_none());
+        assert!(backdrop.clone().merge(grey.clone()).is_none());
         assert!(grey.merge(backdrop).is_none());
     }
 
@@ -859,11 +886,17 @@ mod tests {
             color: Some(ColorFilter::grayscale()),
             ..LayerFilter::NONE
         };
-        assert!(multiply.merge(grey).is_none());
-        assert!(grey.merge(multiply).is_none());
-        assert!(multiply.merge(multiply).is_none());
-        assert_eq!(LayerFilter::NONE.merge(multiply), Some(multiply));
-        assert_eq!(multiply.merge(LayerFilter::NONE), Some(multiply));
+        assert!(multiply.clone().merge(grey.clone()).is_none());
+        assert!(grey.merge(multiply.clone()).is_none());
+        assert!(multiply.clone().merge(multiply.clone()).is_none());
+        assert_eq!(
+            LayerFilter::NONE.merge(multiply.clone()),
+            Some(multiply.clone())
+        );
+        assert_eq!(
+            multiply.clone().merge(LayerFilter::NONE),
+            Some(multiply.clone())
+        );
         assert!(!multiply.is_none());
         assert_eq!(
             multiply.scaled_xy(2.0, 2.0).blend,

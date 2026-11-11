@@ -49,6 +49,9 @@ pub struct Renderer {
     gpu_timer: Option<crate::gpu_timer::GpuTimer>,
     /// Whether the frames are composed with what is behind the window (milestone 643).
     see_through: bool,
+    /// The compiled pipelines kept between launches, its file and what was read from it:
+    /// written again when an application's shader adds a pipeline (milestone 792).
+    pipeline_cache: Option<(wgpu::PipelineCache, std::path::PathBuf, Option<Vec<u8>>)>,
 }
 
 impl Renderer {
@@ -349,6 +352,7 @@ impl Renderer {
             lost,
             timings: RenderTimings::default(),
             see_through,
+            pipeline_cache,
         })
     }
 
@@ -440,6 +444,14 @@ impl Renderer {
             }),
         );
 
+        // A shader drawn for the first time made a pipeline: the next launch finds it.
+        if self.painters.take_new_pipelines() {
+            if let Some((cache, file, read)) = &mut self.pipeline_cache {
+                if crate::pipeline_cache::keep(cache, file, read.as_deref()) {
+                    *read = cache.get_data();
+                }
+            }
+        }
         if let (Some(timer), Some(at)) = (self.gpu_timer.as_mut(), timed) {
             timer.end(&self.device, &self.queue, at);
         }
