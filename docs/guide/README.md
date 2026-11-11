@@ -21,6 +21,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [DevTools](devtools.md) | The live widget tree, each frame's cost, slow animations and the log, in the browser; the protocol behind it |
 | [AI agents](mcp.md) | `frus mcp`: an MCP server through which a coding agent runs, inspects and drives the application |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
+| [Native views inside the page](native-views.md) | A web view, a map or any Android view inside a frus page; writing a factory for a plugin |
 | [Structuring an application](../app-structure.md) | Where each part of a growing application goes |
 
 Beyond the guide:

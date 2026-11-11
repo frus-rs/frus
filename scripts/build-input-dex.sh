@@ -6,7 +6,8 @@
 # the runtime permissions of milestone 730; FrusRestoration.java, the state restoration of
 # milestone 753; FrusShare.java, opening addresses and sharing of milestone 775;
 # FrusHaptics.java and FrusConnectivity.java, milestone 777; FrusAccessibility.java, the
-# screen reader's view of the window, milestone 782) into one
+# screen reader's view of the window, milestone 782; FrusPlatformViews.java and the
+# dev.frus.platform interfaces plugins implement, the native views of milestone 794) into one
 # embedded dex.
 # Only re-run this when a Java file changes; the resulting dex is checked in
 # (crates/frus-shell/assets/frus_input.dex) so that `cargo apk` never needs javac.
@@ -20,13 +21,16 @@ PLATFORM="$SDK/platforms/android-34/android.jar"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAVA_DIR="$ROOT/crates/frus-shell/java/dev/frus/input"
+PLATFORM_DIR="$ROOT/crates/frus-shell/java/dev/frus/platform"
 OUT_DIR="$(mktemp -d)"
 trap 'rm -rf "$OUT_DIR"' EXIT
 
-javac --release 8 -cp "$PLATFORM" -d "$OUT_DIR/classes" "$JAVA_DIR"/*.java
+javac --release 8 -cp "$PLATFORM" -d "$OUT_DIR/classes" "$JAVA_DIR"/*.java "$PLATFORM_DIR"/*.java
 mkdir -p "$OUT_DIR/dex"
-"$BUILD_TOOLS/d8" --release --output "$OUT_DIR/dex" \
-    "$OUT_DIR"/classes/dev/frus/input/*.class
+# API 24, the lowest frus supports: default interface methods (PlatformView) stay as they are,
+# so a plugin compiled with or without desugaring finds them.
+"$BUILD_TOOLS/d8" --release --min-api 24 --output "$OUT_DIR/dex" \
+    "$OUT_DIR"/classes/dev/frus/input/*.class "$OUT_DIR"/classes/dev/frus/platform/*.class
 
 mkdir -p "$ROOT/crates/frus-shell/assets"
 cp "$OUT_DIR/dex/classes.dex" "$ROOT/crates/frus-shell/assets/frus_input.dex"

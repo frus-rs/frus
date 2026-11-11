@@ -1379,6 +1379,14 @@ pub struct App<A: Application> {
     a11y_tree: Option<crate::a11y_android::AndroidTree>,
     #[cfg(android)]
     a11y_announced: String,
+    /// The native views that exist and whose each touch is (milestone 794).
+    #[cfg(android)]
+    platform_views: crate::platform_view::PlatformViews,
+    #[cfg(android)]
+    touch_router: crate::platform_view::TouchRouter,
+    /// The native view holding the input focus, as it last said.
+    #[cfg(android)]
+    native_focus: Option<i32>,
     /// The system bars as the platform was last told them, so that it is told only of a
     /// change (#46).
     #[cfg(android)]
@@ -1578,6 +1586,12 @@ impl<A: Application> App<A> {
             a11y_tree: None,
             #[cfg(android)]
             a11y_announced: String::new(),
+            #[cfg(android)]
+            platform_views: Default::default(),
+            #[cfg(android)]
+            touch_router: Default::default(),
+            #[cfg(android)]
+            native_focus: None,
             #[cfg(android)]
             system_bars: None,
             restoration_published: None,
@@ -1888,6 +1902,130 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Makes, moves and drops the native views to match the frame just built, and sends the
+    /// calls the application queued on their controllers (milestone 794). A frame with no
+    /// native view, before or now, does nothing.
+    #[cfg(android)]
+    fn sync_platform_views(&mut self) {
+        let Some(ui) = self.ui.as_ref() else {
+            return;
+        };
+        let placements = ui.platform_views();
+        if placements.is_empty() && self.platform_views.is_empty() {
+            return;
+        }
+        let wanted: Vec<crate::platform_view::Wanted> = placements
+            .iter()
+            .map(|p| crate::platform_view::Wanted {
+                id: p.id,
+                view_type: &p.view_type,
+                params: &p.params,
+                rect: p.rect,
+                controller: p.controller.as_ref(),
+            })
+            .collect();
+        let before: Vec<(WidgetId, i32)> = self.platform_views.views().collect();
+        let commands = self.platform_views.sync(&wanted, self.total_scale());
+        for (widget, view) in before {
+            if self.platform_views.view_of(widget) != Some(view) {
+                // The view went: its last image, its gesture and its focus with it.
+                frus_widgets::set_platform_view_frame(widget, None);
+                self.touch_router.forget_view(view);
+                if self.native_focus == Some(view) {
+                    self.native_focus = None;
+                }
+            }
+        }
+        crate::android_platform_view::run(&commands);
+    }
+
+    /// Takes in what the native views sent since the last turn (milestone 794): each new image
+    /// is copied for the next frame to draw, and each event becomes its widget's message.
+    #[cfg(android)]
+    fn drain_platform_views(&mut self) {
+        if self.platform_views.is_empty() {
+            return;
+        }
+        for view in crate::android_platform_view::take_frames() {
+            let (Some(widget), Some(at)) = (
+                self.platform_views.widget_of(view),
+                self.platform_views.rect_of(view),
+            ) else {
+                continue;
+            };
+            if let Some(frame) = crate::android_platform_view::copy_frame(view, at) {
+                frus_widgets::set_platform_view_frame(widget, Some(frame));
+                self.request_redraw();
+            }
+        }
+        for (view, name, data) in crate::android_platform_view::take_events() {
+            let Some(widget) = self.platform_views.widget_of(view) else {
+                continue;
+            };
+            let event = frus_widgets::PlatformViewEvent::new(name, data);
+            if event.name == frus_widgets::PlatformViewEvent::FOCUS {
+                if event.data == "true" {
+                    self.native_focus = Some(view);
+                    // The native view has the keyboard now: frus's own field lets go of
+                    // the focus, without closing it.
+                    if self.runtime.input.focused.take().is_some() {
+                        self.request_redraw();
+                    }
+                } else if self.native_focus == Some(view) {
+                    self.native_focus = None;
+                }
+            } else if event.is_error() {
+                log::warn!("native view {view}: {}", event.data);
+            }
+            let message = self
+                .tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), widget))
+                .and_then(|widget| widget.on_platform_view_event(&event));
+            if let Some(message) = message {
+                self.dispatch(message);
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Hands `touch` to the native view it belongs to, if it belongs to one, and says whether
+    /// it did (milestone 794). A press that goes to frus while a native view has the focus
+    /// takes the focus away from it, as a tap outside a native field does.
+    #[cfg(android)]
+    fn route_native_touch(&mut self, touch: &winit::event::Touch, position: Point) -> bool {
+        use crate::platform_view::{Phase, Routed};
+        if self.platform_views.is_empty() {
+            return false;
+        }
+        let phase = match touch.phase {
+            TouchPhase::Started => Phase::Started,
+            TouchPhase::Moved => Phase::Moved,
+            TouchPhase::Ended => Phase::Ended,
+            TouchPhase::Cancelled => Phase::Cancelled,
+        };
+        let at = (touch.location.x as f32, touch.location.y as f32);
+        let ui = self.ui.as_ref();
+        let views = &self.platform_views;
+        let routed = self.touch_router.route(touch.id, phase, at, || {
+            let placement = ui?.platform_view_at(position)?;
+            let view = views.view_of(placement.id)?;
+            Some((view, views.rect_of(view)?))
+        });
+        match routed {
+            Routed::View(view_touch) => {
+                crate::android_platform_view::touch(&view_touch);
+                true
+            }
+            Routed::Frus => {
+                if phase == Phase::Started && self.native_focus.is_some() {
+                    crate::android_platform_view::clear_focus();
+                }
+                false
+            }
+        }
+    }
+
     /// Publishes the frame's tree to the Android node provider (milestone 782): built only
     /// while an accessibility service is on, and sent only when it, or the announcement,
     /// changed, with the events that say what did.
@@ -1917,13 +2055,18 @@ impl<A: Application> App<A> {
                     .unwrap_or((0.0, 0.0)),
             })
             .collect();
-        let tree = crate::a11y_android::build(
+        let mut tree = crate::a11y_android::build(
             ui.semantics(),
             &areas,
             self.runtime.input.focused,
             self.total_scale(),
             &mut self.a11y_ids,
         );
+        // A native view's own nodes are read where it is drawn (milestone 794).
+        if !self.platform_views.is_empty() {
+            let views = &self.platform_views;
+            crate::a11y_android::embed_views(&mut tree, &self.a11y_ids, |w| views.view_of(w));
+        }
         let announce = (self.announce != self.a11y_announced && !self.announce.is_empty())
             .then_some(self.announce.as_str());
         let events = match self.a11y_tree.as_ref() {
@@ -2215,6 +2358,11 @@ impl<A: Application> App<A> {
         if self.lifecycle != state {
             self.lifecycle = state;
             self.app.on_lifecycle(state);
+            // The native views pause and resume with the activity (milestone 794).
+            #[cfg(android)]
+            if !self.platform_views.is_empty() {
+                crate::android_platform_view::lifecycle(state == Lifecycle::Resumed);
+            }
         }
     }
 
@@ -3046,6 +3194,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // And through the Android node provider (milestone 782).
         #[cfg(android)]
         self.drain_android_a11y();
+        // What the native views sent: new images, events (milestone 794).
+        #[cfg(android)]
+        self.drain_platform_views();
         // And what the browser did to the field it edits for the application (milestone 711).
         #[cfg(web)]
         self.drain_web_editing();
@@ -3201,6 +3352,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
             WindowEvent::Touch(touch) => {
                 let position = self.to_logical(touch.location.x, touch.location.y);
+                // A touch that belongs to a native view goes to it, and frus never sees it
+                // (milestone 794).
+                #[cfg(android)]
+                if self.route_native_touch(&touch, position) {
+                    return;
+                }
                 let kind = match touch.phase {
                     TouchPhase::Started => PointerKind::Down,
                     TouchPhase::Moved => PointerKind::Move,
@@ -4238,6 +4395,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
                 // Publish the frame's tree to the Android node provider (milestone 782), while
                 // a screen reader is on to read it.
+                // The native views follow the frame: made, moved, dropped (milestone 794). Before
+                // the screen reader's tree, which names the views that exist.
+                #[cfg(android)]
+                self.sync_platform_views();
                 #[cfg(android)]
                 self.sync_android_a11y();
 

@@ -179,7 +179,11 @@ public final class FrusTextBridge extends View {
                 }
                 InputMethodManager imm =
                         (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
-                imm.hideSoftInputFromWindow(instance.getWindowToken(), 0);
+                // A native view that took the focus (milestone 794) has the keyboard now:
+                // the frus field letting go must not close it under that view.
+                if (!FrusPlatformViews.hasFocus()) {
+                    imm.hideSoftInputFromWindow(instance.getWindowToken(), 0);
+                }
                 instance.clearFocus();
             }
         });
