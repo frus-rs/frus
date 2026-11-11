@@ -1608,6 +1608,7 @@ version = "0.5.0"
 dependencies = [
  "bytemuck",
  "log",
+ "naga",
 ]
 
 [[package]]
@@ -1684,6 +1685,7 @@ dependencies = [
  "js-sys",
  "log",
  "lyon",
+ "naga",
  "pollster 0.3.0",
  "wasm-bindgen",
  "web-time",
@@ -1733,6 +1735,14 @@ dependencies = [
  "peniko",
  "serde_json",
  "velato",
+]
+
+[[package]]
+name = "frus-shaders"
+version = "0.5.0"
+dependencies = [
+ "frus",
+ "wasm-bindgen",
 ]
 
 [[package]]

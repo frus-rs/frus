@@ -3881,6 +3881,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if let Some(filter) = widget.layer_filter(crate::widget::FilterContext {
             box_rect: rects[*index].translate(translation.0, translation.1),
             backdrop_group: self.backdrop_group,
+            time: self.runtime.time,
         }) {
             // The layer keeps the **ambient** clip rather than its own box: an image
             // filter reaches past the pixels it came from, and cutting it at the box
@@ -6926,7 +6927,11 @@ fn take_owned(
                 owner,
             } => {
                 let inner = take_owned(inner, hidden, keep, taken);
-                if !inner.is_empty() {
+                // A shader filling its box or a GPU pass is something with nothing inside
+                // (milestone 792): it goes with its owner.
+                let own_paint = (filter.shader.is_some() || filter.external.is_some())
+                    && !hidden.contains(&owner);
+                if !inner.is_empty() || own_paint {
                     out.push(Primitive::Layer {
                         primitives: inner,
                         opacity,
@@ -7574,8 +7579,8 @@ fn fold_filter(
     if *opacity < 0.999 || !matches!(clip_shape, ClipShape::Rect) || transform.is_some() {
         return (group, filter, clip);
     }
-    let (inner, inner_clip) = (*inner, *inner_clip);
-    let Some(merged) = filter.merge(inner) else {
+    let (inner, inner_clip) = (inner.clone(), *inner_clip);
+    let Some(merged) = filter.clone().merge(inner) else {
         return (group, filter, clip);
     };
     let Some(Primitive::Layer { primitives, .. }) = group.into_iter().next() else {

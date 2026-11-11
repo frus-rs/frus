@@ -55,6 +55,8 @@ pub struct GuideNetwork;
 #[doc = include_str!("../../../docs/guide/animation.md")]
 pub struct GuideAnimation;
 #[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/shaders.md")]
+pub struct GuideShaders;
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
 #[cfg(doctest)]
@@ -144,6 +146,13 @@ pub use frus_shell::{SurfaceFormat, TextureSurface};
     not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
 ))]
 pub use frus_shell::FileDialog;
+
+/// **frus's own wgpu**: the version the renderer draws with, for a [`GpuPass`]. An application
+/// uses `frus::wgpu` rather than depending on `wgpu` itself, so the two never disagree.
+pub use frus_shell::wgpu;
+/// **Drawing on the GPU yourself** (milestone 792): a [`GpuPass`] box is given frus's device,
+/// queue and a picture to draw into, then composited with the widgets around it.
+pub use frus_shell::{GpuCallback, GpuPass, GpuPassContext, PassState, GPU_PASS_FORMAT};
 
 /// A page driven by a test, with no window (feature `testing`).
 #[cfg(feature = "testing")]

@@ -89,6 +89,7 @@ mod focus;
 mod focushighlight;
 /// Form validation, pure and application-side: [`form::Rule`] and [`form::Form`].
 pub mod form;
+mod shaderview;
 mod sliver;
 mod sticky;
 mod switcher;
@@ -415,6 +416,13 @@ pub use focus::{
 };
 pub use focushighlight::{FocusHighlightMode, FocusHighlightStrategy};
 pub use fractional::FractionallySizedBox;
+/// Custom fragment shaders (milestone 792): a WGSL `shade` function compiled once, its
+/// uniforms and images set by name, painted by [`AnimatedShader`], [`ShaderMask::shader`]
+/// or a scene's `shader_*` methods.
+pub use frus_core::{
+    ExternalPass, Shader, ShaderError, ShaderPaint, UniformError, UniformInfo, UniformKind,
+    UniformValue, MAX_SHADER_IMAGES,
+};
 /// Lottie animations, drawn as vector paths (the `lottie` feature).
 #[cfg(feature = "lottie")]
 pub use frus_lottie::{Animation as LottieAnimation, AnimationHandle as LottieHandle, LottieError};
@@ -570,6 +578,7 @@ pub use semantics::{Description, Semantics};
 /// The JSON the preferences are kept as, for the platform layer's storages.
 #[doc(hidden)]
 pub use serde_json as __serde_json;
+pub use shaderview::AnimatedShader;
 pub use shapes::{
     CornerRounding, MaterialShapes, Morph, MorphingShape, RoundedPolygon, MORPH_POINTS,
 };

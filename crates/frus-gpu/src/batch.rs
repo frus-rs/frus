@@ -139,9 +139,15 @@ fn footprint(primitive: &Primitive) -> Option<(Kind, Rect)> {
             primitives,
             clip,
             transform,
+            filter,
             ..
         } => {
-            let mut inner: Option<Rect> = None;
+            // A shader or a GPU pass paints its whole box, content or not (milestone 792).
+            let mut inner: Option<Rect> = filter
+                .shader
+                .as_ref()
+                .map(|s| s.rect())
+                .or(filter.external.as_ref().map(|e| e.rect()));
             for p in primitives {
                 if let Some((_, bounds)) = footprint(p) {
                     inner = Some(match inner {

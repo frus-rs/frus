@@ -70,6 +70,9 @@ pub struct FilterContext {
     /// The identity of the nearest enclosing [`crate::BackdropGroup`], if any — the
     /// key a backdrop asking to be shared should use.
     pub backdrop_group: Option<u64>,
+    /// The frame clock, in seconds since the application started: what a custom shader's
+    /// `time` follows while it plays (milestone 792).
+    pub time: f32,
 }
 
 /// The axes a widget asks to **fill**: on each, it takes the room its parent leaves it

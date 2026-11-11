@@ -16,3 +16,7 @@ categories = ["gui", "graphics"]
 bytemuck.workspace = true
 # An invalid OpenType tag or language tag in a text style is ignored, and the console is told.
 log.workspace = true
+# Custom fragment shaders (milestone 792): their WGSL is parsed, validated and its uniform
+# block read when the shader is made, so an error is said with its line before anything is
+# drawn. The same naga, with the same feature, that wgpu already builds in.
+naga = { version = "30", features = ["wgsl-in"] }
