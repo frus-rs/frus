@@ -214,7 +214,7 @@ pub(crate) fn edit_manifest(xml: &str, project: &Project, version_code: u32) -> 
 }
 
 /// `name="value"` on the first `element` tag: replaced where it is, added where it is not.
-fn set_attribute(xml: &str, element: &str, name: &str, value: &str) -> String {
+pub(crate) fn set_attribute(xml: &str, element: &str, name: &str, value: &str) -> String {
     let escaped = value
         .replace('&', "&amp;")
         .replace('"', "&quot;")
@@ -338,6 +338,20 @@ impl<'a> Built<'a> {
         Ok(path)
     }
 
+    /// Whether the manifest names frus's activity, whose code the package must then carry: left
+    /// beside cargo-apk's package as `classes.dex` (`app_links::finish_package`), and written
+    /// there again in case it is not.
+    fn has_code(&self) -> Result<bool, String> {
+        let written = self.dir.join("AndroidManifest.xml");
+        let xml = std::fs::read_to_string(&written).map_err(|e| e.to_string())?;
+        if !crate::android_activity::uses_frus_activity(&xml) {
+            return Ok(false);
+        }
+        std::fs::write(self.dir.join("classes.dex"), crate::android_activity::DEX)
+            .map_err(|e| format!("classes.dex: {e}"))?;
+        Ok(true)
+    }
+
     /// `aapt2 link`: the manifest and the resources, as an APK or (`proto`) as a bundle's.
     fn link(&self, manifest: &Path, out: &Path, proto: bool) -> Result<(), String> {
         let mut link = Command::new(&self.tools.aapt2);
@@ -394,6 +408,10 @@ impl<'a> Built<'a> {
         add.arg(&unaligned).current_dir(&self.dir);
         for abi in abis {
             add.args(self.libraries(abi)?);
+        }
+        // frus's activity, which the manifest names (milestone 801): its code, at the root.
+        if self.has_code()? {
+            add.arg("classes.dex");
         }
         add.stdout(std::process::Stdio::null());
         cargo::run(&mut add)?;
@@ -511,6 +529,12 @@ pub(crate) fn app_bundle(project: &Project, mode: Mode, apk: &Path) -> Result<Pa
             let bytes = std::fs::read(built.dir.join(&lib)).map_err(|e| e.to_string())?;
             entries.push((lib, bytes));
         }
+    }
+    if built.has_code()? {
+        entries.push((
+            "dex/classes.dex".to_string(),
+            crate::android_activity::DEX.to_vec(),
+        ));
     }
     if let Some(assets) = &project.android_assets {
         let root = project.root.join(assets);

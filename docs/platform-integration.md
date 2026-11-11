@@ -46,6 +46,11 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
 - **Sharing**: `frus::share("text")`, or `frus::Share::text(..).subject(..).url(..).file(path)`
   for more, shows the system's share sheet (Android, Windows, macOS, the web). Where a desktop
   cannot show one, the text is copied to the clipboard and the call says so.
+- **Receiving a share**: an application that declares an `ACTION_SEND` intent filter (commented
+  out in the template's `Cargo.toml`) is listed in other applications' share sheets on Android;
+  what they share — text, a subject, files copied into the cache folder — reaches
+  `Application::on_share`, or the handler given to `FrusApp::on_share`, whether it starts the
+  application or comes while it runs.
 - **Haptic feedback**: `frus::haptics::light()` and its siblings give the system's touch
   feedback (Android, the web; the desktops answer `Unsupported`).
 - **Which network**: `frus::connectivity()`, and `cx.use_connectivity()` in a component, say

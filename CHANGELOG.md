@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 801 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Android applications come back to the running activity** (J801). `frus run` and
+  `frus build` package frus's own activity, `dev.frus.FrusActivity` (the native activity with
+  `onNewIntent` forwarded, `launchMode="singleTop"`, about 900 bytes of code): a link, a share, a
+  notification's tap and a sign-in's redirect that open the application while it runs reach the
+  running one, with its state, instead of finishing and starting it again. Custom-scheme
+  redirects now work on Android with `frus::auth_session` (`com.example.app:/oauth`, in a Custom
+  Tab). New: receiving what other applications share — `Application::on_share`,
+  `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
+  application that names an activity of its own keeps it; a package made by hand with
+  `cargo apk` runs in the native activity as before.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

@@ -53,6 +53,7 @@ pub(crate) fn build() -> (FrusApp, GoRouter, Rc<Demo>) {
     let router = screens::router(demo.clone());
     let (save, restore, start) = (demo.clone(), demo.clone(), demo.clone());
     let (window, pages) = (demo.clone(), router.clone());
+    let shared = demo.clone();
     let app = FrusApp::router(router.clone())
         .title("frus — Todo")
         // **State restoration** (milestone 753): the page, the draft and the scroll come back
@@ -74,6 +75,17 @@ pub(crate) fn build() -> (FrusApp, GoRouter, Rc<Demo>) {
             frus_widgets::licenses::add_all(include_str!("../assets/licenses.txt"));
             // Loads the persisted tasks at start-up.
             start.start();
+        })
+        // **Text shared from another application** (milestone 801, Android): a new task, said
+        // with a toast. A share comes to the running demo as well as starting it.
+        .on_share(move |content| {
+            if let Some(text) = content.text {
+                let first_line = text.lines().next().unwrap_or("").to_string();
+                if shared.add(&first_line) {
+                    shared.save();
+                    shared.toast(&format!("Shared: {first_line}"));
+                }
+            }
         })
         // Live-reload: the essentials of the state survive a recompilation — the tasks, the
         // theme (light/dark + seed).
