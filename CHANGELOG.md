@@ -13,6 +13,16 @@ any release may break.
 
 ## [Unreleased]
 
+- **Native Android views inside a frus page** (J794). `AndroidView::new("frus/webview", html)`
+  embeds a real `WebView` (`"frus/edittext"` an `EditText`, and a plugin's factory any other
+  `View`), laid out by frus, drawn in its frame (a dialog covers it, a scrolling page moves it in
+  the same frame), and given the touches that land on it from the press to the last lift. It
+  takes the focus and the keyboard as a native view does, and TalkBack reads its content where
+  it is drawn. `PlatformViewController::invoke` calls the view, `on_event` hears it; plugins
+  write a `dev.frus.platform.PlatformViewFactory` in Java and register it with
+  `frus::register_android_view_factory`. Elsewhere the widget shows its fallback, an
+  `UnsupportedView` (a labelled box in debug, nothing in release). Nothing is loaded until the
+  first view is laid out.
 - **Custom fragment shaders and GPU passes** (J792). `Shader::from_wgsl` compiles an
   application's WGSL `fn shade(frag: Fragment) -> vec4<f32>` once (validated with naga at load,
   errors with their line and column, `Shader::placeholder` instead of a panic), its
