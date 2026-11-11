@@ -62,6 +62,9 @@ mod android_share;
 mod android_system_bars;
 mod app;
 mod application;
+// Signing in through the system's browser (feature `auth`, milestone 795).
+#[cfg(feature = "auth")]
+mod auth;
 #[cfg(any(android, test))]
 mod autofill;
 // The build mode, the flavor, the version and the build-time values (milestone 790).
@@ -75,6 +78,9 @@ mod command;
 // Watching the device's networks (milestone 777).
 mod connectivity;
 mod data_dir;
+/// A SQLite database in the application's data folder (feature `sqlite`, milestone 795).
+#[cfg(feature = "sqlite")]
+pub mod database;
 /// DevTools' service in the application (milestone 788): debug builds only.
 #[cfg(debug_assertions)]
 mod devtools;
@@ -89,7 +95,13 @@ pub mod haptics;
 #[cfg(any(web, test))]
 mod history;
 mod hover;
+// The disk cache of fetched images (milestone 795).
+#[cfg(all(feature = "net", not(web)))]
+mod http_cache;
 mod icon;
+// Where network images come from (milestone 795).
+#[cfg(feature = "net")]
+mod image_cache;
 #[cfg(any(android, test))]
 mod ime;
 #[cfg(desktop)]
@@ -237,7 +249,23 @@ pub use widget_app::FrusApp;
 /// Cross-platform HTTP (`net` feature) — the [`fetch`] shorthand, the [`Request`]
 /// builder (method / headers / body / timeout) and the [`FetchError`] error type.
 #[cfg(feature = "net")]
-pub use net::{fetch, fetch_bytes, FetchError, Method, Request, MAX_RESPONSE_BYTES};
+pub use net::{fetch, fetch_bytes, FetchError, Method, Request, Response, MAX_RESPONSE_BYTES};
+
+#[cfg(all(feature = "auth", feature = "secure-store"))]
+pub use auth::stored_refresh_token;
+/// Signing in through the system's browser (feature `auth`, milestone 795).
+#[cfg(feature = "auth")]
+pub use auth::{auth_session, AuthError, AuthRequest, AuthTokens, DEFAULT_AUTH_TIMEOUT};
+/// A SQLite database (feature `sqlite`, milestone 795): [`database()`], [`Database`].
+#[cfg(feature = "sqlite")]
+pub use database::{database, Database, DatabaseBuilder, DatabaseError, Row};
+
+/// The size the disk cache of network images is kept under by default.
+#[cfg(all(feature = "net", not(web)))]
+pub use http_cache::DEFAULT_DISK_CACHE_BYTES;
+/// The cache of network images, in memory and on disk (`net` feature, milestone 795).
+#[cfg(feature = "net")]
+pub use image_cache::{image_cache, ImageCache};
 
 /// Re-export: size classes and orientation, so the application can drive its own
 /// responsive behaviour.

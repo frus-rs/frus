@@ -51,6 +51,9 @@ pub struct GuideNavigation;
 #[cfg(all(doctest, feature = "net", feature = "json"))]
 #[doc = include_str!("../../../docs/guide/network.md")]
 pub struct GuideNetwork;
+#[cfg(all(doctest, feature = "net", feature = "sqlite", feature = "auth"))]
+#[doc = include_str!("../../../docs/guide/data.md")]
+pub struct GuideData;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/animation.md")]
 pub struct GuideAnimation;
@@ -191,4 +194,51 @@ pub use frus_shell::{register_android_view_factory, PlatformViewError};
 // Cross-platform HTTP (feature `net`): the `frus::fetch(url).await` shorthand and the
 // `frus::Request` builder (method / headers / body / timeout) — see [`frus::net`].
 #[cfg(feature = "net")]
-pub use frus_shell::{fetch, fetch_bytes, net, FetchError, Method, Request, MAX_RESPONSE_BYTES};
+pub use frus_shell::{
+    fetch, fetch_bytes, net, FetchError, Method, Request, Response, MAX_RESPONSE_BYTES,
+};
+
+#[cfg(all(feature = "net", not(target_arch = "wasm32")))]
+pub use frus_shell::DEFAULT_DISK_CACHE_BYTES;
+/// **The cache of network images** (feature `net`, milestone 795): `frus::image_cache()`
+/// clears, sizes and measures what `Image::network` keeps in memory and on disk.
+///
+/// ```no_run
+/// frus::image_cache().clear();
+/// ```
+#[cfg(feature = "net")]
+pub use frus_shell::{image_cache, ImageCache};
+
+/// **A SQLite database** in the application's data folder (feature `sqlite`, milestone 795):
+/// versioned migrations, typed parameters and rows, transactions, every call off the
+/// interface's thread.
+///
+/// ```no_run
+/// # async fn run() -> Result<(), frus::DatabaseError> {
+/// let db = frus::database("notes.db")
+///     .migrations(&["CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)"])
+///     .open()
+///     .await?;
+/// db.insert("INSERT INTO notes (body) VALUES (?1)", frus::params!["milk"]).await?;
+/// # Ok(()) }
+/// ```
+#[cfg(feature = "sqlite")]
+pub use frus_shell::{database, params, Database, DatabaseBuilder, DatabaseError};
+
+#[cfg(all(feature = "auth", feature = "secure-store"))]
+pub use frus_shell::stored_refresh_token;
+/// **Signing in through the system's browser** (feature `auth`, milestone 795): OAuth 2 and
+/// OpenID Connect, the authorization code with PKCE.
+///
+/// ```no_run
+/// # async fn run() -> Result<(), frus::AuthError> {
+/// let tokens = frus::auth_session(
+///     frus::AuthRequest::new("https://id.example/authorize", "client", "http://127.0.0.1/cb")
+///         .token_url("https://id.example/token")
+///         .scope("openid"),
+/// )
+/// .await?;
+/// # let _ = tokens; Ok(()) }
+/// ```
+#[cfg(feature = "auth")]
+pub use frus_shell::{auth_session, AuthError, AuthRequest, AuthTokens, DEFAULT_AUTH_TIMEOUT};

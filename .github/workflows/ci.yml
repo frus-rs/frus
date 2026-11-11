@@ -64,6 +64,9 @@ jobs:
         run: |
           cargo test -p frus --features "net json testing"
           cargo test -p frus-shell --features net
+          # The image disk cache, the database and the sign-in (milestone 795), and their guide.
+          cargo test -p frus-shell --features "net sqlite auth" --lib
+          cargo test -p frus --features "net sqlite auth" --doc
           cargo test -p frus-shell --features testing --test animation_speed
 
       # The tray icon on Linux (milestone 706): its menus are made with GTK 3, which nothing

@@ -50,6 +50,12 @@ fn located() -> Option<PathBuf> {
     ANDROID_FILES.get().cloned()
 }
 
+/// The application's `files` folder on Android, once `android_main` has handed it over.
+#[cfg(android)]
+pub(crate) fn android_files() -> Option<PathBuf> {
+    ANDROID_FILES.get().cloned()
+}
+
 #[cfg(any(desktop, ios))]
 fn located() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;

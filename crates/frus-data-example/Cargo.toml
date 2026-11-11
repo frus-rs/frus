@@ -1,0 +1,50 @@
+[package]
+name = "frus-data-example"
+description = "frus — network images with a disk cache, a SQLite database and an OAuth sign-in, in one example"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# An example application, never a crate someone depends on.
+publish = false
+
+# Library: `rlib` for the desktop binary, `cdylib` (the `.so`) for Android.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# One dependency: `net` for the images, `sqlite` for the notes, `auth` for the sign-in, and
+# `secure-store` to keep the refresh token.
+frus = { path = "../frus", features = ["net", "sqlite", "auth", "secure-store"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+# --- Android packaging (cargo-apk) ---
+[package.metadata.android]
+package = "com.frus.data"
+build_targets = ["aarch64-linux-android"]
+resources = "res"
+
+[package.metadata.android.application]
+label = "frus data"
+theme = "@style/LaunchTheme"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|mcc|mnc|touchscreen|navigation|colorMode|fontWeightAdjustment|grammaticalGender"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.func_name"
+value = "frus_native_activity_on_create"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 34

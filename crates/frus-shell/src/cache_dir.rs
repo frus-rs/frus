@@ -91,6 +91,39 @@ pub(crate) fn android(files: &Path) -> PathBuf {
     }
 }
 
+/// The application's own cache folder (milestone 795): where what it can lose and fetch
+/// again is kept — the image cache's files. Not created here.
+///
+/// - Android: the `cache` folder beside `files` (`Context.getCacheDir`), which the system may
+///   empty when it runs short and the person empties with "Clear cache";
+/// - the desktops and iOS: [`desktop`]'s folder for the running program;
+/// - the Web: `None`, the browser keeping its own cache.
+#[allow(dead_code)]
+pub(crate) fn app_cache_dir() -> Option<PathBuf> {
+    #[cfg(android)]
+    {
+        let files = crate::data_dir::android_files()?;
+        Some(match files.parent() {
+            Some(data) if files.file_name() == Some(OsStr::new("files")) => data.join("cache"),
+            _ => files.join("cache"),
+        })
+    }
+    #[cfg(any(desktop, ios))]
+    {
+        let exe = std::env::current_exe().ok()?;
+        let os = if cfg!(ios) {
+            "macos"
+        } else {
+            std::env::consts::OS
+        };
+        desktop(os, |name| std::env::var_os(name), exe.file_stem()?)
+    }
+    #[cfg(web)]
+    {
+        None
+    }
+}
+
 /// Where milestone 685 kept them on Android, before they moved to the cache folder: removed at
 /// the next start, since nothing reads it any more.
 #[cfg_attr(not(android), allow(dead_code))]

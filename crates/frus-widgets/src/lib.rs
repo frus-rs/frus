@@ -725,15 +725,17 @@ pub use frus_core::{ButtonEdge, Cutout, DeviceFrame, DeviceInsets, DeviceProfile
 // `frus_core::Status`, an animation's progress, is renamed so it does not shadow the
 // interaction `Status`, which is paint state: hover, press, focus and so on.
 pub use frus_core::Status as AnimationStatus;
+/// The image stores, for an application that loads its own pictures or sizes the cache.
+pub use frus_core::{
+    advance_image_frame, cached, cached_at, clear_fetched_images, decoded_at, fetched, fetched_at,
+    forget_cached_images, forget_fetched_image, forget_fetched_images, image_cache_budget,
+    image_cache_bytes, image_interest, image_landings, image_seen, image_wanted,
+    set_image_cache_budget, trim_image_caches, DecodeSize, Fetched, ImageInterest,
+    DEFAULT_IMAGE_CACHE_BYTES, IMAGE_FETCH_CANCELLED,
+};
 /// A picture painted as a background, and the reference's fitting.
 pub use frus_core::{
     apply_box_fit, DecorationImage, FittedSizes, ImagePiece, ImageRepeat, MAX_IMAGE_TILES,
-};
-/// The image stores, for an application that loads its own pictures or sizes the cache.
-pub use frus_core::{
-    cached, cached_at, decoded_at, fetched, fetched_at, forget_cached_images,
-    forget_fetched_images, image_cache_budget, image_cache_bytes, set_image_cache_budget,
-    trim_image_caches, DecodeSize, Fetched, DEFAULT_IMAGE_CACHE_BYTES,
 };
 /// What a decoration is made of — its shape, its sides, its border's two forms, its
 /// shadows' blur — and the shapes a border can take.
