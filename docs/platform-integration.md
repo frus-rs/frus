@@ -57,6 +57,16 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   `cx.use_pref(key, default)` shows one in a component (every platform).
 - **Secrets**: `frus::secure_store()` (feature `secure-store`) keeps them with the system's
   credential store (Windows, macOS, iOS, Linux, Android; `Unsupported` on the web).
+- **Network images**: `Image::network(url)` keeps what it downloads in memory and in the
+  application's cache folder, following the server's `Cache-Control`, `ETag` and
+  `Last-Modified`, so a picture seen once is shown again with the network off;
+  `frus::image_cache()` clears and sizes it (feature `net`; the web uses the browser's cache).
+- **A database**: `frus::database("app.db")` (feature `sqlite`) opens SQLite in the
+  application's data folder, with versioned migrations, typed rows, transactions, and every
+  call off the interface's thread (Windows, macOS, Linux, Android; `Unsupported` on the web).
+- **Signing in**: `frus::auth_session(AuthRequest::new(..))` (feature `auth`) runs OAuth 2 /
+  OpenID Connect with PKCE through the system's browser: a loopback listener on the desktops
+  and Android (in a Custom Tab there), a popup on the web.
 - **The window's place**: on Windows, macOS and Linux the window comes back at the size, the
   place and the maximized state it was closed with, fitted to the screens there are at the
   next start. Nothing to write; `FrusApp::remember_window(false)` turns it off, and

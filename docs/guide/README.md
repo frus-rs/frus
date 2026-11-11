@@ -15,6 +15,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Lists and grids](lists.md) | Long lists, the data behind them, pull to refresh, swipe to remove, grids, scrolling from code |
 | [Screens, navigation and dialogs](navigation.md) | Routes, redirects, the `Scaffold`, dialogs and sheets |
 | [Talking to a server](network.md) | Requests, JSON, loading a screen's data, sending a form |
+| [Pictures, a database and signing in](data.md) | Network images cached on disk, SQLite with migrations and transactions, OAuth 2 / OpenID Connect sign-in with PKCE |
 | [Animation](animation.md) | Values that move to their new value, switching widgets, curves, what is animated for you |
 | [Testing](testing.md) | Testing the state and the logic, and what the screen looks like |
 | [Build modes, flavors and releases](build-variants.md) | Debug, profile and release; flavors; values given at build time; the version; App Bundles, one APK per processor, installers; signing |

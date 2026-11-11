@@ -49,6 +49,14 @@ global-shortcuts = ["dep:global-hotkey"]
 secure-store = ["dep:security-framework", "dep:secret-service"]
 net = ["dep:ureq"]
 json = ["net", "dep:serde", "dep:serde_json"]
+# A SQLite database in the application's data folder: `database()` (milestone 795). Off by
+# default: SQLite is compiled in (rusqlite's `bundled`), about a megabyte of native code.
+# The Web has none; `open` answers `Unsupported` there.
+sqlite = ["dep:rusqlite", "dep:async-channel"]
+# Signing in through the system's browser, OAuth 2 / OpenID Connect with PKCE:
+# `auth_session()` (milestone 795). Off by default. The hashing and the random bytes come
+# from `ring`, already in the tree through the `net` feature's TLS.
+auth = ["json", "dep:ring", "dep:async-channel", "web-sys/Crypto", "web-sys/SubtleCrypto"]
 default = ["frus-gpu/default", "frus-widgets/default"]
 bundled-sans = ["frus-gpu/bundled-sans", "frus-widgets/bundled-sans"]
 bundled-italic = ["frus-gpu/bundled-italic", "frus-widgets/bundled-italic"]
@@ -79,6 +87,9 @@ serde_json = { version = "1", optional = true }
 # A portable monotonic clock: `std::time` natively, `performance.now()` on the Web,
 # where `std::time::Instant` panics. One API for all three platforms.
 web-time = "1"
+# A one-shot answer from another thread (features `sqlite` and `auth`). Already in the tree,
+# through `blocking`.
+async-channel = { version = "2", optional = true }
 
 # Native (desktop + Android): a blocking wait on GPU init. The Web is asynchronous
 # instead — see `run_web`.
@@ -96,10 +107,18 @@ futures-lite = "2"
 # `net` feature's client is blocking, and a blocking call on a four-worker executor
 # is how you starve every other effect in the application.
 blocking = "1"
+# The image downloads' slots (milestone 795): at most six at a time. Already in the tree,
+# through `async-io`.
+async-lock = "3"
 # The `fetch` helper's native HTTP client (the `net` feature): blocking, driven to
 # completion inside the async future's body, on its own thread. TLS through rustls,
 # ureq's default.
 ureq = { version = "3", optional = true }
+# SQLite (feature `sqlite`): compiled from its amalgamation by `bundled`, so every platform
+# has the same version and nothing is to be installed.
+rusqlite = { version = "0.41", optional = true, features = ["bundled"] }
+# The sign-in's hashing and random bytes (feature `auth`): the TLS stack's own crate.
+ring = { version = "0.17", optional = true }
 
 # The reader's preferred languages, everywhere but Android and the Web — Windows,
 # macOS, Linux and iOS each keep them somewhere different, and this is one small crate

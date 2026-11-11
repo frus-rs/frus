@@ -1248,6 +1248,8 @@ pub struct App<A: Application> {
     /// How many values the work components started had brought when this shell last looked
     /// (milestone 585).
     task_arrivals: u64,
+    /// How many images had landed when this shell last looked (milestone 795).
+    image_landings: u64,
     /// The regions the pointer is in, the innermost first, each with its box when it was
     /// last seen (milestone 583).
     entered: Vec<(WidgetId, Rect)>,
@@ -1430,7 +1432,7 @@ impl<A: Application> App<A> {
         // dependency runs the other way. So the shell says how, on the way up, and the
         // widget layer only asks. Same shape as the image decoder a step earlier.
         #[cfg(feature = "net")]
-        frus_widgets::set_image_fetcher(fetch_image_bytes);
+        frus_widgets::set_image_fetcher(crate::image_cache::fetch_image);
         // And how to run the work a component starts (milestone 585): this shell's executor
         // natively, the browser on the Web.
         #[cfg(not(web))]
@@ -1523,6 +1525,7 @@ impl<A: Application> App<A> {
             region_autoscrolled: false,
             pending_tap: None,
             task_arrivals: 0,
+            image_landings: 0,
             entered: Vec::new(),
             pointer_held: false,
             captured: Vec::new(),
@@ -5802,7 +5805,13 @@ impl<A: Application> App<A> {
     /// (milestone 585).
     fn take_task_arrivals(&mut self) -> bool {
         let now = frus_widgets::task_arrivals();
-        std::mem::replace(&mut self.task_arrivals, now) != now
+        let tasks = std::mem::replace(&mut self.task_arrivals, now) != now;
+        // A picture landed (milestone 795): the widgets laid out while it loaded hold that
+        // answer, so the tree is built again to ask once more.
+        frus_widgets::advance_image_frame();
+        let landed = frus_widgets::image_landings();
+        let images = std::mem::replace(&mut self.image_landings, landed) != landed;
+        tasks || images
     }
 
     /// Hands one raw pointer event to the widgets that hear them (milestone 586): a press to
@@ -7213,6 +7222,11 @@ impl<A: Application> App<A> {
         #[cfg(android)]
         let links = crate::android_lifecycle::take_links();
         for link in links {
+            // The answer a sign-in is waiting for, rather than a place (milestone 795).
+            #[cfg(feature = "auth")]
+            if crate::auth::offer(&link) {
+                continue;
+            }
             if let Some(location) = crate::link::location_of_link(&link) {
                 let command = self.app.open_location(&location);
                 self.run_command(command);
@@ -11065,43 +11079,6 @@ fn claim_area(
                 .find(|a| a.id == under && a.physics.user() != frus_widgets::UserScroll::Never)
         })
         .copied()
-}
-
-/// Gets the bytes at `url` and hands them to `deliver`, once.
-///
-/// Registered as the process's [`frus_widgets::ImageFetcher`] when the shell is built with
-/// `net`. It spawns and forgets: nothing here waits for the answer, and the store the
-/// callback writes into is what a later frame reads.
-///
-/// The two spawns are the two the rest of this file uses for every other effect — the
-/// shared executor natively, the browser on the Web.
-///
-/// It carries a **deadline**, and that is not politeness. An image still in flight keeps
-/// the interface redrawing — that is how the frame showing it ever happens — so a
-/// request that never answers would leave the application repainting at full rate for
-/// ever, on somebody's battery. A request without an answer has to become one with a
-/// failure.
-#[cfg(feature = "net")]
-fn fetch_image_bytes(
-    url: &str,
-    deliver: Box<dyn FnOnce(Result<Vec<u8>, String>) + Send + 'static>,
-) {
-    /// Long enough for a photograph on a slow connection, short enough that a dead
-    /// server does not pin a screen redrawing until the user closes the application.
-    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-
-    let url = url.to_string();
-    let run = async move {
-        let result = crate::net::Request::get(url)
-            .timeout(DEADLINE)
-            .send_bytes()
-            .await;
-        deliver(result.map_err(|e| e.to_string()));
-    };
-    #[cfg(not(web))]
-    crate::runtime::spawn(run).detach();
-    #[cfg(web)]
-    wasm_bindgen_futures::spawn_local(run);
 }
 
 #[cfg(test)]

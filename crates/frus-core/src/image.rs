@@ -365,6 +365,8 @@ pub fn decoded_at(
         let state = guarded(|| decode(bytes, size));
         let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         guard.get_or_insert_with(HashMap::new).insert(key, state);
+        drop(guard);
+        LANDINGS.fetch_add(1, Ordering::Release);
     }));
     CACHE
         .lock()
@@ -451,6 +453,153 @@ struct Entry {
     state: Fetched,
     /// A tick from [`CLOCK`], not a wall time.
     used: u64,
+    /// The address fetched, which a sized key carries with its size.
+    url: String,
+    /// Which fetch this entry is waiting for: one that lands for an entry started again
+    /// since is not this entry's answer.
+    ticket: u64,
+    /// Who is showing it while it loads (milestone 795): `None` until an [`Image`] in the
+    /// tree says so, and then the [`ImageInterest`] it holds. A fetch whose interest has
+    /// died — every widget showing it gone — is no longer wanted.
+    ///
+    /// [`Image`]: https://docs.rs/frus-widgets/latest/frus_widgets/struct.Image.html
+    interest: Option<std::sync::Weak<()>>,
+    /// The last frame ([`advance_image_frame`]) an `Image` for this address was built in:
+    /// a row of a list is built again on every frame it is in view, and not once it has
+    /// scrolled away.
+    seen: u64,
+}
+
+impl Entry {
+    fn new(state: Fetched, used: u64, url: &str, ticket: u64) -> Self {
+        Self {
+            state,
+            used,
+            url: url.to_string(),
+            ticket,
+            interest: None,
+            seen: FRAME.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Whether a fetch for this entry is still worth finishing: it is loading, and either
+    /// nobody has said they show it — a view that only asked its state — or somebody who
+    /// did still does.
+    fn wanted(&self) -> bool {
+        matches!(self.state, Fetched::Loading)
+            && (self
+                .interest
+                .as_ref()
+                .is_none_or(|weak| weak.strong_count() > 0)
+                || FRAME.load(Ordering::Relaxed).saturating_sub(self.seen) <= SEEN_FRAMES)
+    }
+}
+
+/// What a fetcher answers for a fetch it gave up because nobody wanted it any more
+/// ([`image_wanted`] said `false`): the entry is forgotten rather than remembered as a
+/// failure, so the picture is fetched again when it is next shown.
+pub const IMAGE_FETCH_CANCELLED: &str = "cancelled: nobody shows this image any more";
+
+/// **A widget's hold on an image in flight** (milestone 795): while one is alive, the fetch
+/// is wanted; when the last goes — the image scrolled out of a list, its page closed — the
+/// fetcher may give it up ([`image_wanted`]).
+///
+/// Taken with [`image_interest`] by the widget that paints the picture, and dropped with it.
+#[derive(Clone, Debug)]
+pub struct ImageInterest(#[allow(dead_code)] Arc<()>);
+
+/// Says that the image at `url`, decoded at `size`, is **shown**, for as long as the
+/// returned [`ImageInterest`] is kept: `None` when it is not loading (here already, failed,
+/// or never asked for).
+///
+/// ```
+/// use frus_core::{image_interest, DecodeSize};
+/// // Nothing asked for this address, so there is nothing to hold.
+/// assert!(image_interest("https://example.com/never.png", DecodeSize::FULL).is_none());
+/// ```
+pub fn image_interest(url: &str, size: DecodeSize) -> Option<ImageInterest> {
+    let key = if size.is_full() {
+        url.to_string()
+    } else {
+        sized_key(url, size)
+    };
+    let mut guard = FETCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = guard.as_mut()?.get_mut(&key)?;
+    if !matches!(entry.state, Fetched::Loading) {
+        return None;
+    }
+    if let Some(alive) = entry.interest.as_ref().and_then(std::sync::Weak::upgrade) {
+        return Some(ImageInterest(alive));
+    }
+    let interest = Arc::new(());
+    entry.interest = Some(Arc::downgrade(&interest));
+    Some(ImageInterest(interest))
+}
+
+/// Whether a fetch of `url` in flight is **still wanted**: `false` only when the store
+/// holds that address and no size of it is loading for anybody — every widget that showed
+/// it is gone. A fetch the store knows nothing of is wanted, its asker being somebody else.
+/// A fetcher asks before it starts the request and while the body comes in, and answers
+/// [`IMAGE_FETCH_CANCELLED`] when this turns `false`.
+///
+/// ```
+/// assert!(frus_core::image_wanted("https://example.com/never-asked.png"));
+/// ```
+pub fn image_wanted(url: &str) -> bool {
+    FETCHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_none_or(|store| {
+            let mut known = false;
+            for entry in store.values().filter(|e| e.url == url) {
+                if entry.wanted() {
+                    return true;
+                }
+                known = true;
+            }
+            !known
+        })
+}
+
+/// A number for each fetch started, so that an answer can be matched with its entry.
+static TICKETS: AtomicU64 = AtomicU64::new(1);
+
+/// The shell's frame count, for [`image_seen`].
+static FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// How many frames an image may go unbuilt, its widgets gone, before its fetch is given
+/// up: a few, so that a widget rebuilt in another frame's layout keeps it.
+const SEEN_FRAMES: u64 = 3;
+
+/// **Counts a frame** for the image stores (milestone 795): the shell calls it once per
+/// frame drawn. A fetch whose image was neither built in the last few frames nor is held
+/// by a widget that showed it is no longer wanted ([`image_wanted`]). No frames — an
+/// interface at rest — and nothing is given up.
+///
+/// ```
+/// frus_core::advance_image_frame();
+/// ```
+pub fn advance_image_frame() {
+    FRAME.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Says that an `Image` for `url` was **built** this frame, whatever its size: what keeps
+/// a picture in a list wanted while its row is in view, since a row is built again on
+/// every frame it is shown and the earlier copy dropped (milestone 795).
+///
+/// ```
+/// frus_core::image_seen("https://example.com/a.png");
+/// ```
+pub fn image_seen(url: &str) {
+    let frame = FRAME.load(Ordering::Relaxed);
+    if let Ok(mut guard) = FETCHED.lock() {
+        if let Some(store) = guard.as_mut() {
+            for entry in store.values_mut().filter(|e| e.url == url) {
+                entry.seen = frame;
+            }
+        }
+    }
 }
 
 /// The default ceiling on decoded network images held in memory: the reference's own
@@ -611,7 +760,7 @@ fn sized_key(url: &str, size: DecodeSize) -> String {
 }
 
 /// What turns the fetched bytes into pixels.
-type Decoder = Box<dyn FnOnce(&[u8]) -> Result<ImageData, String> + Send + 'static>;
+type Decoder = Box<dyn Fn(&[u8]) -> Result<ImageData, String> + Send + Sync + 'static>;
 
 /// The store's lookup, and the start of the fetch when `key` is new.
 fn fetch(key: &str, url: &str, decode: Decoder) -> Fetched {
@@ -623,61 +772,131 @@ fn fetch(key: &str, url: &str, decode: Decoder) -> Fetched {
         // asked for on every frame, which is exactly what keeps it out of the way of
         // the eviction sweep.
         known.used = now;
+        known.seen = FRAME.load(Ordering::Relaxed);
         return known.state.clone();
     }
     let Some(fetcher) = *FETCHER.lock().unwrap_or_else(|e| e.into_inner()) else {
         // No fetcher: a build without the network, or a host that never named one.
         // Saying so is an answer; hanging on `Loading` for ever is not.
         let failed = Fetched::Failed("no image fetcher registered".to_string());
-        store.insert(
-            key.to_string(),
-            Entry {
-                state: failed.clone(),
-                used: now,
-            },
-        );
+        store.insert(key.to_string(), Entry::new(failed.clone(), now, url, 0));
         return failed;
     };
+    let ticket = TICKETS.fetch_add(1, Ordering::Relaxed);
     store.insert(
         key.to_string(),
-        Entry {
-            state: Fetched::Loading,
-            used: now,
-        },
+        Entry::new(Fetched::Loading, now, url, ticket),
     );
     // The lock goes **before** the call. A fetcher is free to answer on this thread —
     // a cache hit in a host client, a test double — and its callback locks the same
     // store, which would be a deadlock against a guard still held here.
     drop(guard);
+    start(
+        fetcher,
+        key.to_string(),
+        url.to_string(),
+        ticket,
+        Arc::new(decode),
+    );
+    Fetched::Loading
+}
 
-    let key = key.to_string();
+/// What turns the fetched bytes into pixels, shared so that a cancelled fetch can be
+/// started again with it.
+type SharedDecoder = Arc<dyn Fn(&[u8]) -> Result<ImageData, String> + Send + Sync + 'static>;
+
+/// Hands `url` to the fetcher for the entry `key`, waiting on `ticket`.
+fn start(fetcher: ImageFetcher, key: String, url: String, ticket: u64, decode: SharedDecoder) {
+    let address = url.clone();
     fetcher(
-        url,
+        &address,
         Box::new(move |result| match result {
             // The bytes are decoded on the decoding threads, not on whichever thread the
             // fetcher answered on: that one is the network's, and a picture is a burst of
             // memory that has to be counted with the others.
             Ok(bytes) => in_background(Box::new(move || {
                 let outcome = guarded(|| decode(&bytes));
-                land(key, outcome);
+                land(key, ticket, outcome);
             })),
-            Err(why) => land(key, Fetched::Failed(why)),
+            Err(why) if why == IMAGE_FETCH_CANCELLED => {
+                cancelled(fetcher, key, url, ticket, decode)
+            }
+            Err(why) => land(key, ticket, Fetched::Failed(why)),
         }),
     );
-    Fetched::Loading
 }
 
-/// Puts what became of a fetch in the store.
-fn land(key: String, outcome: Fetched) {
+/// A fetch the fetcher gave up. Nobody wanted it when it asked; if somebody does again by
+/// now — the image scrolled back in while the answer was on its way — it starts again,
+/// and otherwise the entry is forgotten, to be fetched the next time it is shown.
+fn cancelled(fetcher: ImageFetcher, key: String, url: String, ticket: u64, decode: SharedDecoder) {
+    let restart = {
+        let mut guard = FETCHED.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(store) = guard.as_mut() else { return };
+        match store.get_mut(&key) {
+            Some(entry) if entry.ticket == ticket => {
+                let shown = entry
+                    .interest
+                    .as_ref()
+                    .is_some_and(|weak| weak.strong_count() > 0);
+                if shown {
+                    let next = TICKETS.fetch_add(1, Ordering::Relaxed);
+                    entry.ticket = next;
+                    Some(next)
+                } else {
+                    store.remove(&key);
+                    // A widget built before the fetch was given up still holds `Loading`:
+                    // the tree is built again so that whoever shows it asks again.
+                    LANDINGS.fetch_add(1, Ordering::Release);
+                    None
+                }
+            }
+            // Started again since, or forgotten: not this answer's entry.
+            _ => None,
+        }
+    };
+    if let Some(next) = restart {
+        start(fetcher, key, url, next, decode);
+    }
+}
+
+/// How many fetched or background-decoded images have landed since the process started.
+static LANDINGS: AtomicU64 = AtomicU64::new(0);
+
+/// **How many images have landed** — fetched, or decoded on a background thread — since the
+/// process started (milestone 795). A widget laid out while its picture loaded still holds
+/// that answer, so a shell that sees this number move builds the interface again.
+///
+/// ```
+/// let before = frus_core::image_landings();
+/// assert!(frus_core::image_landings() >= before);
+/// ```
+pub fn image_landings() -> u64 {
+    LANDINGS.load(Ordering::Acquire)
+}
+
+/// Puts what became of a fetch in the store, if the entry is still waiting for it.
+fn land(key: String, ticket: u64, outcome: Fetched) {
+    // Counted on the way out, once the store holds it, whatever the store does with it.
+    struct Landed;
+    impl Drop for Landed {
+        fn drop(&mut self) {
+            LANDINGS.fetch_add(1, Ordering::Release);
+        }
+    }
+    let _landed = Landed;
     if let Ok(mut guard) = FETCHED.lock() {
         let store = guard.get_or_insert_with(HashMap::new);
-        store.insert(
-            key,
-            Entry {
-                state: outcome,
-                used: CLOCK.fetch_add(1, Ordering::Relaxed),
-            },
-        );
+        let Some(entry) = store.get_mut(&key) else {
+            // Forgotten while in flight (`forget_fetched_images`): nobody is waiting.
+            return;
+        };
+        if entry.ticket != ticket {
+            return;
+        }
+        entry.state = outcome;
+        entry.used = CLOCK.fetch_add(1, Ordering::Relaxed);
+        entry.interest = None;
         // The one moment the store grows. Sweeping here rather than on every ask means
         // the cost is paid once per picture that arrives, not once per frame per picture
         // on screen.
@@ -722,6 +941,36 @@ pub fn images_in_flight() -> usize {
                 .count()
         });
     fetched + decoding
+}
+
+/// Forgets every size of the image at `url` that is here or failed, so that the next time
+/// it is shown it is fetched again; one in flight is left to land (milestone 795). What an
+/// application's "reload this picture" does, with the disk cache's own eviction.
+///
+/// ```
+/// frus_core::forget_fetched_image("https://example.com/ada.png");
+/// ```
+pub fn forget_fetched_image(url: &str) {
+    if let Ok(mut guard) = FETCHED.lock() {
+        if let Some(store) = guard.as_mut() {
+            store.retain(|_, entry| entry.url != url || matches!(entry.state, Fetched::Loading));
+        }
+    }
+}
+
+/// Forgets every decoded image nobody holds and every remembered failure, keeping what is
+/// in flight (milestone 795): what clearing an application's image cache does to memory.
+/// Unlike [`trim_image_caches`], a failure goes too, so a broken address is tried again.
+pub fn clear_fetched_images() {
+    if let Ok(mut guard) = FETCHED.lock() {
+        if let Some(store) = guard.as_mut() {
+            store.retain(|_, entry| match &entry.state {
+                Fetched::Loading => true,
+                Fetched::Ready(handle) => Arc::strong_count(handle) > 1,
+                Fetched::Failed(_) => false,
+            });
+        }
+    }
 }
 
 /// Forgets every fetched image and every remembered failure. For tests; see
@@ -864,7 +1113,7 @@ mod cache_tests {
     fn store_of(entries: Vec<(&str, Fetched, u64)>) -> HashMap<String, Entry> {
         entries
             .into_iter()
-            .map(|(url, state, used)| (url.to_string(), Entry { state, used }))
+            .map(|(url, state, used)| (url.to_string(), Entry::new(state, used, url, 0)))
             .collect()
     }
 

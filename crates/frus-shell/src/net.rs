@@ -88,6 +88,9 @@ pub enum FetchError {
     Status(u16),
     /// The response could not be read as text: invalid UTF-8, a non-textual body.
     Decode(String),
+    /// Given up because nobody wanted the answer any more: an image that left the screen
+    /// before its download ended (milestone 795).
+    Cancelled,
 }
 
 impl fmt::Display for FetchError {
@@ -96,6 +99,7 @@ impl fmt::Display for FetchError {
             FetchError::Network(m) => write!(f, "network error: {m}"),
             FetchError::Status(c) => write!(f, "HTTP status {c}"),
             FetchError::Decode(m) => write!(f, "decode error: {m}"),
+            FetchError::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -230,9 +234,47 @@ impl Request {
     /// does not control can be made to run out of memory by that server, which is why
     /// `ureq`'s own text reader has a limit and why this one does.
     ///
-    /// **Native**: the blocking `ureq` client, run inside the future.
-    #[cfg(not(web))]
+    /// **Native**: the blocking `ureq` client, run inside the future. **Web**:
+    /// `window.fetch`.
     pub async fn send_bytes(self) -> Result<Vec<u8>, FetchError> {
+        let response = self.send_response().await?;
+        if response.status == 304 {
+            // Only a request that asked with `If-None-Match` or `If-Modified-Since` gets
+            // this, and then it wanted the status: `send_response` is the one for it.
+            return Err(FetchError::Status(304));
+        }
+        Ok(response.body)
+    }
+
+    /// Runs the request and returns the whole [`Response`]: the status, the headers and
+    /// the body (milestone 795).
+    ///
+    /// What a cache needs: the `Cache-Control`, `ETag` and `Last-Modified` headers, and a
+    /// `304 Not Modified` told apart from a `200`. A status of 400 or more is still a
+    /// [`FetchError::Status`], as it is for [`send`](Request::send).
+    ///
+    /// ```no_run
+    /// # async fn run() -> Result<(), frus_shell::FetchError> {
+    /// let response = frus_shell::Request::get("https://example.com/logo.png")
+    ///     .send_response()
+    ///     .await?;
+    /// let etag = response.header("ETag").map(str::to_string);
+    /// println!("{} bytes, {:?}", response.body().len(), etag);
+    /// # Ok(()) }
+    /// ```
+    pub async fn send_response(self) -> Result<Response, FetchError> {
+        self.send_response_while(|| true).await
+    }
+
+    /// [`send_response`](Request::send_response), giving up with
+    /// [`FetchError::Cancelled`] as soon as `wanted` answers `false`: asked before the
+    /// request is made and between the chunks of the body. How an image nobody shows any
+    /// more stops its download.
+    #[cfg(not(web))]
+    pub(crate) async fn send_response_while(
+        self,
+        wanted: impl Fn() -> bool + Send + 'static,
+    ) -> Result<Response, FetchError> {
         if let Some(err) = self.error {
             return Err(err);
         }
@@ -245,6 +287,9 @@ impl Request {
         // shape of the bug is the reason this crate exists: a call that blocks needs a
         // thread, and the point of milestone 303 is that *waiting* no longer does.
         blocking::unblock(move || {
+            if !wanted() {
+                return Err(FetchError::Cancelled);
+            }
             // An agent per request: what it is configured with is this request's own —
             // its timeout over the whole exchange — and a status of 400 or more comes back
             // as an error, as `fetch` reports it.
@@ -267,21 +312,45 @@ impl Request {
             match result {
                 Ok(mut resp) => {
                     use std::io::Read;
-                    // One byte past the limit, so a body **at** the cap is not mistaken
-                    // for one over it: `take(MAX)` fills exactly `MAX` for both, and
-                    // there is no way to tell them apart afterwards.
-                    let mut body = Vec::new();
-                    resp.body_mut()
+                    let status = resp.status().as_u16();
+                    let headers = resp
+                        .headers()
+                        .iter()
+                        .filter_map(|(name, value)| {
+                            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+                        })
+                        .collect();
+                    // In chunks, so that a download nobody wants any more stops here. One
+                    // byte past the limit, so a body **at** the cap is not mistaken for one
+                    // over it: `take(MAX)` fills exactly `MAX` for both.
+                    let mut reader = resp
+                        .body_mut()
                         .as_reader()
-                        .take(MAX_RESPONSE_BYTES as u64 + 1)
-                        .read_to_end(&mut body)
-                        .map_err(|e| FetchError::Decode(e.to_string()))?;
+                        .take(MAX_RESPONSE_BYTES as u64 + 1);
+                    let mut body = Vec::new();
+                    let mut chunk = vec![0u8; 64 * 1024];
+                    loop {
+                        let read = reader
+                            .read(&mut chunk)
+                            .map_err(|e| FetchError::Decode(e.to_string()))?;
+                        if read == 0 {
+                            break;
+                        }
+                        body.extend_from_slice(&chunk[..read]);
+                        if !wanted() {
+                            return Err(FetchError::Cancelled);
+                        }
+                    }
                     if body.len() > MAX_RESPONSE_BYTES {
                         return Err(FetchError::Decode(format!(
                             "response body over {MAX_RESPONSE_BYTES} bytes"
                         )));
                     }
-                    Ok(body)
+                    Ok(Response {
+                        status,
+                        headers,
+                        body,
+                    })
                 }
                 Err(ureq::Error::StatusCode(code)) => Err(FetchError::Status(code)),
                 Err(e) => Err(FetchError::Network(e.to_string())),
@@ -290,15 +359,19 @@ impl Request {
         .await
     }
 
-    /// Runs the request and returns the response's body as **bytes**. See the native
-    /// twin above for what this is for and for the size cap.
-    ///
-    /// **Web**: `window.fetch`; the timeout is armed by an `AbortController` plus
-    /// `setTimeout`, and disarmed as soon as the response arrives.
+    /// The Web's twin of the native one above: `window.fetch`; the timeout is armed by an
+    /// `AbortController` plus `setTimeout`, and disarmed as soon as the response arrives.
+    /// `wanted` is asked before the request is made and once the body is in.
     #[cfg(web)]
-    pub async fn send_bytes(self) -> Result<Vec<u8>, FetchError> {
+    pub(crate) async fn send_response_while(
+        self,
+        wanted: impl Fn() -> bool + 'static,
+    ) -> Result<Response, FetchError> {
         if let Some(err) = self.error {
             return Err(err);
+        }
+        if !wanted() {
+            return Err(FetchError::Cancelled);
         }
         use wasm_bindgen::closure::Closure;
         use wasm_bindgen::{JsCast, JsValue};
@@ -367,8 +440,20 @@ impl Request {
         let resp: web_sys::Response = resp_val
             .dyn_into()
             .map_err(|_| FetchError::Network("invalid response".into()))?;
-        if !resp.ok() {
-            return Err(FetchError::Status(resp.status()));
+        let status = resp.status();
+        if !resp.ok() && status != 304 {
+            return Err(FetchError::Status(status));
+        }
+        let mut headers = Vec::new();
+        if let Ok(Some(iter)) = js_sys::try_iter(&resp.headers()) {
+            for pair in iter.flatten() {
+                let pair = js_sys::Array::from(&pair);
+                if let (Some(name), Some(value)) =
+                    (pair.get(0).as_string(), pair.get(1).as_string())
+                {
+                    headers.push((name, value));
+                }
+            }
         }
         // `arrayBuffer()` rather than `text()`: the same body without the browser
         // deciding it is a string. The UTF-8 step is `send`'s, and only when asked for.
@@ -384,7 +469,69 @@ impl Request {
                 "response body over {MAX_RESPONSE_BYTES} bytes"
             )));
         }
-        Ok(bytes)
+        if !wanted() {
+            return Err(FetchError::Cancelled);
+        }
+        Ok(Response {
+            status,
+            headers,
+            body: bytes,
+        })
+    }
+}
+
+/// What a server answered: the status, the headers and the body. See
+/// [`Request::send_response`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Response {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl Response {
+    /// A response put together by hand: for tests, and for a host that has its own client.
+    ///
+    /// ```
+    /// use frus_shell::net::Response;
+    /// let response = Response::new(200, vec![("ETag".into(), "v1".into())], b"hi".to_vec());
+    /// assert_eq!(response.header("etag"), Some("v1"));
+    /// ```
+    pub fn new(status: u16, headers: Vec<(String, String)>, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    /// The status code: `200`, or `304` for a conditional request the server says is
+    /// still current.
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+
+    /// The first header called `name`, whatever its case.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Every header, in the order the transport handed them over.
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    /// The body.
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The body, owned.
+    pub fn into_body(self) -> Vec<u8> {
+        self.body
     }
 }
 

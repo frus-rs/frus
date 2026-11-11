@@ -122,9 +122,10 @@ pub const IMAGE_FADE: f32 = 0.7;
 /// Not [`crate::Placeholder`], which is the design tool's crossed box: this one is the
 /// slot [`Image::placeholder`] fills.
 ///
-/// Three, because they are the three things anybody puts there: a flat colour, the
-/// shimmering block a list of thumbnails wants, or a smaller picture — a blurred
-/// thumbnail, a low-resolution copy, the one already in the cache.
+/// The things anybody puts there: a flat colour, the shimmering block a list of thumbnails
+/// wants, a smaller picture — a blurred thumbnail, a low-resolution copy, the one already
+/// in the cache — or an icon, which is what a picture that failed usually shows
+/// ([`Image::error_placeholder`]).
 ///
 /// It is **not a widget slot**, and that is deliberate: [`Image`] carries no message type
 /// (`impl<Msg> Widget<Msg> for Image`), which is what lets one be built once and dropped
@@ -137,6 +138,14 @@ pub enum ImagePlaceholder {
     Skeleton(Skeleton),
     /// Another picture: a blur, a thumbnail, the cached copy.
     Image(Box<Image>),
+    /// An icon, centred in the box: a broken picture's sign, say (milestone 795).
+    Icon(crate::Icon),
+}
+
+impl From<crate::Icon> for ImagePlaceholder {
+    fn from(icon: crate::Icon) -> Self {
+        ImagePlaceholder::Icon(icon)
+    }
 }
 
 impl From<Color> for ImagePlaceholder {
@@ -172,6 +181,9 @@ impl ImagePlaceholder {
             ImagePlaceholder::Image(image) => {
                 Widget::<()>::paint(image.as_ref(), bounds, *status, theme, scene)
             }
+            ImagePlaceholder::Icon(icon) => {
+                Widget::<()>::paint(icon, bounds, *status, theme, scene)
+            }
         }
     }
 }
@@ -206,6 +218,11 @@ pub struct Image {
     /// What stands in while the pixels are on their way; `None` leaves the box empty,
     /// which is what an image has always done.
     placeholder: Option<ImagePlaceholder>,
+    /// What is drawn when the picture will never come; `None` leaves the box empty.
+    error_placeholder: Option<ImagePlaceholder>,
+    /// This widget's hold on its picture while it loads, taken when it is laid out or
+    /// painted, so that a fetch whose widgets are all gone can be given up (milestone 795).
+    interest: OnceCell<Option<frus_core::ImageInterest>>,
     /// How long the picture takes to cross over the placeholder.
     fade: f32,
     fade_curve: Curve,
@@ -294,6 +311,9 @@ impl Image {
     /// installs on the way up when built with the `net` feature. Without one this fails
     /// with a message saying so, rather than waiting for ever.
     pub fn network(url: impl AsRef<str>) -> Self {
+        // Built: wanted for this frame, which keeps a list's picture coming while its row is
+        // in view (milestone 795).
+        frus_core::image_seen(url.as_ref());
         Self::from_origin(Origin::Network(url.as_ref().to_string()))
     }
 
@@ -413,6 +433,8 @@ impl Image {
             exclude_from_semantics: false,
             match_text_direction: false,
             placeholder: None,
+            error_placeholder: None,
+            interest: OnceCell::new(),
             fade: IMAGE_FADE,
             fade_curve: Curve::ease_out(),
         }
@@ -584,6 +606,36 @@ impl Image {
         self
     }
 
+    /// **What stands in for a picture that will never come**: a 404, a dropped connection,
+    /// bytes that are not an image (milestone 795). Without one the box stays empty, which
+    /// is what an image has always done; [`Image::error`] says why either way.
+    ///
+    /// ```ignore
+    /// Image::network(url)
+    ///     .size(120.0, 90.0)
+    ///     .placeholder(Skeleton::new())
+    ///     .error_placeholder(Icon::new(Icons::BROKEN_IMAGE))
+    /// ```
+    #[must_use]
+    pub fn error_placeholder(mut self, placeholder: impl Into<ImagePlaceholder>) -> Self {
+        self.error_placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Says that this widget shows its picture, once, while it is loading: the fetch is
+    /// then given up if every widget that said so is dropped before it lands. Asked from
+    /// the layout and the paint and not from [`Image::state`], so that a view which only
+    /// asks — and shows something else meanwhile — never cancels its own fetch.
+    fn hold(&self) {
+        if !matches!(self.source(), Source::Loading) {
+            return;
+        }
+        if let Some(Origin::Network(url)) = &self.origin {
+            self.interest
+                .get_or_init(|| frus_core::image_interest(url, self.decode_size()));
+        }
+    }
+
     /// How long the crossing takes, in seconds. [`IMAGE_FADE`] — the reference's 700 ms —
     /// unless a caller says otherwise. `0.0` is a hard cut with a placeholder before it.
     #[must_use]
@@ -607,6 +659,7 @@ impl Image {
 
     /// The box this asks for, given the bitmap's own size.
     fn box_style(&self) -> Style {
+        self.hold();
         // Nothing decoded: there is no natural size to fall back on, so an image given
         // no measurements takes no room at all. Anything the caller *did* say is still
         // honoured, which is what keeps a layout from jumping when one asset is broken.
@@ -745,6 +798,11 @@ impl Image {
                 };
                 placeholder.paint(bounds, &under, theme, scene);
             }
+        }
+        self.hold();
+        if let (Source::Failed(_), Some(error)) = (self.source(), &self.error_placeholder) {
+            error.paint(bounds, &status, theme, scene);
+            return;
         }
         // The **alignment** stays physical whatever the direction. An image is a
         // picture rather than a run of text: a portrait aligned to the top of its
@@ -1640,6 +1698,136 @@ mod tests {
             // The same address at its own size is another entry, and another fetch.
             let full = decoded(|| Image::network("https://example.com/big.png"));
             assert_eq!(full.width(), 1000);
+        }
+
+        /// The answers a held fetcher was asked for, to give them when a test says so.
+        type Pending = Vec<(String, Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>)>;
+        static HELD: std::sync::Mutex<Pending> = std::sync::Mutex::new(Vec::new());
+        fn held(url: &str, deliver: Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>) {
+            HELD.lock().unwrap().push((url.to_string(), deliver));
+        }
+        fn answer_all(result: Result<Vec<u8>, String>) {
+            let pending: Pending = std::mem::take(&mut *HELD.lock().unwrap());
+            for (_, deliver) in pending {
+                deliver(result.clone());
+            }
+        }
+
+        /// Milestone 795: a picture laid out and then dropped — scrolled out of a list — is no
+        /// longer wanted, so its fetcher may give it up; one a view only asked about is.
+        #[test]
+        fn a_fetch_is_wanted_while_a_widget_that_showed_it_lives() {
+            let _guard = serialised();
+            HELD.lock().unwrap().clear();
+            frus_core::set_image_fetcher(held);
+            let url = "https://example.com/scrolled.png";
+            let shown = Image::network(url).size(40.0, 40.0);
+            let _ = Widget::<()>::style(&shown);
+            assert!(frus_core::image_wanted(url), "on screen: wanted");
+            drop(shown);
+            assert!(
+                frus_core::image_wanted(url),
+                "built this frame: still wanted, a list builds its rows again"
+            );
+            for _ in 0..4 {
+                frus_core::advance_image_frame();
+            }
+            assert!(
+                !frus_core::image_wanted(url),
+                "gone for frames: nobody wants it"
+            );
+
+            let asked = "https://example.com/only-asked.png";
+            assert_eq!(Image::network(asked).state(), State::Loading);
+            assert!(
+                frus_core::image_wanted(asked),
+                "a view that only asked the state never cancels its own fetch"
+            );
+            answer_all(Err("done".into()));
+        }
+
+        /// A fetch given up is forgotten, not remembered as a failure: the picture is fetched
+        /// again when it comes back.
+        #[test]
+        fn a_cancelled_fetch_is_fetched_again_when_shown_again() {
+            let _guard = serialised();
+            HELD.lock().unwrap().clear();
+            frus_core::set_image_fetcher(held);
+            let url = "https://example.com/flung.png";
+            let shown = Image::network(url);
+            let _ = Widget::<()>::style(&shown);
+            drop(shown);
+            answer_all(Err(frus_core::IMAGE_FETCH_CANCELLED.to_string()));
+            assert!(
+                frus_core::image_wanted(url),
+                "forgotten: no entry is left to say nobody wants it"
+            );
+            let back = Image::network(url);
+            assert_eq!(back.state(), State::Loading, "not a failure: asked again");
+            assert_eq!(HELD.lock().unwrap().len(), 1, "a second request");
+            answer_all(Err("done".into()));
+        }
+
+        /// A widget that took the picture back while the cancellation was on its way keeps
+        /// it coming: the fetch starts again rather than leaving it loading for ever.
+        #[test]
+        fn a_cancellation_that_crosses_a_new_widget_starts_again() {
+            let _guard = serialised();
+            HELD.lock().unwrap().clear();
+            frus_core::set_image_fetcher(held);
+            let url = "https://example.com/back.png";
+            let first = Image::network(url);
+            let _ = Widget::<()>::style(&first);
+            drop(first);
+            let again = Image::network(url);
+            let _ = Widget::<()>::style(&again);
+            answer_all(Err(frus_core::IMAGE_FETCH_CANCELLED.to_string()));
+            assert_eq!(
+                HELD.lock().unwrap().len(),
+                1,
+                "started again for the new widget"
+            );
+            assert!(frus_core::image_wanted(url));
+            let landed = frus_core::image_landings();
+            answer_all(Ok(png().to_vec()));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while Image::network(url).state() != State::Ready {
+                assert!(std::time::Instant::now() < deadline, "never landed");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(
+                frus_core::image_landings() > landed,
+                "and the landing is counted"
+            );
+        }
+
+        /// What `error_placeholder` names is painted when the picture will not come, and
+        /// nothing is without it.
+        #[test]
+        fn the_error_placeholder_is_painted_for_a_failed_picture() {
+            let _guard = serialised();
+            frus_core::set_image_fetcher(instant_failure);
+            let bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
+            let _ = Image::network("https://example.com/broken.png").state();
+            let mut bare = Scene::new();
+            Widget::<()>::paint(
+                &Image::network("https://example.com/broken.png"),
+                bounds,
+                Status::default(),
+                &Theme::dark(),
+                &mut bare,
+            );
+            assert!(bare.primitives().is_empty());
+            let mut marked = Scene::new();
+            Widget::<()>::paint(
+                &Image::network("https://example.com/broken.png")
+                    .error_placeholder(Color::rgb(1.0, 0.0, 0.0)),
+                bounds,
+                Status::default(),
+                &Theme::dark(),
+                &mut marked,
+            );
+            assert_eq!(marked.primitives().len(), 1, "the error's stand-in");
         }
     }
 

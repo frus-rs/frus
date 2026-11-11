@@ -149,3 +149,94 @@ pub(crate) fn share(
         None => Err(ShareError::Unsupported),
     }
 }
+
+/// Opens a sign-in page (milestone 795): in a **Custom Tab** when the browser has them — the
+/// intent carries the Custom Tabs session extra, which is all it takes, with no library — and
+/// in the browser otherwise. Not in a task of its own: the tab stays over the application,
+/// which [`return_to_app`] brings back over it once the loopback answer is in.
+#[cfg(feature = "auth")]
+pub(crate) fn open_auth_tab(url: &str) -> Result<(), OpenUrlError> {
+    let opened = with_bridge(|env, _class, activity| {
+        let text = env.new_string(url)?;
+        let uri = env
+            .call_static_method(
+                "android/net/Uri",
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue::Object(&text)],
+            )?
+            .l()?;
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(
+            "android/content/Intent",
+            "(Ljava/lang/String;Landroid/net/Uri;)V",
+            &[JValue::Object(&action), JValue::Object(&uri)],
+        )?;
+        let extras = env.new_object("android/os/Bundle", "()V", &[])?;
+        let session = env.new_string("android.support.customtabs.extra.SESSION")?;
+        env.call_method(
+            &extras,
+            "putBinder",
+            "(Ljava/lang/String;Landroid/os/IBinder;)V",
+            &[JValue::Object(&session), JValue::Object(&JObject::null())],
+        )?;
+        env.call_method(
+            &intent,
+            "putExtras",
+            "(Landroid/os/Bundle;)Landroid/content/Intent;",
+            &[JValue::Object(&extras)],
+        )?;
+        env.call_method(
+            activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
+        )?;
+        Ok(())
+    });
+    opened.ok_or(OpenUrlError::NoHandler)
+}
+
+/// Brings the application's activity back over what was started above it in its task — the
+/// sign-in's Custom Tab (milestone 795): an intent for its own activity with
+/// `FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP`, which finishes everything above it and
+/// hands the intent to the running activity instead of making another. Android 10 lets an
+/// application do this from the background while one of its activities is in the foreground
+/// task, which it is, under the tab.
+#[cfg(feature = "auth")]
+pub(crate) fn return_to_app() {
+    let done = with_bridge(|env, _class, activity| {
+        let component = env
+            .call_method(
+                activity,
+                "getComponentName",
+                "()Landroid/content/ComponentName;",
+                &[],
+            )?
+            .l()?;
+        let intent = env.new_object("android/content/Intent", "()V", &[])?;
+        env.call_method(
+            &intent,
+            "setComponent",
+            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+            &[JValue::Object(&component)],
+        )?;
+        // FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP.
+        env.call_method(
+            &intent,
+            "addFlags",
+            "(I)Landroid/content/Intent;",
+            &[JValue::Int(0x0400_0000 | 0x2000_0000)],
+        )?;
+        env.call_method(
+            activity,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
+        )?;
+        Ok(())
+    });
+    if done.is_none() {
+        log::warn!("the application could not come back over the sign-in tab");
+    }
+}

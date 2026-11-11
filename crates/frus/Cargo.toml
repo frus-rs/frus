@@ -49,6 +49,12 @@ taskbar = ["frus-shell/taskbar"]
 # Global shortcuts: `GlobalShortcut`. The desktop (X11 on Linux); off by default.
 global-shortcuts = ["frus-shell/global-shortcuts"]
 json = ["frus-shell/json"]
+# A SQLite database in the application's data folder: `database()` (milestone 795). Off by
+# default: SQLite itself is compiled in. Not on the Web, where `open` answers `Unsupported`.
+sqlite = ["frus-shell/sqlite"]
+# Signing in through the system's browser, OAuth 2 / OpenID Connect with PKCE:
+# `auth_session()` (milestone 795). Off by default; implies `net` and `json`.
+auth = ["frus-shell/auth"]
 # Secrets kept by the system: `secure_store()`. Off by default; Linux builds talk to the
 # desktop's Secret Service over D-Bus (no system library needed).
 secure-store = ["frus-shell/secure-store"]

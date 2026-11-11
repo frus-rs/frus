@@ -8,11 +8,24 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 791 so far, each documenting the objective, the alternatives
+> record — one per step, 795 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
+  `Image::network` keeps what it downloads in the application's cache folder as HTTP says
+  (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown
+  when the network is gone; 100 MiB, least recently used first), makes one download per address
+  however many widgets and sizes ask, at most six at once, gives up a download whose picture left
+  the screen, and builds the tree again when a picture lands. `Image::error_placeholder`, an
+  `Icon` placeholder, and `frus::image_cache()` (clear, evict, sizes, budgets).
+  `Request::send_response` returns the status and headers. `frus::database("app.db")` (feature
+  `sqlite`): SQLite in the data folder with versioned migrations, typed parameters and rows,
+  transactions, on a thread of its own; `Unsupported` on the web. `frus::auth_session` (feature
+  `auth`): OAuth 2 / OpenID Connect with PKCE through the system's browser — a loopback listener
+  on the desktops, a Custom Tab and the application's link on Android, a popup on the web — with
+  `state` and `nonce` checked, `refresh()`, and the refresh token kept in `secure_store()`.
 - **`frus create --template package|plugin`, verified links, `q` while building** (J791, second
   part). A package of widgets (with tests and a gallery example) and a plugin (its Android side in
   Java, compiled by its `build.rs` into a dex it loads into the activity; `Unsupported` elsewhere).
