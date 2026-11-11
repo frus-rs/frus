@@ -176,7 +176,7 @@ fn press_in(ui: &Ui, label: &str) -> bool {
 const PHONE: (f32, f32) = (411.0, 869.0);
 
 /// Every screen, by where it lives.
-const SCREENS: [&str; 11] = [
+const SCREENS: [&str; 12] = [
     "/",
     "/settings",
     "/journal",
@@ -188,6 +188,7 @@ const SCREENS: [&str; 11] = [
     "/tour",
     "/licenses",
     "/sheet",
+    "/native",
 ];
 
 #[test]

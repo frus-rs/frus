@@ -665,6 +665,7 @@ impl HomeState {
                         link("Guided tour →", "/tour"),
                         link("Draggable sheet →", "/sheet"),
                         link("Kanban board →", "/board"),
+                        link("Native views →", "/native"),
                     ]
                     .gap(12.0),
                 ),

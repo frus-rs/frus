@@ -53,6 +53,8 @@ mod android_notification;
 #[cfg(android)]
 mod android_permission;
 #[cfg(android)]
+mod android_platform_view;
+#[cfg(android)]
 mod android_settings;
 #[cfg(android)]
 mod android_share;
@@ -125,6 +127,10 @@ mod restoration_tests;
 #[cfg(target_os = "macos")]
 mod macos_permission;
 mod permission;
+// Native views inside the page (milestone 794): decided here on every host, carried out on
+// Android by android_platform_view.rs.
+#[cfg_attr(not(android), allow(dead_code))]
+mod platform_view;
 // Whether the user asked for less motion, on the desktops, iOS and the Web (milestone 778).
 mod reduce_motion;
 mod reload;
@@ -211,6 +217,7 @@ pub use notification::{NotificationError, NotificationResponse, SystemNotificati
 pub use open_url::{open_url, OpenUrlError};
 pub use pacing::DECORATIVE_FRAME_RATE;
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
+pub use platform_view::{register_android_view_factory, PlatformViewError};
 pub use remote::RemoteData;
 #[cfg(feature = "secure-store")]
 pub use secure_store::{secure_store, SecureStore, SecureStoreError};

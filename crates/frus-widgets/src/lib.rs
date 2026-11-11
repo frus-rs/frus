@@ -160,6 +160,7 @@ mod pagination;
 mod paintcache;
 mod physics;
 mod placeholder;
+mod platformview;
 mod popover;
 mod portal;
 mod positioned;
@@ -501,6 +502,11 @@ pub use physics::{
     MAX_FLING_VELOCITY, MIN_FLING_VELOCITY,
 };
 pub use placeholder::{Placeholder, PLACEHOLDER_COLOR, PLACEHOLDER_FALLBACK, PLACEHOLDER_STROKE};
+pub use platformview::{
+    platform_view_frame, set_platform_view_frame, AndroidView, PlatformViewCall,
+    PlatformViewController, PlatformViewEvent, PlatformViewPlacement, PlatformViewSpec,
+    UnsupportedView, ANDROID_VIEW_DEFAULT_HEIGHT, PLATFORM_VIEWS_SUPPORTED,
+};
 pub use popover::MenuAnchor;
 pub use portal::{OverlayPortal, Placement};
 pub use positioned::{Positioned, Positioning};

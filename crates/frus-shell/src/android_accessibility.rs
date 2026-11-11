@@ -121,7 +121,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
     // Every row's strings in a frame of their own: the thread is attached for good, and a
     // local reference nobody frees would stay for as long as the process does.
     let count = tree.nodes.len();
-    let capacity = 32 + 5 * count as i32 + 2 * events.len() as i32;
+    let capacity = 33 + 5 * count as i32 + 2 * events.len() as i32;
     let result = env.with_local_frame(capacity, |env| -> jni::errors::Result<()> {
         let n = count as i32;
         let ids = env.new_int_array(n)?;
@@ -131,6 +131,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
         let actions = env.new_int_array(n)?;
         let ranges = env.new_float_array(3 * n)?;
         let scrolls = env.new_int_array(4 * n)?;
+        let embeds = env.new_int_array(n)?;
         let classes = env.new_object_array(n, "java/lang/String", JObject::null())?;
         let texts = env.new_object_array(n, "java/lang/String", JObject::null())?;
         let descriptions = env.new_object_array(n, "java/lang/String", JObject::null())?;
@@ -143,6 +144,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
         let mut action_buf = Vec::with_capacity(count);
         let mut range_buf = Vec::with_capacity(3 * count);
         let mut scroll_buf = Vec::with_capacity(4 * count);
+        let mut embed_buf = Vec::with_capacity(count);
         for (i, node) in tree.nodes.iter().enumerate() {
             id_buf.push(node.id);
             parent_buf.push(node.parent);
@@ -152,6 +154,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
             let (min, max, current) = node.range.unwrap_or((0.0, 0.0, 0.0));
             range_buf.extend_from_slice(&[min, max, current]);
             scroll_buf.extend_from_slice(&node.scroll.unwrap_or([0; 4]));
+            embed_buf.push(node.embed);
             let i = i as i32;
             let class_name = env.new_string(node.class_name)?;
             env.set_object_array_element(&classes, i, &class_name)?;
@@ -173,6 +176,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
         env.set_int_array_region(&actions, 0, &action_buf)?;
         env.set_float_array_region(&ranges, 0, &range_buf)?;
         env.set_int_array_region(&scrolls, 0, &scroll_buf)?;
+        env.set_int_array_region(&embeds, 0, &embed_buf)?;
 
         // Six numbers an event: its type, its node and the four it carries.
         let e = events.len() as i32;
@@ -197,7 +201,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
             class,
             "publish",
             "([I[I[I[I[I[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;\
-             [Ljava/lang/String;[F[I[I[Ljava/lang/String;Ljava/lang/String;)V",
+             [Ljava/lang/String;[F[I[I[I[Ljava/lang/String;Ljava/lang/String;)V",
             &[
                 JValue::Object(&ids),
                 JValue::Object(&parents),
@@ -210,6 +214,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
                 JValue::Object(&hints),
                 JValue::Object(&ranges),
                 JValue::Object(&scrolls),
+                JValue::Object(&embeds),
                 JValue::Object(&event_numbers),
                 JValue::Object(&event_texts),
                 JValue::Object(&announce),
