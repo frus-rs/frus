@@ -244,6 +244,9 @@ thread_local! {
 
 /// Sets the image the native view of `widget` last drew (`None` forgets it) — for the shell,
 /// which copies the images the views produce. The widget draws it on the next frame.
+// Compiled once, here: a copy inlined into an application would reach another thread-local
+// (the hot-reload rule of tests/thread_locals.rs).
+#[inline(never)]
 pub fn set_platform_view_frame(widget: WidgetId, frame: Option<ImageHandle>) {
     FRAMES.with(|frames| {
         let mut frames = frames.borrow_mut();
@@ -259,6 +262,9 @@ pub fn set_platform_view_frame(widget: WidgetId, frame: Option<ImageHandle>) {
 }
 
 /// The image the native view of the widget whose identity is `owner` last drew.
+// Compiled once, here: a copy inlined into an application would reach another thread-local
+// (the hot-reload rule of tests/thread_locals.rs).
+#[inline(never)]
 pub fn platform_view_frame(owner: u64) -> Option<ImageHandle> {
     FRAMES.with(|frames| frames.borrow().get(&owner).cloned())
 }
