@@ -240,7 +240,7 @@ the application through `frus::wgpu`) and the rounded plasma, with no error in t
   demand has no way to say "unchanged" yet.
 - **On the web, a pipeline the browser refuses** after naga accepted the shader goes to wgpu's
   uncaptured-error handler: there is no error scope there, since popping one is asynchronous.
-- **iOS** was not compiled (`cargo check --target aarch64-apple-ios` was not run for this
-  change); the code has no iOS-specific path (Metal, no GLSL check).
+- **iOS** is built by CI (`aarch64-apple-ios` and the simulator) but was not run on a device;
+  the code has no iOS-specific path (Metal, no GLSL check).
 - `AnimatedShader` and `GpuPass` declare no semantics: they are pictures, and an application
   that means something by one wraps it in `Semantics` with a label.
