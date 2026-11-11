@@ -22,8 +22,8 @@ use frus_widgets::{Dimension, FillAxes, LayoutStyle, Rect, Scene, Status, Theme,
 /// of its own. Keep pipelines and buffers in [`GpuPassContext::state`], made once.
 ///
 /// ```no_run
-/// use frus::wgpu;
-/// use frus::GpuPass;
+/// use frus_shell::wgpu;
+/// use frus_shell::GpuPass;
 ///
 /// let clear: GpuPass = GpuPass::new(|ctx| {
 ///     let _pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -349,6 +349,19 @@ struct Program {
 /// A **fragment shader**, compiled once from WGSL. Cheap to clone; equal when made from the
 /// same source.
 ///
+/// The source defines `fn shade(frag: Fragment) -> vec4<f32>`, answering a straight-alpha
+/// sRGB colour, and may declare a `struct Uniforms` of `f32`, `i32`, `u32` and
+/// `vec2`/`vec3`/`vec4<f32>` members. It may use:
+///
+/// - `frag.position` (logical pixels from the box's top-left corner), `frag.uv` (0 to 1
+///   across the box), `frag.size` (the box in logical pixels), `frag.time` (seconds) and
+///   `frag.pixel_ratio`;
+/// - `uniforms`, its own `struct Uniforms`;
+/// - `child(uv)`, the subtree under a shader mask, straight sRGB;
+/// - `image0(uv)` to `image3(uv)`, the images given with [`ShaderPaint::image`].
+///
+/// It declares no bindings and no entry points: frus's own follow it.
+///
 /// ```
 /// use frus_core::Shader;
 ///
@@ -391,7 +404,7 @@ fn digest(bytes: &[u8]) -> u64 {
 
 impl Shader {
     /// Compiles `source`, a WGSL fragment function `fn shade(frag: Fragment) -> vec4<f32>`
-    /// and whatever it needs (see the [module notes](self)), or says where it is wrong.
+    /// and whatever it needs (see [`Shader`]), or says where it is wrong.
     ///
     /// The result is kept: the same text again answers the same shader for the cost of a
     /// hash, so this can be called where the paint is built. With `include_str!` and the
