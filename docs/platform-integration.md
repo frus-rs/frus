@@ -51,6 +51,10 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
 - **Which network**: `frus::connectivity()`, and `cx.use_connectivity()` in a component, say
   whether the device is on Wi-Fi, mobile data, a cable or nothing, and follow changes
   (Windows, macOS, Linux, Android, the web). Connected does not mean the internet answers.
+- **Native views inside the page**: `AndroidView::new("frus/webview", html_or_url)` embeds an
+  Android `WebView`, `"frus/edittext"` an `EditText`, and a plugin's factory any other `View`
+  (a map, an ad), laid out, drawn, scrolled and covered like a frus widget (Android; a
+  stand-in elsewhere). See [the guide](guide/native-views.md).
 - **Notifications** (`SystemNotification`), **permissions** (`Permission`), **file dialogs**
   (`FileDialog`, desktop), **HTTP** (`fetch`).
 - **Preferences**: `frus::prefs()` keeps small settings across restarts, and
@@ -131,6 +135,18 @@ semantics its widgets already declare are what TalkBack reads, swiping moves thr
 them, a double tap presses, and fields, sliders and scrolling areas answer TalkBack's
 editing, adjusting and scrolling. Not answered yet: exploring by touch, and the outline
 TalkBack draws around the node it is on (see the milestone's "Not done").
+
+### Native views inside the page
+
+`FrusPlatformViews`, in the same dex ([milestone 794](milestone-794.md)), puts real Android
+views in a frus page. Under `NativeActivity` the activity's views are laid out but never
+drawn, because the native side owns the window's surface. So each embedded view lives in the
+activity's hierarchy, where focus, the keyboard and TalkBack treat it as any other view, and
+a host view draws it into an image of its own whenever something in it changes. frus copies
+that image into its frame where the widget was laid out, and forwards the touches that land
+there. A plugin writes the view's factory in Java against `dev.frus.platform.PlatformViewFactory`
+and registers it with `frus::register_android_view_factory`: the class is a plugin's, so the
+application still writes no Java.
 
 ---
 

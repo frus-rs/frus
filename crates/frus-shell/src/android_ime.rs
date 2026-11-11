@@ -141,6 +141,9 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     crate::android_accessibility::install(&mut env, &loader, &activity);
     // And state restoration (milestone 753), when the application asked for it.
     crate::restoration::install(&mut env, &loader, &activity);
+    // And native views (milestone 794): only what loading them will take, kept for the first
+    // one an application lays out.
+    crate::android_platform_view::remember(&mut env, &loader, &activity);
 
     let name = env.new_string("dev.frus.input.FrusTextBridge")?;
     let class_obj = env

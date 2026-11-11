@@ -129,6 +129,15 @@ macro_rules! forward_transparent {
                 self.inner.build_themed(theme)
             }
 
+            // A native view behind a wrapper is still one (milestone 794).
+            fn platform_view(&self) -> Option<&$crate::PlatformViewSpec> {
+                self.inner.platform_view()
+            }
+
+            fn on_platform_view_event(&self, event: &$crate::PlatformViewEvent) -> Option<Msg> {
+                self.inner.on_platform_view_event(event)
+            }
+
             fn build_in(
                 &self,
                 id: $crate::interaction::WidgetId,

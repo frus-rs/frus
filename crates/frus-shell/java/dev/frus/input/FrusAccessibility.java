@@ -76,11 +76,13 @@ public final class FrusAccessibility extends View {
         final String[] hints;
         final float[] ranges;
         final int[] scrolls;
+        /** The native view each row stands for (milestone 794), or -1. */
+        final int[] embeds;
         final SparseIntArray index = new SparseIntArray();
 
         Tree(int[] ids, int[] parents, int[] bounds, int[] flags, int[] actions,
                 String[] classes, String[] texts, String[] descriptions, String[] hints,
-                float[] ranges, int[] scrolls) {
+                float[] ranges, int[] scrolls, int[] embeds) {
             this.ids = ids;
             this.parents = parents;
             this.bounds = bounds;
@@ -92,6 +94,7 @@ public final class FrusAccessibility extends View {
             this.hints = hints;
             this.ranges = ranges;
             this.scrolls = scrolls;
+            this.embeds = embeds;
             for (int i = 0; i < ids.length; i++) {
                 index.put(ids[i], i);
             }
@@ -104,7 +107,7 @@ public final class FrusAccessibility extends View {
 
     private static final Tree EMPTY = new Tree(new int[0], new int[0], new int[0], new int[0],
             new int[0], new String[0], new String[0], new String[0], new String[0],
-            new float[0], new int[0]);
+            new float[0], new int[0], new int[0]);
 
     /** The tree the screen reader reads; replaced only on the UI thread. */
     private Tree tree = EMPTY;
@@ -147,20 +150,38 @@ public final class FrusAccessibility extends View {
     /** A new tree, the events that say what changed, and words to read out ({@code null} for none). */
     public static void publish(int[] ids, int[] parents, int[] bounds, int[] flags,
             int[] actions, String[] classes, String[] texts, String[] descriptions,
-            String[] hints, float[] ranges, int[] scrolls, final int[] events,
+            String[] hints, float[] ranges, int[] scrolls, int[] embeds, final int[] events,
             final String[] eventTexts, final String announce) {
         final FrusAccessibility view = instance;
         if (view == null) {
             return;
         }
         final Tree next = new Tree(ids, parents, bounds, flags, actions, classes, texts,
-                descriptions, hints, ranges, scrolls);
+                descriptions, hints, ranges, scrolls, embeds);
         view.post(new Runnable() {
             @Override
             public void run() {
                 view.apply(next, events, eventTexts, announce);
             }
         });
+    }
+
+    /**
+     * Gives native view {@code platformId}'s node its parent: the frus node it is drawn in
+     * (milestone 794). Left alone while no such node is published.
+     */
+    static void parentFor(int platformId, AccessibilityNodeInfo info) {
+        FrusAccessibility view = instance;
+        if (view == null) {
+            return;
+        }
+        Tree t = view.tree;
+        for (int i = 0; i < t.embeds.length; i++) {
+            if (t.embeds[i] == platformId) {
+                info.setParent(view, t.ids[i]);
+                return;
+            }
+        }
     }
 
     private FrusAccessibility(Context context) {
@@ -326,6 +347,13 @@ public final class FrusAccessibility extends View {
             for (int j = i + 1; j < t.ids.length; j++) {
                 if (t.parents[j] == id) {
                     info.addChild(host, t.ids[j]);
+                }
+            }
+            // A native view drawn here (milestone 794): its own nodes are read in its place.
+            if (t.embeds[i] >= 0) {
+                View embedded = FrusPlatformViews.hostFor(t.embeds[i]);
+                if (embedded != null) {
+                    info.addChild(embedded);
                 }
             }
             // The boxes are the window's pixels: the drawing fills the window, while this view

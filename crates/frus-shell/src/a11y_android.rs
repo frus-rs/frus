@@ -96,6 +96,9 @@ pub(crate) mod event {
 /// `AccessibilityNodeProvider.HOST_VIEW_ID` is too).
 pub(crate) const HOST: i32 = -1;
 
+/// [`AndroidNode::embed`] of a node with no native view in it.
+pub(crate) const NO_EMBED: i32 = -1;
+
 /// One virtual view, as plain data.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AndroidNode {
@@ -122,6 +125,9 @@ pub(crate) struct AndroidNode {
     pub range: Option<(f32, f32, f32)>,
     /// `(x, y, max_x, max_y)` of a scrollable area, in physical pixels.
     pub scroll: Option<[i32; 4]>,
+    /// The native view drawn in this node's place (milestone 794), whose own nodes the
+    /// screen reader reads as its children; [`NO_EMBED`] for none.
+    pub embed: i32,
 }
 
 impl AndroidNode {
@@ -333,6 +339,7 @@ fn to_row(
             actions: finish_actions(actions, flags, focused),
             range: Some(range),
             scroll: None,
+            embed: NO_EMBED,
         };
     }
     match (sem.role, sem.toggled) {
@@ -370,6 +377,7 @@ fn to_row(
         actions: finish_actions(actions, flags, focused),
         range: None,
         scroll: None,
+        embed: NO_EMBED,
     }
 }
 
@@ -433,6 +441,7 @@ fn area_row(id: i32, parent: i32, area: &ScrollArea, scale: f32) -> AndroidNode 
             px(area.max.0),
             px(area.max.1),
         ]),
+        embed: NO_EMBED,
     }
 }
 
@@ -511,6 +520,19 @@ pub(crate) fn build(
     }
     ids.retain(&live);
     tree
+}
+
+/// Marks the rows of the widgets that embed a native view (milestone 794): `view_of` says
+/// which view a widget has, if any. The screen reader then reads the view's own nodes as the
+/// row's children, where the view is drawn.
+pub(crate) fn embed_views(
+    tree: &mut AndroidTree,
+    ids: &VirtualIds,
+    view_of: impl Fn(WidgetId) -> Option<i32>,
+) {
+    for node in &mut tree.nodes {
+        node.embed = ids.widget(node.id).and_then(&view_of).unwrap_or(NO_EMBED);
+    }
 }
 
 /// An event for the screen reader: `kind` is an Android event type, `id` the virtual view
@@ -725,6 +747,34 @@ mod tests {
 
     fn sem(role: Role) -> SemanticsProperties {
         SemanticsProperties::new(role)
+    }
+
+    #[test]
+    fn a_native_view_is_read_inside_the_node_it_is_drawn_in() {
+        let mut ids = VirtualIds::default();
+        let view = WidgetId::from_u64(77);
+        let label = WidgetId::from_u64(78);
+        let nodes = vec![
+            (
+                view,
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                SemanticsProperties::new(Role::None),
+            ),
+            (
+                label,
+                Rect::new(0.0, 120.0, 100.0, 20.0),
+                SemanticsProperties::new(Role::Label).label("Below"),
+            ),
+        ];
+        let mut tree = build(&nodes, &[], None, 1.0, &mut ids);
+        let before = tree.clone();
+        embed_views(&mut tree, &ids, |w| (w == view).then_some(5));
+        assert_eq!(tree.nodes[0].embed, 5);
+        assert_eq!(tree.nodes[1].embed, NO_EMBED);
+        assert!(
+            !diff(&before, &tree).is_empty(),
+            "a view arriving is a change for the screen reader"
+        );
     }
 
     fn one(sem: SemanticsProperties) -> AndroidNode {
