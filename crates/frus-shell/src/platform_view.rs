@@ -431,7 +431,7 @@ impl TouchRouter {
 /// `rgba`, premultiplied as Android draws, turned into straight alpha in place — what frus's
 /// images hold. Opaque pixels, nearly all of a page, are left as they are.
 pub(crate) fn packed_straight(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let a = pixel[3];
         if a == 255 {
             continue;
@@ -567,7 +567,7 @@ mod tests {
         }
         let mut views = PlatformViews::default();
         views.sync(&[want(1, Rect::new(0.0, 10.0, 363.3, 259.6))], 2.75);
-        let moved = views.sync(&[want(1, Rect::new(0.0, 10.2, 363.3, 259.6))], 2.75);
+        let moved = views.sync(&[want(1, Rect::new(0.0, 11.2, 363.3, 259.6))], 2.75);
         assert!(
             matches!(&moved[..], [Command::Place { at, .. }] if (at.w, at.h) == first),
             "a move, at the same size"
