@@ -373,6 +373,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().is_some_and(|w| w.continuous())
     }
 
+    fn paint_source(&self) -> Option<u64> {
+        self.inner.as_ref().and_then(|w| w.paint_source())
+    }
+
     fn decorative(&self) -> bool {
         self.inner.as_ref().is_some_and(|w| w.decorative())
     }

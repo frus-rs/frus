@@ -20,6 +20,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Build modes, flavors and releases](build-variants.md) | Debug, profile and release; flavors; values given at build time; the version; App Bundles, one APK per processor, installers; signing |
 | [DevTools](devtools.md) | The live widget tree, each frame's cost, slow animations and the log, in the browser; the protocol behind it |
 | [AI agents](mcp.md) | `frus mcp`: an MCP server through which a coding agent runs, inspects and drives the application |
+| [Video, camera and other external pictures](textures.md) | Showing frames a decoder, a camera or a native view makes; pushing RGBA and YUV; Android's surface for `MediaCodec` and Java plugins |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
 | [Structuring an application](../app-structure.md) | Where each part of a growing application goes |
 

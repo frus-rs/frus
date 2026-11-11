@@ -2755,6 +2755,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let window = window.clone();
                 frus_widgets::set_local_wake(move || window.request_redraw());
             }
+            // A producer's new frame asks this window for the frame that shows it
+            // (milestone 793).
+            {
+                let window = window.clone();
+                frus_widgets::textures().set_wake(move || window.request_redraw());
+            }
             // The accessibility bridge (#18): the canvas exists as soon as the window
             // does, so there is no "still hidden" step to wait for here.
             self.a11y = crate::a11y_web::A11y::new(&window);
@@ -2861,6 +2867,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     {
                         let window = window.clone();
                         frus_widgets::set_local_wake(move || window.request_redraw());
+                    }
+                    // A producer's new frame asks this window for the frame that shows it
+                    // (milestone 793): one frame however many pushes, none while idle.
+                    {
+                        let window = window.clone();
+                        frus_widgets::textures().set_wake(move || window.request_redraw());
                     }
                     // What the input bridge's wakes ask a frame of (milestone 513).
                     #[cfg(android)]
@@ -3287,6 +3299,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             }
 
             WindowEvent::RedrawRequested => {
+                // A frame pushed into an external texture from now on asks for the next
+                // frame: this one may already have read the texture (milestone 793).
+                frus_widgets::textures().begin_frame();
                 // A WebGL context the browser took away and has given back holds nothing of
                 // the old renderer's: as for a lost device.
                 #[cfg(web)]

@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 791 so far, each documenting the objective, the alternatives
+> record — one per step, 793 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **External textures: video, camera, maps, native views** (J793). `frus::textures().create()`
+  gives a texture any thread pushes RGBA, BGRA, NV12, I420 or strided YUV 4:2:0 frames into;
+  `Texture::new(id)` shows the latest at its layout size (fit, alignment, filter quality,
+  background, semantics). Frames go through a ring of recycled buffers (nothing allocated once
+  warm), only the newest is kept (older ones are counted as dropped), and one push asks for one
+  frame: an idle texture costs nothing. YUV becomes RGB on the GPU (BT.601/BT.709, limited or
+  full range); a frame of the same size is written into the texture already there. On Android,
+  `TextureSurface` is an image reader whose `ANativeWindow`, or `android.view.Surface` for Java,
+  a `MediaCodec`, a camera or a canvas draws into. `Widget::paint_source` lets a repaint boundary
+  repaint when something outside the tree changed. The demo gains an *External texture* screen.
 - **`frus create --template package|plugin`, verified links, `q` while building** (J791, second
   part). A package of widgets (with tests and a gallery example) and a plugin (its Android side in
   Java, compiled by its `build.rs` into a dex it loads into the activity; `Unsupported` elsewhere).

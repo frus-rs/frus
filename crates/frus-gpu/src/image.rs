@@ -18,6 +18,7 @@
 use std::ops::Range;
 
 use crate::batch::{Batch, Kind};
+use crate::external::{ExternalSlot, ExternalUploader};
 use crate::mipmap::{self, MipGenerator};
 use std::collections::HashMap;
 
@@ -121,6 +122,8 @@ struct CachedTexture {
     bind_groups: [Option<wgpu::BindGroup>; SAMPLERS],
     /// A use marker for the current frame, which drives eviction.
     used: bool,
+    /// For an external texture (milestone 793): the textures its frames are written into.
+    external: Option<ExternalSlot>,
 }
 
 const INITIAL_INSTANCE_CAPACITY: usize = 32;
@@ -135,6 +138,8 @@ pub(crate) struct ImagePainter {
     samplers: [wgpu::Sampler; SAMPLERS],
     /// Made the first time an image needs a chain.
     mipmaps: Option<MipGenerator>,
+    /// Keeps external textures on their latest frame.
+    external: ExternalUploader,
     quad_vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
@@ -310,6 +315,7 @@ impl ImagePainter {
             texture_layout,
             samplers,
             mipmaps: None,
+            external: ExternalUploader::new(),
             quad_vertex_buffer,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
@@ -423,6 +429,10 @@ impl ImagePainter {
         sampler: usize,
     ) {
         let id = image.id();
+        if image.external_frame().is_some() {
+            self.ensure_external(device, queue, id, sampler);
+            return;
+        }
         let levels = if chain {
             mipmap::level_count(image.width(), image.height())
         } else {
@@ -449,10 +459,71 @@ impl ImagePainter {
                     levels,
                     bind_groups: [None, None, None],
                     used: true,
+                    external: None,
                 },
             );
         }
-        let cached = self.cache.get_mut(&id).expect("cached above");
+        self.bind(device, id, wanted);
+    }
+
+    /// Makes sure an external texture's cached texture holds its latest frame, and has a
+    /// bind group for `sampler`; marks it used. A texture that is gone, or has no frame
+    /// yet, has nothing cached and draws nothing.
+    fn ensure_external(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: u64,
+        sampler: usize,
+    ) {
+        let texture = frus_core::TextureId::from_u64(id);
+        let Some(frame) = frus_core::textures().latest(texture) else {
+            self.cache.remove(&id);
+            return;
+        };
+        let mut wanted = [false; SAMPLERS];
+        wanted[sampler] = true;
+        let current = self
+            .cache
+            .get(&id)
+            .and_then(|c| c.external.as_ref())
+            .is_some_and(|slot| slot.generation == frame.generation());
+        if !current {
+            let mut slot = self.cache.get_mut(&id).and_then(|c| c.external.take());
+            let fresh = self.external.update(device, queue, &mut slot, &frame);
+            let slot = slot.expect("the uploader fills the slot");
+            match self.cache.get_mut(&id) {
+                Some(cached) if !fresh => cached.external = Some(slot),
+                _ => {
+                    // A new texture: the bind groups earlier draws made are for the old one.
+                    if let Some(old) = self.cache.get(&id) {
+                        for (want, bound) in wanted.iter_mut().zip(&old.bind_groups) {
+                            *want |= bound.is_some();
+                        }
+                    }
+                    self.cache.insert(
+                        id,
+                        CachedTexture {
+                            view: slot.view(),
+                            levels: 1,
+                            bind_groups: [None, None, None],
+                            used: true,
+                            external: Some(slot),
+                        },
+                    );
+                }
+            }
+        }
+        // The frame's buffer goes back to its producer now that it is on the GPU.
+        drop(frame);
+        self.bind(device, id, wanted);
+    }
+
+    /// Marks `id`'s cached texture used and makes the bind groups `wanted` asks for.
+    fn bind(&mut self, device: &wgpu::Device, id: u64, wanted: [bool; SAMPLERS]) {
+        let Some(cached) = self.cache.get_mut(&id) else {
+            return;
+        };
         cached.used = true;
         for (index, want) in wanted.into_iter().enumerate() {
             if !want || cached.bind_groups[index].is_some() {

@@ -34,6 +34,7 @@ mod semantics;
 mod shape;
 mod text_shaping;
 mod text_style;
+mod texture;
 
 pub use animation::{
     animation_speed, dilate_frame_time, set_animation_speed, Animatable, Animation,
@@ -87,4 +88,8 @@ pub use text_style::{
     install_text_scale, text_scale, with_text_scale, FontFamily, FontWeight, ResolvedTextStyle,
     TextAffinity, TextAlign, TextDecoration, TextOverflow, TextPosition, TextRun, TextScaleGuard,
     TextSpan, TextStyle, DEFAULT_LINE_HEIGHT, DEFAULT_TEXT_SIZE,
+};
+pub use texture::{
+    textures, ExternalTexture, FrameInfo, FramePlane, PixelFormat, TextureError, TextureFrame,
+    TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane, MAX_TEXTURE_SIDE,
 };

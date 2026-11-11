@@ -129,6 +129,8 @@ mod startup;
 mod storage;
 // The taskbar's badge and progress (milestone 708).
 mod taskbar;
+// A platform surface feeding an external texture (milestone 793).
+mod texture_surface;
 // The tray icon (milestone 706): its description everywhere, the system's own on the desktop.
 mod tray;
 // The Web side of a reload under `frus run`: the states kept across the page's reload.
@@ -213,6 +215,7 @@ pub use subscription::Subscription;
 pub use taskbar::{Taskbar, TaskbarProgress};
 #[cfg(any(test, feature = "testing"))]
 pub use tester::Tester;
+pub use texture_surface::{SurfaceFormat, TextureSurface};
 pub use tray::Tray;
 pub use widget_app::FrusApp;
 
