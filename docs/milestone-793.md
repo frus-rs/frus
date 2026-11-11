@@ -181,7 +181,9 @@ this device; it is not done (below). The path that ran is the CPU-plane copy.
 Checks: `cargo clippy --workspace --all-targets -D warnings` (Windows and Linux),
 `aarch64-linux-android` clippy of frus-shell and frus-demo, `wasm32-unknown-unknown` clippy of
 the crates touched, `cargo check --target aarch64-apple-ios` of frus-shell and frus-widgets, the
-guide's examples compiled as doctests, the workspace's tests under Linux.
+guide's examples compiled as doctests, and the touched tests above under Linux (lavapipe).
+The full `cargo test --workspace` run was cut short when WSL stopped (the C: drive holding
+its disk was full); CI runs it.
 
 
 ## Not done
