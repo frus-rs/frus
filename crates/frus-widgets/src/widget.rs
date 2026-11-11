@@ -2019,6 +2019,19 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// The **native view** this widget embeds (milestone 794): an
+    /// [`AndroidView`](crate::AndroidView)'s. The walk records where it was laid out, and
+    /// the shell makes, places and drops the view to match. `None` for everything else.
+    fn platform_view(&self) -> Option<&crate::PlatformViewSpec> {
+        None
+    }
+
+    /// The message for an event the native view of [`platform_view`](Self::platform_view)
+    /// sent (milestone 794); `None` sends nothing.
+    fn on_platform_view_event(&self, _event: &crate::PlatformViewEvent) -> Option<Msg> {
+        None
+    }
+
     /// Whether this widget wants **the title bar's line** for itself (milestone 640): a
     /// [`WindowMenuBar`](crate::WindowMenuBar)'s row. The shell gives it the line where the
     /// system allows it.
@@ -2707,6 +2720,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn wants_title_bar(&self) -> bool {
         (**self).wants_title_bar()
+    }
+    fn platform_view(&self) -> Option<&crate::PlatformViewSpec> {
+        (**self).platform_view()
+    }
+    fn on_platform_view_event(&self, event: &crate::PlatformViewEvent) -> Option<Msg> {
+        (**self).on_platform_view_event(event)
     }
     fn title_bar_role(&self) -> Option<crate::TitleBarRole> {
         (**self).title_bar_role()

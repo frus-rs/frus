@@ -586,6 +586,7 @@ struct XformBase {
     text_stops: usize,
     reorderables: usize,
     semantics: usize,
+    platform_views: usize,
 }
 
 /// Node count of the subtree **if** it is "plain" — that is, if the boundary and **all** its
@@ -620,6 +621,9 @@ fn plain_subtree_len<Msg>(widget: &dyn Widget<Msg>) -> Option<usize> {
         // Read by the shell every frame, from the walk (milestone 640).
         || widget.wants_title_bar()
         || widget.title_bar_role().is_some()
+        // Its image changes with no rebuild, and the shell reads where it is every frame
+        // (milestone 794).
+        || widget.platform_view().is_some()
     {
         return None;
     }
@@ -792,6 +796,8 @@ pub struct Ui<Msg = crate::callback::Callback> {
     /// acts on there (milestones 640, 642).
     title_bar_row: Option<Rect>,
     title_bar_regions: Vec<(Rect, crate::TitleBarRole)>,
+    /// The native views of the frame, in painted order (milestone 794).
+    platform_views: Vec<crate::PlatformViewPlacement>,
     pans: Vec<(WidgetId, Rect, Rect)>,
     /// The widgets that hear the pointer's raw events, likewise (milestone 586).
     pointer_listeners: Vec<(WidgetId, Rect, Rect)>,
@@ -937,6 +943,41 @@ impl<Msg: Clone> Ui<Msg> {
     /// where they were painted (milestone 640).
     pub fn title_bar_regions(&self) -> &[(Rect, crate::TitleBarRole)] {
         &self.title_bar_regions
+    }
+
+    /// The native views of the frame, in painted order (milestone 794): what the shell makes,
+    /// places and drops views from.
+    pub fn platform_views(&self) -> &[crate::PlatformViewPlacement] {
+        &self.platform_views
+    }
+
+    /// The native view a press at `point` belongs to (milestone 794): the topmost one whose
+    /// visible part holds it, unless something frus drew over the view takes presses there —
+    /// a dialog's barrier, a menu, a button laid over it. `None`: the press is frus's.
+    pub fn platform_view_at(&self, point: Point) -> Option<&crate::PlatformViewPlacement> {
+        let view = self
+            .platform_views
+            .iter()
+            .rev()
+            .find(|view| view.visible.contains(point))?;
+        let above = view.above;
+        let covered = self.hits[above.hits.min(self.hits.len())..]
+            .iter()
+            .chain(&self.long_presses[above.long_presses.min(self.long_presses.len())..])
+            .any(|hit| hit.contains(point))
+            || self.pans[above.pans.min(self.pans.len())..]
+                .iter()
+                .any(|(_, seen, _)| seen.contains(point))
+            || self.pointer_listeners[above.pointer_listeners.min(self.pointer_listeners.len())..]
+                .iter()
+                .any(|(_, seen, _)| seen.contains(point))
+            || self.overlay_cover[above.overlay_cover.min(self.overlay_cover.len())..]
+                .iter()
+                .any(|r| r.contains(point))
+            || self.scrollables[above.scrollables.min(self.scrollables.len())..]
+                .iter()
+                .any(|area| area.viewport.contains(point));
+        (!covered).then_some(view)
     }
 
     /// Every box a press can land on, in painted order: what on the title bar's line is the
@@ -2896,6 +2937,8 @@ struct Builder<'a, Msg> {
     /// acts on there (milestones 640, 642).
     title_bar_row: Option<Rect>,
     title_bar_regions: Vec<(Rect, crate::TitleBarRole)>,
+    /// The native views of the frame, in painted order (milestone 794).
+    platform_views: Vec<crate::PlatformViewPlacement>,
     pans: Vec<(WidgetId, Rect, Rect)>,
     /// The widgets that hear the pointer's raw events, likewise (milestone 586).
     pointer_listeners: Vec<(WidgetId, Rect, Rect)>,
@@ -3536,6 +3579,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             text_stops: self.text_stops.len(),
             reorderables: self.reorderables.len(),
             semantics: self.semantics.len(),
+            platform_views: self.platform_views.len(),
         }
     }
 
@@ -3596,6 +3640,10 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             }
             for (_, r, _) in &mut self.semantics[base.semantics..] {
                 *r = matrix.apply_rect(*r);
+            }
+            for view in &mut self.platform_views[base.platform_views..] {
+                view.rect = matrix.apply_rect(view.rect);
+                view.visible = matrix.apply_rect(view.visible);
             }
         }
     }
@@ -4248,6 +4296,40 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         }
 
         let visible = draw_rect.intersect(clip);
+        // A native view (milestone 794): recorded even when scrolled out of sight, so that
+        // the view lives as long as its widget does, with the press targets registered so far
+        // — whatever comes after is drawn over it.
+        if let Some(spec) = widget.platform_view() {
+            let shown = self.touch_clip.map_or(visible, |t| visible.intersect(t));
+            self.platform_views.push(crate::PlatformViewPlacement {
+                id,
+                view_type: spec.view_type().to_owned(),
+                params: spec.params().to_owned(),
+                rect: draw_rect,
+                visible: shown,
+                controller: spec.controller().cloned(),
+                above: crate::platformview::TargetCounts {
+                    hits: self.hits.len(),
+                    long_presses: self.long_presses.len(),
+                    pans: self.pans.len(),
+                    pointer_listeners: self.pointer_listeners.len(),
+                    overlay_cover: self.overlay_cover.len(),
+                    scrollables: self.scrollables.len(),
+                },
+            });
+            // A node for the screen reader to read the view's own content in, when the
+            // widget did not give one of its own.
+            if visible.width > 0.0
+                && visible.height > 0.0
+                && !widget.semantics().is_some_and(|s| s.is_meaningful())
+            {
+                self.semantics.push((
+                    id,
+                    visible,
+                    frus_core::SemanticsProperties::new(frus_core::Role::None),
+                ));
+            }
+        }
         // A text in a selection area: a place a selection can begin, end or pass through,
         // registered as far as it is visible, in the order it is painted.
         if self.theme.widgets.text.selectable && visible.width > 0.0 && visible.height > 0.0 {
@@ -6970,6 +7052,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         pans: Vec::new(),
         title_bar_row: None,
         title_bar_regions: Vec::new(),
+        platform_views: Vec::new(),
         pointer_listeners: Vec::new(),
         hover_regions: Vec::new(),
         hover_parent: None,
@@ -7062,6 +7145,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         pans: builder.pans,
         title_bar_row: builder.title_bar_row,
         title_bar_regions: builder.title_bar_regions,
+        platform_views: builder.platform_views,
         pointer_listeners: builder.pointer_listeners,
         hover_regions: builder.hover_regions,
         text_stops: builder.text_stops,

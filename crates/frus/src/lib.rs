@@ -55,6 +55,9 @@ pub struct GuideNetwork;
 #[doc = include_str!("../../../docs/guide/animation.md")]
 pub struct GuideAnimation;
 #[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/native-views.md")]
+pub struct GuideNativeViews;
+#[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/build-variants.md")]
 pub struct GuideBuildVariants;
 #[cfg(all(doctest, feature = "testing"))]
@@ -171,6 +174,10 @@ pub use frus_shell::{open_permission_settings, Permission, PermissionStatus};
 /// Opening an address in the system's handler — the browser, the mail application, the
 /// dialer — and sharing through the system's share sheet (milestone 775).
 pub use frus_shell::{open_url, share, OpenUrlError, Share, ShareError, ShareOutcome};
+
+/// Native Android views inside the page (milestone 794): a plugin registers the factory that
+/// makes its views, and the application embeds them with [`AndroidView`].
+pub use frus_shell::{register_android_view_factory, PlatformViewError};
 
 // Cross-platform HTTP (feature `net`): the `frus::fetch(url).await` shorthand and the
 // `frus::Request` builder (method / headers / body / timeout) — see [`frus::net`].

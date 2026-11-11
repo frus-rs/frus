@@ -17,6 +17,7 @@ mod grid;
 mod journal;
 mod licenses;
 mod menu;
+mod native;
 mod settings;
 mod sheet;
 mod task;
@@ -32,6 +33,7 @@ pub(crate) use grid::*;
 pub(crate) use journal::*;
 pub(crate) use licenses::*;
 pub(crate) use menu::window;
+pub(crate) use native::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
 pub(crate) use task::*;
@@ -77,6 +79,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("sheet", |_, _| SheetPage.into_widget()),
         GoRoute::new("licenses", |_, _| LicensesPage.into_widget()),
         GoRoute::new("video", |_, _| VideoPage.into_widget()),
+        GoRoute::new("native", |_, _| NativePage.into_widget()),
         task,
     ])])
 }
