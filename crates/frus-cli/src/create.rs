@@ -1616,7 +1616,14 @@ mod tests {
             added.manifest_changes
         );
         let manifest = fs::read_to_string(plain.join("Cargo.toml")).unwrap();
-        assert_eq!(manifest.matches("intent_filter").count(), 1);
+        // One table: the template's commented example of a share's filter is not one.
+        assert_eq!(
+            manifest
+                .lines()
+                .filter(|line| line.starts_with("[[") && line.contains("intent_filter"))
+                .count(),
+            1
+        );
         assert!(manifest.contains("deeplink = \"https://example.com\""));
         assert!(create(&opts).unwrap().manifest_changes.is_empty());
     }

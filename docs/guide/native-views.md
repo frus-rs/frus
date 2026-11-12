@@ -1,26 +1,43 @@
 # Native views inside the page
 
 Some things are best left to the system: a web page, a map, an advertisement, a video
-player, a sign-in button from a vendor's SDK. `AndroidView` puts a real Android `View` inside
-a frus page. frus lays it out like any other widget, draws it with the rest of the frame, and
-gives it the touches that land on it. The view keeps its own keyboard, focus and
-screen-reader behaviour.
+player, a sign-in button from a vendor's SDK. `PlatformView` puts a real native view inside a
+frus page: an Android `View`, a Windows child window, an element of the web page. frus lays it
+out like any other widget, keeps it where the widget is on every frame, and lets it have the
+input that lands on it. The view keeps its own keyboard, focus and screen-reader behaviour.
 
-Two views are built in: `"frus/webview"` (a `WebView`) and `"frus/edittext"` (an
-`EditText`). Anything else comes from a plugin that registers a factory written in Java or
-Kotlin (see [Writing a factory](#writing-a-factory)).
+frus's own view types are made on each platform by what that platform has, and understand the
+same calls and send the same events:
 
-| | Android | Desktop | Web | iOS |
+| View type | Android | Windows | Web | macOS, Linux, iOS |
 | --- | --- | --- | --- | --- |
-| `AndroidView` | ✓ | stand-in | stand-in | stand-in |
+| `"frus/webview"` | `WebView` | WebView2 (feature `webview2`) | `<iframe>` | stand-in |
+| `"frus/edittext"` | `EditText` | `EDIT` control | `<input>` | stand-in |
+| `"frus/video"` | stand-in | stand-in | `<video>` | stand-in |
 
-On every platform but Android the widget shows its fallback. By default that is an
+Anything else comes from a plugin that registers a factory: a Java or Kotlin class on Android
+(see [Writing a factory](#writing-a-factory)), Rust on Windows and the web (see
+[A factory for Windows or the web](#a-factory-for-windows-or-the-web)).
+
+Where a view type has no factory, the widget shows its fallback. By default that is an
 `UnsupportedView`: a labelled box in a debug build, and nothing at all in a release build.
+
+`AndroidView` is the same widget for Android alone: it shows its fallback everywhere else,
+even where a `PlatformView` of the same type is hosted.
+
+The web view on Windows is behind the `webview2` feature of `frus`, off by default:
+
+```toml
+frus = { version = "0.5", features = ["webview2"] }
+```
+
+It uses the Edge WebView2 runtime, which Windows 11 ships with. Where the runtime is missing,
+the view sends a `frus.error` event that says so.
 
 ## Embedding a view
 
 ```rust
-use frus::{column, component, AndroidView, Button, PlatformViewController, Text, Widget};
+use frus::{column, component, Button, PlatformView, PlatformViewController, Text, Widget};
 
 fn help_page() -> Box<dyn Widget> {
     Box::new(component(|cx| {
@@ -31,7 +48,7 @@ fn help_page() -> Box<dyn Widget> {
         let shown = title.clone();
         let ask = (*web).clone();
         Box::new(column![
-            AndroidView::new("frus/webview", "<h1>Help</h1><p>Local HTML, no network.</p>")
+            PlatformView::new("frus/webview", "<h1>Help</h1><p>Local HTML, no network.</p>")
                 .height(240.0)
                 .controller(&web)
                 .semantic_label("Help page")
@@ -54,28 +71,38 @@ fn help_page() -> Box<dyn Widget> {
   `.width()` and `.height()` say otherwise. It is sized like any other box, so it can sit in a
   `Row`, an `Expanded` or a scrolling list.
 - **Lifetime.** The view is made the first time the widget is laid out. It is resized on the
-  frame its size changes, moved once its box has stopped moving (a scroll does not draw it
-  again on every frame: frus draws its image where the frame has it), and dropped when the widget leaves the tree. A
-  view scrolled out of sight is kept. A list that builds only the rows on screen drops the
+  frame its size changes and moved with its box — on Android once the box has stopped moving,
+  since frus draws its image where the frame has it and a view moved every frame of a scroll
+  would be drawn again every frame — and dropped when the widget leaves the tree. A view
+  scrolled out of sight is kept. A list that builds only the rows on screen drops the
   view with its row, as it drops any other row.
 - **Calls and events.** `PlatformViewController::invoke(method, arguments)` calls the view.
   Calls made before the view exists wait for it, in order. The view answers through events:
   `on_event` turns each `PlatformViewEvent` (a name and its data, both text) into a message.
   frus sends two events of its own. `frus.focus` (`"true"` or `"false"`) says the view took or
   let go of the keyboard focus. `frus.error` says the view could not be made, and why.
-- **Pause and resume.** The views hear when the activity is paused and resumed.
+- **Pause and resume.** On Android the views hear when the activity is paused and resumed.
 
 ### What each built-in view understands
 
 | View type | Parameters | Calls | Events |
 | --- | --- | --- | --- |
-| `frus/webview` | An address, or HTML when it starts with `<` | `loadUrl`, `loadHtml`, `evaluateJavascript` | `pageFinished` (the address), `javascriptResult` (the value) |
+| `frus/webview` | An address, or HTML when it starts with `<` | `loadUrl`, `loadHtml`, `evaluateJavascript`; on Windows and the web also `goBack`, `goForward`, `reload`, `stop` | `pageFinished` (the address), `javascriptResult` (the value, as JSON); on Windows also `pageStarted` |
 | `frus/edittext` | The hint | `setText`, `setHint` | `changed` (the text), `submitted` (the text) |
+| `frus/video` (web) | The video's address | `play`, `pause`, `setSource`, `seekTo` (seconds), `setMuted`, `setLooping` (`"true"` or `"false"`) | `loaded` (the duration), `playing`, `paused`, `ended` (the time), `error` |
 
 The web view runs JavaScript. Loading an address from the internet needs the
 `android.permission.INTERNET` permission in the application's manifest.
 
+On the web, `frus/webview` is an `<iframe>`, so the browser's rules for frames apply: many sites
+refuse to be shown in a frame of another site, and a page from another site keeps its scripts
+and its history to itself (`evaluateJavascript` then answers `null`, and `goBack` does
+nothing). HTML given to the view, and pages of the application's own site, have none of these
+limits.
+
 ## How the view behaves among frus widgets
+
+### On Android
 
 - **Drawing.** The view is drawn where the widget is, as part of the frame. Anything frus
   draws over it covers it: a dialog, a menu, a snack bar, a floating button. A page scrolling
@@ -90,6 +117,27 @@ The web view runs JavaScript. Loading an address from the internet needs the
   frus text field taking the focus takes the keyboard back.
 - **Screen readers.** TalkBack reads the view's own content where the view is drawn, in the
   order of the page. `.semantic_label()` names the view first.
+
+### On Windows and the web
+
+There the view is not drawn by frus. It is a child window of frus's window, or an element of
+the page, and the system draws it **above** everything frus draws. frus keeps it in step with
+the frame:
+
+- **Moving.** The view is moved and resized on every frame its box changes, right after the
+  frame is presented, so it scrolls with the page around it. A view scrolled partly out of a
+  scrolling area is clipped to it, and a view out of sight is hidden.
+- **Drawing over it.** What frus draws over the view is cut out of it, so that it shows: a
+  menu, a tooltip, a button laid over the view in a `Stack`. A dialog's scrim covers the view
+  whole: on Windows the view is hidden and a picture of it, taken as the dialog opens, is drawn
+  in its place, under the scrim; on the web it is hidden (a page cannot take a picture of a
+  frame from another site).
+- **Input.** The mouse, the touches and the keyboard go to the view by themselves. The whole
+  gesture is the view's: a wheel or a drag over a web view scrolls the web page. A press on
+  frus takes the keyboard focus back from the view.
+- **What is not cut out.** frus cuts out only what it knows is drawn over the view: an
+  overlay's box and the targets of presses. A decoration with no press target drawn over the
+  view (a frus shadow, a painted badge in a `Stack`) is hidden under the view.
 
 ## Writing a factory
 
@@ -141,8 +189,7 @@ first view of its type is laid out:
 static MAP_DEX: &[u8] = &[];
 
 pub fn install() {
-    // Elsewhere than on Android this is `Err(PlatformViewError::Unsupported)`, and the
-    // widget shows its fallback.
+    // Elsewhere than on Android this is `Err(PlatformViewError::Unsupported)`.
     let _ = frus::register_android_view_factory(
         "com.example/map",
         "com.example.map.MapFactory",
@@ -152,22 +199,59 @@ pub fn install() {
 # install();
 ```
 
-The application then writes `AndroidView::new("com.example/map", "48.85,2.35")`. The view
+The application then writes `PlatformView::new("com.example/map", "48.85,2.35")`. The view
 types of a plugin should start with its own name (`com.example/…`): `frus/` is frus's.
+
+## A factory for Windows or the web
+
+On Windows and the web a factory is a Rust function. frus makes a container where the widget
+is laid out and keeps it in place; the factory puts its view inside, and the view fills it.
+
+```rust
+struct Chart {
+    channel: frus::PlatformViewChannel,
+}
+
+impl frus::NativeView for Chart {
+    fn invoke(&mut self, method: &str, arguments: &str) {
+        if method == "select" {
+            self.channel.send("selected", arguments);
+        }
+    }
+    fn resized(&mut self, _width: i32, _height: i32) {
+        // Lay the view out again: the container is this many physical pixels now.
+    }
+}
+
+pub fn install() {
+    let _ = frus::register_platform_view_factory("com.example/chart", |context| {
+        // Windows: `context.parent` is the container's HWND; make the view's window a child
+        // of it at (0, 0). The web: append an element to `context.container`, at 100%.
+        Ok(Box::new(Chart { channel: context.channel.clone() }) as Box<dyn frus::NativeView>)
+    });
+}
+# install();
+```
+
+The view is dropped when its widget leaves. On macOS, Linux and iOS the call answers
+`Err(PlatformViewError::Unsupported)`. The same plugin registers a Java factory for Android
+under the same type, and one `PlatformView` shows it everywhere.
 
 ## What it costs
 
-Nothing, until the first `AndroidView` is laid out: no class is loaded, no thread runs and no
-memory is taken. Each view then holds two images of its size: the one Android draws into and
-the copy frus draws. A view that does not change is not drawn again: an idle web page costs
-no frame and no CPU time. A view that animates is copied once for each frame it draws.
+Nothing, until the first native view is laid out: no class is loaded, no window or element is
+made, no thread runs and no memory is taken. On Windows and the web an idle view costs frus
+nothing either: it is moved only on the frames its box changes.
+
+On Android each view holds two images of its size: the one Android draws into and the copy
+frus draws. A view that does not change is not drawn again: an idle web page costs no frame
+and no CPU time. A view that animates is copied once for each frame it draws.
 
 ## Not yet
 
-- Native views exist on Android only. On the desktops, the web and iOS the widget shows its
-  fallback.
-- The image Android draws is copied on the CPU before frus draws it. That is cheap for a page,
-  a form or a map at rest, and noticeable for a full-screen video.
+- macOS, Linux and iOS have no host yet: a `PlatformView` shows its fallback there.
+- On Android the image the view draws is copied on the CPU before frus draws it. That is cheap
+  for a page, a form or a map at rest, and noticeable for a full-screen video.
 - A view drawn inside a frus transform (rotated, scaled by an animation) is drawn
-  transformed, but its touches and its place for the screen reader follow its untransformed
-  box.
+  transformed on Android, but its touches and its place for the screen reader follow its
+  untransformed box; on Windows and the web it keeps its untransformed box.

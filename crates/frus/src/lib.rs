@@ -187,9 +187,17 @@ pub use frus_shell::{open_permission_settings, Permission, PermissionStatus};
 /// dialer — and sharing through the system's share sheet (milestone 775).
 pub use frus_shell::{open_url, share, OpenUrlError, Share, ShareError, ShareOutcome};
 
-/// Native Android views inside the page (milestone 794): a plugin registers the factory that
-/// makes its views, and the application embeds them with [`AndroidView`].
-pub use frus_shell::{register_android_view_factory, PlatformViewError};
+/// What another application shares into this one, from the system's share sheet (milestone
+/// 801): handed to [`Application::on_share`] or to [`FrusApp::on_share`].
+pub use frus_shell::SharedContent;
+
+/// Native views inside the page (milestones 794, 802): a plugin registers the factory that
+/// makes its views — a Java class on Android, a Rust function on Windows and the web — and the
+/// application embeds them with [`PlatformView`].
+pub use frus_shell::{
+    register_android_view_factory, register_platform_view_factory, NativeView, PlatformViewChannel,
+    PlatformViewContext, PlatformViewError,
+};
 
 // Cross-platform HTTP (feature `net`): the `frus::fetch(url).await` shorthand and the
 // `frus::Request` builder (method / headers / body / timeout) — see [`frus::net`].
