@@ -58,6 +58,10 @@ auth = ["frus-shell/auth"]
 # Secrets kept by the system: `secure_store()`. Off by default; Linux builds talk to the
 # desktop's Secret Service over D-Bus (no system library needed).
 secure-store = ["frus-shell/secure-store"]
+# Video playback: `VideoPlayerController`, `VideoPlayer`, `VideoProgressIndicator`,
+# `VideoControls` (milestone 797). Off by default. Android, Windows and the Web; elsewhere
+# `initialize` answers `VideoError::Unsupported`.
+video = ["frus-shell/video"]
 default = ["frus-shell/default", "frus-widgets/default", "frus-text/default"]
 # Decoding embedded PNG/JPEG: `Image::memory` and `asset!`. Part of `default`;
 # dropping it leaves both reporting a missing decoder rather than panicking.

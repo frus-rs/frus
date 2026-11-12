@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 797 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Video playback** (J797, feature `video`). `VideoPlayerController::asset(bytes)`, `::file(path)`
+  and `::network_url(url)` play a clip with the platform's player — `MediaPlayer` on Android
+  (into a texture surface; HTTP(S) and HLS), Media Foundation's media engine on Windows, a
+  `<video>` element on the web — with `initialize().await`, `play`, `pause`, `seek_to`,
+  `set_volume`, `set_looping`, `set_playback_speed`, a `value()` (duration, position, size,
+  aspect ratio, downloaded ranges, playing, buffering, completed, error) and listeners. Clips
+  pause in the background and play again on return. `VideoPlayer` shows the picture,
+  `VideoProgressIndicator` is a scrubbable progress bar, `VideoControls` a default overlay whose
+  look and parts are all replaceable. macOS, Linux and iOS answer `VideoError::Unsupported`.
+  Nothing runs while no clip is open.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

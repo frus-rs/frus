@@ -18,6 +18,7 @@ mod journal;
 mod licenses;
 mod menu;
 mod native;
+mod player;
 mod settings;
 mod sheet;
 mod task;
@@ -34,6 +35,7 @@ pub(crate) use journal::*;
 pub(crate) use licenses::*;
 pub(crate) use menu::window;
 pub(crate) use native::*;
+pub(crate) use player::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
 pub(crate) use task::*;
@@ -80,6 +82,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("licenses", |_, _| LicensesPage.into_widget()),
         GoRoute::new("video", |_, _| VideoPage.into_widget()),
         GoRoute::new("native", |_, _| NativePage.into_widget()),
+        GoRoute::new("player", |_, _| PlayerPage.into_widget()),
         task,
     ])])
 }
