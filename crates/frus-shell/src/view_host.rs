@@ -224,6 +224,7 @@ pub(crate) fn run(host: &mut dyn ViewHost, commands: &[Command], covers: &mut Co
                 at,
             } => host.create(*view, view_type, params, *at),
             Command::Place { view, at } => host.place(*view, *at),
+            #[cfg(not(android))]
             Command::Clip { view, shape } => {
                 if *shape == Shape::Covered {
                     match host.snapshot(*view) {

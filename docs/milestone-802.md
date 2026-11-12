@@ -193,6 +193,18 @@ served locally, headless Edge driven over the DevTools protocol at 900 x 1000, o
 
 The elements of the page were checked through its DOM, the pixels through screenshots.
 
+**Lints and builds**: `cargo clippy --workspace --all-targets -- -D warnings` (Windows),
+`cargo clippy -p frus-shell -p frus-widgets --no-deps --target wasm32-unknown-unknown`,
+`cargo clippy -p frus-shell --no-deps --target aarch64-linux-android` (`frus-widgets` there
+trips a newer `missing_const_for_thread_local` in files this milestone does not touch), and
+`cargo check -p frus-shell -p frus-widgets --target aarch64-apple-ios`. CI on the branch:
+clippy, rustdoc, the wasm and iOS builds and the Android build.
+
+**Size**: SIZE
+
+**Not measured on a phone**: this milestone changes nothing Android draws or runs; the Android
+path of milestone 794 is unchanged (`android_platform_view.rs` is as it was).
+
 
 ## Not done
 
