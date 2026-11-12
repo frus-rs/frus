@@ -196,6 +196,15 @@ first native view. No new crate.
 Not checked on the phone: the demo's footer is now kept above the navigation bar (a
 `SafeArea`), after the screenshots showed it under it; checked by build and the demo's tests.
 
+**Checks** (Windows unless said): `cargo fmt --all -- --check`; `cargo clippy --workspace
+--all-targets -- -D warnings`; `cargo clippy -p frus-shell -p frus-widgets --no-deps` for
+`aarch64-linux-android` and `wasm32-unknown-unknown` with `-D warnings` (WSL); `cargo doc
+--workspace --no-deps --all-features` with `-D warnings`; `cargo test --workspace`: frus-widgets
+2 356, frus-shell 622, the frus doctests (the new guide included) 102, and every other suite
+pass. The golden comparisons of `frus-test` (19 of them) differ on this Windows machine's GPU;
+they are checked under WSL's software renderer, and this milestone changes no drawing off
+Android, so they were not run there.
+
 ## Not done
 
 - **Windows, macOS, Linux, the web and iOS.** `WebViewWidget` shows its stand-in there, and the
