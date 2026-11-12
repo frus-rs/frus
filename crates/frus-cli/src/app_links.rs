@@ -2,7 +2,8 @@
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
 //! **Verified links in the APK** (milestone 791): `android:autoVerify="true"` on the intent
-//! filters of `https` links, which cargo-apk cannot write.
+//! filters of `https` links, which cargo-apk cannot write — and, made the same way, frus's own
+//! activity (milestone 801, see `android_activity`).
 //!
 //! An application that opens `https://example.com/…` links (`frus create --deeplink
 //! https://example.com`) declares an intent filter for them. Android opens such a link in the
@@ -80,37 +81,6 @@ fn manifest_value(manifest: &str, table: &str, key: &str) -> Option<String> {
     None
 }
 
-/// The key the package is signed with, as cargo-apk chose it: path and password.
-fn signing_key(project: &Project, mode: Mode, manifest: &str) -> Result<(PathBuf, String), String> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let debug_key = home.join(".android").join("debug.keystore");
-    if mode == Mode::Debug {
-        return Ok((debug_key, "android".into()));
-    }
-    if let (Some(path), Some(password)) = (
-        std::env::var_os("CARGO_APK_RELEASE_KEYSTORE"),
-        std::env::var("CARGO_APK_RELEASE_KEYSTORE_PASSWORD").ok(),
-    ) {
-        return Ok((PathBuf::from(path), password));
-    }
-    let table = "package.metadata.android.signing.release";
-    if let (Some(path), Some(password)) = (
-        manifest_value(manifest, table, "path"),
-        manifest_value(manifest, table, "keystore_password"),
-    ) {
-        let path = PathBuf::from(path);
-        let path = if path.is_relative() {
-            project.root.join(path)
-        } else {
-            path
-        };
-        return Ok((path, password));
-    }
-    Err("no release key to sign the package again with".into())
-}
-
 /// A tool of the SDK's newest build-tools: `aapt`, `zipalign`, `apksigner`.
 fn build_tool(sdk: &Path, name: &str) -> Result<PathBuf, String> {
     let dir = crate::setup::newest_version_dir(&sdk.join("build-tools"))
@@ -132,22 +102,6 @@ fn build_tool(sdk: &Path, name: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Every file below `dir`, as paths relative to `base` with `/`.
-fn files_below(base: &Path, dir: &Path, out: &mut Vec<String>) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files_below(base, &path, out);
-        } else if let Ok(relative) = path.strip_prefix(base) {
-            let parts: Vec<String> = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect();
-            out.push(parts.join("/"));
-        }
-    }
-}
-
 fn tool(command: &mut Command) -> Result<(), String> {
     let program = command.get_program().to_string_lossy().into_owned();
     let output = command
@@ -165,29 +119,49 @@ fn tool(command: &mut Command) -> Result<(), String> {
     }
 }
 
-/// Makes `apk` again with `autoVerify` on its `https` intent filters, when it has any. True when
-/// the package was made again.
-pub(crate) fn verify_https_links(
+/// Makes `apk` again around a manifest cargo-apk could not write: `autoVerify` on its `https`
+/// intent filters, when it has any, and frus's own activity with its code (milestone 801),
+/// unless the application names an activity of its own. True when the package was made again.
+///
+/// The manifest beside the package is replaced by the one packaged, once the package is made,
+/// and the activity's code is left beside it as `classes.dex`: the split packages and the
+/// bundle are made from them (`android_pack`).
+pub(crate) fn finish_package(
     project: &Project,
     apk: &Path,
     mode: Mode,
+    for_device: bool,
 ) -> Result<bool, String> {
     let dir = apk.parent().ok_or("the package has no directory")?;
     let manifest_path = dir.join("AndroidManifest.xml");
     let Ok(manifest) = std::fs::read_to_string(&manifest_path) else {
         return Ok(false);
     };
-    let Some(patched) = add_auto_verify(&manifest) else {
+    let verified = add_auto_verify(&manifest);
+    let current = verified.as_deref().unwrap_or(&manifest);
+    let activity = if project.android_activity.is_none() {
+        crate::android_activity::use_frus_activity(current)
+    } else {
+        None
+    };
+    let with_code = activity.is_some();
+    let Some(patched) = activity.or(verified) else {
         return Ok(false);
     };
-    crate::report::say("Asking Android to verify the https links (android:autoVerify)…");
+    if patched.contains("android:autoVerify") && !manifest.contains("android:autoVerify") {
+        crate::report::say("Asking Android to verify the https links (android:autoVerify)…");
+    }
     let sdk = crate::setup::existing_sdk().ok_or("no Android SDK")?;
     let jar = sdk
         .join("platforms")
         .join(format!("android-{}", project.android_target_sdk))
         .join("android.jar");
     let cargo_toml = std::fs::read_to_string(project.root.join("Cargo.toml")).unwrap_or_default();
-    let (key, password) = signing_key(project, mode, &cargo_toml)?;
+    // The key cargo-apk was handed (`cargo::cargo_apk`).
+    let crate::android_pack::Key {
+        path: key,
+        password,
+    } = crate::android_pack::signing_key(project, mode, for_device)?;
     let aapt = build_tool(&sdk, "aapt")?;
     let zipalign = build_tool(&sdk, "zipalign")?;
     let apksigner = build_tool(&sdk, "apksigner")?;
@@ -196,7 +170,7 @@ pub(crate) fn verify_https_links(
     let patched_dir = dir.join("frus-links");
     std::fs::create_dir_all(&patched_dir).map_err(|e| e.to_string())?;
     let patched_path = patched_dir.join("AndroidManifest.xml");
-    std::fs::write(&patched_path, patched).map_err(|e| e.to_string())?;
+    std::fs::write(&patched_path, &patched).map_err(|e| e.to_string())?;
     let unaligned = dir.join("frus-relinked-unaligned.apk.tmp");
     let aligned = dir.join("frus-relinked.apk.tmp");
     let _ = std::fs::remove_file(&unaligned);
@@ -216,13 +190,12 @@ pub(crate) fn verify_https_links(
         package.arg("-A").arg(project.root.join(assets));
     }
     // The libraries, under the same paths cargo-apk put them at (`lib/<abi>/…`), from a folder
-    // that holds only them; stored, not compressed, as cargo-apk stores them: the system maps a
-    // stored library from the package rather than unpacking it.
-    let mut libraries = Vec::new();
-    files_below(dir, &dir.join("lib"), &mut libraries);
-    if libraries.is_empty() {
-        return Err("cargo-apk left no lib/ beside the package to add again".into());
-    }
+    // that holds only them; compressed as cargo-apk compresses them (milestone 801 measured it:
+    // a release library stored whole doubled the download), and in a debug build nothing is
+    // compressed, which is quicker to make, as cargo-apk does.
+    // Only those cargo-apk put in this package: the folder beside it also keeps the libraries
+    // of every other application built into the same target directory.
+    let libraries = crate::android_pack::packaged_libraries(apk)?;
     let raw = patched_dir.join("raw");
     let _ = std::fs::remove_dir_all(&raw);
     for library in &libraries {
@@ -232,7 +205,15 @@ pub(crate) fn verify_https_links(
         }
         std::fs::copy(dir.join(library), &to).map_err(|e| format!("{library}: {e}"))?;
     }
-    package.args(["-0", "so"]).arg(&raw);
+    // The activity's code, at the package's root.
+    if with_code {
+        std::fs::write(raw.join("classes.dex"), crate::android_activity::DEX)
+            .map_err(|e| format!("classes.dex: {e}"))?;
+    }
+    if mode == Mode::Debug {
+        package.args(["-0", ""]);
+    }
+    package.arg(&raw);
     tool(&mut package)?;
     tool(
         Command::new(&zipalign)
@@ -248,6 +229,12 @@ pub(crate) fn verify_https_links(
             .arg(&aligned),
     )?;
     std::fs::rename(&aligned, apk).map_err(|e| format!("{}: {e}", apk.display()))?;
+    // What the package now holds, for the packages made again from it (`android_pack`).
+    std::fs::write(&manifest_path, &patched).map_err(|e| e.to_string())?;
+    if with_code {
+        std::fs::write(dir.join("classes.dex"), crate::android_activity::DEX)
+            .map_err(|e| format!("classes.dex: {e}"))?;
+    }
     let _ = std::fs::remove_file(&unaligned);
     let _ = std::fs::remove_dir_all(&patched_dir);
     let _ = std::fs::remove_file(dir.join("frus-relinked.apk.tmp.idsig"));

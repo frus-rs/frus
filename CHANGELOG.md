@@ -8,11 +8,31 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 800 so far, each documenting the objective, the alternatives
+> record — one per step, 802 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Native views on Windows and the web** (J802). `PlatformView::new(view_type, params)` is the
+  native view widget for every platform: Android's `View` as before, a child window on
+  Windows, an element of the page on the web. `"frus/edittext"` is an `EDIT` control on Windows
+  and an `<input>` on the web; `"frus/webview"` is WebView2 on Windows (feature `webview2`) and
+  an `<iframe>` on the web; `"frus/video"` is a `<video>` on the web. They take the same
+  `PlatformViewController` calls and send the same events as on Android. The view is moved,
+  resized and clipped with the frame; what frus draws over it (a menu, a button) is cut out of
+  it, and under a dialog Windows shows a picture of it. `register_platform_view_factory` adds a
+  view type from Rust on Windows and the web. `AndroidView` is unchanged. macOS, Linux and iOS
+  still show the fallback.
+- **Android applications come back to the running activity** (J801). `frus run` and
+  `frus build` package frus's own activity, `dev.frus.FrusActivity` (the native activity with
+  `onNewIntent` forwarded, `launchMode="singleTop"`, about 900 bytes of code): a link, a share, a
+  notification's tap and a sign-in's redirect that open the application while it runs reach the
+  running one, with its state, instead of finishing and starting it again. Custom-scheme
+  redirects now work on Android with `frus::auth_session` (`com.example.app:/oauth`, in a Custom
+  Tab). New: receiving what other applications share — `Application::on_share`,
+  `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
+  application that names an activity of its own keeps it; a package made by hand with
+  `cargo apk` runs in the native activity as before.
 - **Video and camera frames without a copy on Android, shaders compiled ahead** (J800). Where
   the GPU can import Android's hardware buffers (Vulkan with
   `VK_ANDROID_external_memory_android_hardware_buffer` and the sampler Y'CbCr conversion), the
@@ -26,6 +46,19 @@ any release may break.
   says whether the renderer imports them. With the `warm-shaders` feature, `Shader::from_wgsl`
   starts compiling the shader's GPU pipeline at once, on a thread of the renderer's: the first
   frame that shows a shader finds its pipeline ready instead of waiting for the driver.
+- **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
+  build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
+  assets; reloads and moves in the history; runs JavaScript, with or without its result (a
+  future); opens JavaScript channels the page posts to; sets the JavaScript mode, the user agent,
+  the background and zoom; clears the cache and the local storage; and holds the page's address,
+  title, progress and history, notifying on each change. `NavigationDelegate` hears the page
+  starting, progressing, finishing, failing (`WebResourceError`, `HttpResponseError`), changing
+  its address, and decides each navigation. `WebViewWidget` shows the controller's page; the
+  controller owns it, so a widget built again shows the same page with its history.
+  `WebViewCookieManager` sets and clears cookies. The system's Back goes back in the page while
+  it can. Android only for now; elsewhere the widget shows its stand-in. Native views on
+  Android: a drag on a view inside a frus list goes to the list once the view's content cannot
+  follow it, and a focused native view is scrolled above the keyboard. Demo: `/browser`.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

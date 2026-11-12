@@ -388,6 +388,12 @@ What is written:
   `frus create` prints the `assetlinks.json` to serve at
   `https://example.com/.well-known/assetlinks.json`, with your release key's SHA-256
   fingerprint (`keytool -list -v -keystore release.keystore`).
+  A link opened while the application runs reaches the **running** application, with its state:
+  `frus run` and `frus build` package frus's own activity (`dev.frus.FrusActivity`,
+  `launchMode="singleTop"`), which hands Android's new intent to it, and the same holds for a
+  notification's tap, a share and a sign-in's redirect. A package made by hand with `cargo apk`
+  runs in the system's native activity instead, where a link that opens the running application
+  starts a second activity that hands it over.
 - **macOS**: the `.app` that `frus build` and `frus run` make declares the scheme
   (`CFBundleURLTypes`).
 - **The web**: nothing to declare: the address is the location already.

@@ -41,6 +41,9 @@ dictionary-line-breaks = ["frus-text/dictionary-line-breaks"]
 # more blob of artwork (~340, ~400 and ~270 KiB), which is why none is on by default.
 # Without one, its constants do not exist and `Icons::by_name` answers `None` for its
 # names rather than quietly handing back a different drawing.
+# Web views (`WebViewController`, `WebViewWidget`, milestone 799). Off by default: an
+# application that shows no web page carries none of it.
+webview = []
 icons-outlined = []
 icons-rounded = []
 icons-sharp = []

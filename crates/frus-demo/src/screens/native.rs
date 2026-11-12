@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! The native views screen (milestone 794): an Android web view and an Android text field
-//! inside a scrolling frus page, and a frus dialog that opens over both. Elsewhere than on
-//! Android each view shows its stand-in.
+//! The native views screen (milestones 794, 802): a native web view and a native text field
+//! inside a scrolling frus page, and a frus dialog that opens over both: Android's `WebView`
+//! and `EditText`, Windows' WebView2 and `EDIT` control, the page's `<iframe>` and `<input>`.
+//! On macOS, Linux and iOS each view shows its stand-in.
 
-use frus_widgets::{AlertDialog, AndroidView, PlatformViewController, PlatformViewEvent, Text};
+use frus_widgets::{AlertDialog, PlatformView, PlatformViewController, PlatformViewEvent, Text};
 
 use crate::prelude::*;
 
@@ -17,8 +18,8 @@ pub(crate) const NATIVE_PAGE: &str = "<!doctype html><html><head>\
 h1{font-size:22px;margin:0 0 8px}li{margin:6px 0}\
 button{font-size:16px;padding:8px 14px;border-radius:8px;border:1px solid #8d6e63;background:#ffe0b2}\
 </style></head><body>\
-<h1>Hello from a native WebView</h1>\
-<p>This page is drawn by Android's own browser engine, inside a frus page.</p>\
+<h1>Hello from a native web view</h1>\
+<p>This page is drawn by the system's own browser engine, inside a frus page.</p>\
 <ul><li>It scrolls with the page around it.</li><li>A frus dialog covers it.</li>\
 <li>A screen reader reads it.</li></ul>\
 <button onclick=\"this.textContent='Pressed '+(++window.n||(window.n=1))+' time(s)'\">Press me</button>\
@@ -76,7 +77,7 @@ impl State for NativeState {
         });
         let web = self.web.clone();
         let mut column = Flex::column().gap(12.0).padding(16.0).child(
-            text("Native Android views inside a frus page")
+            text("Native views inside a frus page")
                 .size(18.0)
                 .color(theme.on_surface),
         );
@@ -85,7 +86,7 @@ impl State for NativeState {
         }
         column = column
             .child(
-                AndroidView::new("frus/webview", NATIVE_PAGE)
+                PlatformView::new("frus/webview", NATIVE_PAGE)
                     .height(280.0)
                     .controller(&self.web)
                     .semantic_label("Web page")
@@ -114,7 +115,7 @@ impl State for NativeState {
                     .color(theme.muted),
             )
             .child(
-                AndroidView::new("frus/edittext", "A native EditText: type here")
+                PlatformView::new("frus/edittext", "A native text field: type here")
                     .height(56.0)
                     .on_event(move |event| Some(typed(event.clone()))),
             )

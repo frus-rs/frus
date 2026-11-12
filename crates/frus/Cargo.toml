@@ -56,6 +56,10 @@ hardware-buffers = ["frus-shell/hardware-buffers"]
 # `Shader::from_wgsl` loads them, so their first frame does not wait (milestone 800). Off by
 # default.
 warm-shaders = ["frus-shell/warm-shaders"]
+# A web page inside the page on Windows, hosted by the system's WebView2:
+# `PlatformView::new("frus/webview", ..)` (milestone 802). Off by default; Android and the web
+# need no feature.
+webview2 = ["frus-shell/webview2"]
 # A SQLite database in the application's data folder: `database()` (milestone 795). Off by
 # default: SQLite itself is compiled in. Not on the Web, where `open` answers `Unsupported`.
 sqlite = ["frus-shell/sqlite"]
@@ -82,6 +86,10 @@ bundled-arabic = ["frus-shell/bundled-arabic", "frus-widgets/bundled-arabic", "f
 # Line breaking between the words of Thai, Lao, Khmer and Myanmar (milestone 784). Part of
 # `default`; see frus-text's manifest for its size.
 dictionary-line-breaks = ["frus-shell/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks", "frus-text/dictionary-line-breaks"]
+# Web pages inside the page: `WebViewController`, `WebViewWidget`, `NavigationDelegate`,
+# `WebViewCookieManager` (milestone 799). Android for now. Off by default: an application
+# without a web view pays nothing for it. `frus build` declares the INTERNET permission.
+webview = ["frus-shell/webview", "frus-widgets/webview"]
 icons-outlined = ["frus-widgets/icons-outlined"]
 icons-rounded = ["frus-widgets/icons-rounded"]
 icons-sharp = ["frus-widgets/icons-sharp"]
