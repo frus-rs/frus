@@ -200,7 +200,13 @@ trips a newer `missing_const_for_thread_local` in files this milestone does not 
 `cargo check -p frus-shell -p frus-widgets --target aarch64-apple-ios`. CI on the branch:
 clippy, rustdoc, the wasm and iOS builds and the Android build.
 
-**Size**: SIZE
+**Size**: measured by CI's size jobs on `frus-hello`, against master's last run. Android: 14,471,432
+bytes against 14,471,048, **+384 bytes** (the hosted views' shapes and their `Clip` command are
+compiled out of Android, and the overlay boxes are not recorded there; what is left is the
+empty registry and its counter). The first version of the branch was +896 bytes. Web:
+10,161,199 bytes against 10,120,973, +40 KB (+9 KB with brotli): the web host is part of every
+web build, as the editing element of milestone 711 is. Windows: WebView2's bindings only with
+the `webview2` feature.
 
 **Not measured on a phone**: this milestone changes nothing Android draws or runs; the Android
 path of milestone 794 is unchanged (`android_platform_view.rs` is as it was).
@@ -226,5 +232,7 @@ path of milestone 794 is unchanged (`android_platform_view.rs` is as it was).
 - **The web view on the web** is an `<iframe>`: sites that refuse framing show nothing, and a
   page from another site gives no script result or history.
 - **A video on Windows** has no built-in type.
+- **The web host is not behind a feature**: every web build carries it (+40 KB of wasm for
+  `frus-hello`), used or not.
 - The web view protocol of milestone 799 (`web.*` names, JSON arguments) was not merged when
   this was written: the Windows and web hosts speak milestone 794's names.
