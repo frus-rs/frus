@@ -185,6 +185,13 @@ paused each logged **0 frames and 0 CPU ticks in 10 s** (`/proc/<pid>/stat`).
 A page push still takes about 112 ms a frame for its 300 ms (before: 113 ms): two
 screen-sized transformed layers and the arriving page laid out (33 ms) every frame. Unchanged.
 
+### Size
+
+`frus-hello`'s Android library (release, aarch64, the CI size job's build, local toolchain):
+14,407,944 bytes on `master`, 14,410,944 with this branch, **+3.0 KB**. A first version was
++9.3 KB; leaving out wgpu's allocator report (about 1 KB) and the texture format table used to
+size textures (about 3 KB) brought it down.
+
 ### Windows
 
 `frus-shaders` run on Windows (Intel Iris Xe, Direct3D 12): the rounded plasma, the shimmering
