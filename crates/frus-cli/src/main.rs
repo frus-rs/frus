@@ -14,6 +14,7 @@
 //! adds no build system of its own: everything it does can be done by hand.
 
 mod analyze;
+mod android_activity;
 mod android_pack;
 mod app_links;
 mod build;

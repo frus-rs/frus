@@ -44,6 +44,12 @@ opt-level = "z"
 # By hand, `cargo apk run --lib` and `cargo apk build --lib --release`. `--lib` is required:
 # the crate has a library (what Android loads) and a binary (the desktop's), and asked for
 # both, cargo-apk panics after writing the APK.
+#
+# `frus run` and `frus build` also put frus's own activity in the package (`dev.frus.FrusActivity`,
+# `singleTop`): a link, a share, a notification or a sign-in's redirect that opens the application
+# while it runs reaches the running one instead of starting it over. A package made by hand with
+# `cargo apk` runs in the system's native activity, without that. Naming an activity yourself
+# (`name = ...` under `[package.metadata.android.application.activity]`) leaves yours in place.
 [package.metadata.android]
 # The application's identity on Android: a store knows it by this, so it cannot change after
 # the first release. `frus create --org com.acme` writes `com.acme.<name>`.
@@ -74,6 +80,14 @@ theme = "@style/LaunchTheme"
 # below 34 leave out grammaticalGender, below 31 fontWeightAdjustment too.
 [package.metadata.android.application.activity]
 config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|mcc|mnc|touchscreen|navigation|colorMode|fontWeightAdjustment|grammaticalGender"
+
+# To appear in other applications' share sheets and receive what they share
+# (`Application::on_share`, `FrusApp::on_share`), declare the types you take:
+#
+# [[package.metadata.android.application.activity.intent_filter]]
+# actions = ["android.intent.action.SEND"]
+# categories = ["android.intent.category.DEFAULT"]
+# data = [{ mime_type = "text/plain" }, { mime_type = "image/*" }]
 
 # What frus itself uses on Android: the vibrator, for `frus::haptics`, and which network the
 # device is on, for `frus::connectivity`. Both are granted at install, with no question asked.

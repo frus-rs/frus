@@ -12,6 +12,10 @@
 //! anything frus draws over it — a dialog, a menu — covers it, and a page scrolling under it
 //! moves it in the same frame.
 //!
+//! [`PlatformView`] is the same widget for every platform (milestone 802): on Windows the view
+//! is a child window, on the web an element of the page, both over frus's surface and moved
+//! and clipped by the shell with the frame.
+//!
 //! On platforms without native views the widget shows its [fallback](AndroidView::fallback):
 //! by default an [`UnsupportedView`], a labelled box in debug builds and nothing in release.
 
@@ -31,7 +35,8 @@ use crate::widget::Widget;
 /// The height an [`AndroidView`] takes when it is given none.
 pub const ANDROID_VIEW_DEFAULT_HEIGHT: f32 = 300.0;
 
-/// Whether this build can embed native views: Android only, for now.
+/// Whether this build embeds [`AndroidView`]s: Android only. [`PlatformView`] is hosted on
+/// other platforms too: see [`platform_view_type_available`].
 pub const PLATFORM_VIEWS_SUPPORTED: bool = cfg!(target_os = "android");
 
 /// What an [`AndroidView`] asks the shell for: the kind of view and what to make it with.
@@ -254,6 +259,7 @@ pub(crate) struct TargetCounts {
     pub pans: usize,
     pub pointer_listeners: usize,
     pub overlay_cover: usize,
+    pub overlay_paint: usize,
     pub scrollables: usize,
 }
 
@@ -291,6 +297,228 @@ pub fn platform_view_frame(owner: u64) -> Option<ImageHandle> {
 
 type EventHandler<Msg> = Box<dyn Fn(&PlatformViewEvent) -> Option<Msg>>;
 
+/// The view types the shell hosts on this platform besides Android's (milestone 802): a
+/// Windows child window, a page element. Filled by the shell at start-up and by plugins.
+static HOSTED_TYPES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Says that the shell can make native views of `view_type` on this platform — for the shell
+/// and for plugins that register a factory (milestone 802). A [`PlatformView`] of a type
+/// nobody registered shows its fallback.
+///
+/// ```
+/// use frus_widgets::{platform_view_type_available, register_platform_view_type};
+///
+/// register_platform_view_type("com.example/chart");
+/// assert!(platform_view_type_available("com.example/chart"));
+/// ```
+pub fn register_platform_view_type(view_type: &str) {
+    let mut types = HOSTED_TYPES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !types.iter().any(|t| t == view_type) {
+        types.push(view_type.to_owned());
+    }
+}
+
+/// Whether a [`PlatformView`] of `view_type` gets a real native view here: on Android always
+/// (its factories are Java classes, and a type without one sends
+/// [`PlatformViewEvent::ERROR`]); elsewhere when the shell or a plugin
+/// [registered](register_platform_view_type) it.
+///
+/// ```
+/// use frus_widgets::platform_view_type_available;
+///
+/// if !cfg!(target_os = "android") {
+///     assert!(!platform_view_type_available("com.example/never-registered"));
+/// }
+/// ```
+pub fn platform_view_type_available(view_type: &str) -> bool {
+    cfg!(target_os = "android")
+        || HOSTED_TYPES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|t| t == view_type)
+}
+
+/// What [`AndroidView`] and [`PlatformView`] share: the view asked for, its size, its events
+/// and what stands in for it.
+struct Embedded<Msg> {
+    spec: PlatformViewSpec,
+    width: Option<f32>,
+    height: Option<f32>,
+    on_event: Option<EventHandler<Msg>>,
+    label: Option<String>,
+    /// Whether a native view is made here; the fallback stands in otherwise.
+    hosted: bool,
+    /// The fallback, shown when `hosted` is false.
+    fallback: Vec<Box<dyn Widget<Msg>>>,
+}
+
+impl<Msg: 'static> Embedded<Msg> {
+    fn new(widget: &str, view_type: String, params: String, hosted: bool) -> Self {
+        let fallback: Vec<Box<dyn Widget<Msg>>> = if hosted {
+            Vec::new()
+        } else {
+            vec![Box::new(UnsupportedView::new(format!(
+                "{widget} \"{view_type}\"\nnot available on this platform"
+            )))]
+        };
+        Self {
+            spec: PlatformViewSpec::new(view_type, params),
+            width: None,
+            height: None,
+            on_event: None,
+            label: None,
+            hosted,
+            fallback,
+        }
+    }
+
+    fn style(&self) -> Style {
+        Style {
+            width: self
+                .width
+                .map_or(Dimension::Percent(1.0), Dimension::Length),
+            height: Dimension::Length(self.height.unwrap_or(ANDROID_VIEW_DEFAULT_HEIGHT)),
+            min_width: Dimension::Length(0.0),
+            min_height: Dimension::Length(0.0),
+            flex_shrink: 0.0,
+            ..Default::default()
+        }
+    }
+
+    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
+        if self.hosted {
+            &[]
+        } else {
+            &self.fallback
+        }
+    }
+
+    fn paint(&self, bounds: Rect, status: Status, scene: &mut Scene) {
+        if !self.hosted {
+            return;
+        }
+        // The view's latest image: on Android every image it draws; on a platform whose
+        // views are windows or page elements over frus's surface, the picture taken while
+        // something frus draws covers it whole. Until one arrives there is nothing to show,
+        // which is what a native view shows before it has drawn.
+        if let Some(frame) = platform_view_frame(scene.current_owner()) {
+            scene.draw_image_with(
+                &frame,
+                bounds,
+                Rect::new(0.0, 0.0, 1.0, 1.0),
+                Color::WHITE.fade(status.opacity),
+                false,
+                // The image is the view's own pixels, one for one: no chain to make.
+                FilterQuality::Low,
+            );
+        }
+    }
+
+    fn semantics(&self) -> Option<SemanticsProperties> {
+        self.label
+            .as_ref()
+            .map(|label| SemanticsProperties::new(frus_core::Role::None).label(label.clone()))
+    }
+}
+
+/// The builder methods and the `Widget` impl of a widget wrapping an [`Embedded`].
+macro_rules! embedded_view {
+    ($name:ident, $where:literal) => {
+        impl<Msg: 'static> $name<Msg> {
+            /// The width, in logical pixels. By default the view takes the whole width it is
+            /// given.
+            pub fn width(mut self, width: f32) -> Self {
+                self.0.width = Some(width.max(0.0));
+                self
+            }
+
+            /// The height, in logical pixels ([`ANDROID_VIEW_DEFAULT_HEIGHT`] by default).
+            pub fn height(mut self, height: f32) -> Self {
+                self.0.height = Some(height.max(0.0));
+                self
+            }
+
+            /// The controller the application calls the view's methods through.
+            pub fn controller(mut self, controller: &PlatformViewController) -> Self {
+                self.0.spec.controller = Some(controller.clone());
+                self
+            }
+
+            /// The message for each event the view sends (`None` sends nothing).
+            pub fn on_event(
+                mut self,
+                handler: impl Fn(&PlatformViewEvent) -> Option<Msg> + 'static,
+            ) -> Self {
+                self.0.on_event = Some(Box::new(handler));
+                self
+            }
+
+            /// What a screen reader says the view is, before it reads the view's own content.
+            pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
+                self.0.label = Some(label.into());
+                self
+            }
+
+            #[doc = concat!(
+                                "What stands in for the view where it cannot be made (",
+                                $where,
+                                "). The default is an [`UnsupportedView`] naming the view type."
+                            )]
+            pub fn fallback(mut self, fallback: impl Widget<Msg> + 'static) -> Self {
+                self.0.fallback = vec![Box::new(fallback)];
+                self
+            }
+
+            /// What the widget asks the shell for.
+            pub fn spec(&self) -> &PlatformViewSpec {
+                &self.0.spec
+            }
+
+            /// Whether a native view is made here, rather than the fallback shown.
+            pub fn is_hosted(&self) -> bool {
+                self.0.hosted
+            }
+        }
+
+        impl<Msg: 'static> Widget<Msg> for $name<Msg> {
+            fn style(&self) -> Style {
+                self.0.style()
+            }
+
+            fn children(&self) -> &[Box<dyn Widget<Msg>>] {
+                self.0.children()
+            }
+
+            fn paint(&self, bounds: Rect, status: Status, _theme: &Theme, scene: &mut Scene) {
+                self.0.paint(bounds, status, scene);
+            }
+
+            fn on_click(&self) -> Option<Msg> {
+                None
+            }
+
+            fn debug_name(&self) -> &'static str {
+                stringify!($name)
+            }
+
+            fn semantics(&self) -> Option<SemanticsProperties> {
+                self.0.semantics()
+            }
+
+            fn platform_view(&self) -> Option<&PlatformViewSpec> {
+                self.0.hosted.then_some(&self.0.spec)
+            }
+
+            fn on_platform_view_event(&self, event: &PlatformViewEvent) -> Option<Msg> {
+                self.0.on_event.as_ref().and_then(|handler| handler(event))
+            }
+        }
+    };
+}
+
 /// A **native Android view** inside the page: `view_type` names the factory that makes it
 /// (registered by a plugin, or one of frus's own, `"frus/webview"` and `"frus/edittext"`),
 /// and `params` is handed to it.
@@ -301,7 +529,8 @@ type EventHandler<Msg> = Box<dyn Fn(&PlatformViewEvent) -> Option<Msg>>;
 /// press to the lift. It takes the focus and the keyboard as a native view does, and a
 /// screen reader reads its own content in its place.
 ///
-/// Elsewhere than on Android it shows its [fallback](Self::fallback).
+/// Elsewhere than on Android it shows its [fallback](Self::fallback). [`PlatformView`] is the
+/// same widget for every platform that hosts native views.
 ///
 /// ```
 /// use frus_widgets::{AndroidView, PlatformViewController, PlatformViewEvent};
@@ -320,144 +549,80 @@ type EventHandler<Msg> = Box<dyn Fn(&PlatformViewEvent) -> Option<Msg>>;
 ///     });
 /// # let _ = page;
 /// ```
-pub struct AndroidView<Msg> {
-    spec: PlatformViewSpec,
-    width: Option<f32>,
-    height: Option<f32>,
-    on_event: Option<EventHandler<Msg>>,
-    label: Option<String>,
-    /// The fallback, on a platform without native views; empty on Android.
-    fallback: Vec<Box<dyn Widget<Msg>>>,
-}
+pub struct AndroidView<Msg>(Embedded<Msg>);
 
 impl<Msg: 'static> AndroidView<Msg> {
     /// The view `view_type` makes, given `params`.
     pub fn new(view_type: impl Into<String>, params: impl Into<String>) -> Self {
+        Self(Embedded::new(
+            "AndroidView",
+            view_type.into(),
+            params.into(),
+            PLATFORM_VIEWS_SUPPORTED,
+        ))
+    }
+}
+
+embedded_view!(AndroidView, "every platform but Android");
+
+/// A **native view** inside the page, on every platform that hosts one (milestone 802): an
+/// Android `View`, a Windows child window, an element of the web page. `view_type` names the
+/// factory that makes it and `params` is handed to it.
+///
+/// frus's own types are made on each platform by what that platform has:
+///
+/// | View type | Android | Windows | Web |
+/// | --- | --- | --- | --- |
+/// | `"frus/webview"` | `WebView` | WebView2 (feature `webview2`) | `<iframe>` |
+/// | `"frus/edittext"` | `EditText` | `EDIT` control | `<input>` |
+/// | `"frus/video"` | | | `<video>` |
+///
+/// They understand the same calls and send the same events, so one
+/// [`PlatformViewController`] drives each of them the same way. A plugin adds types of its
+/// own. A type with no factory on the platform shows the [fallback](Self::fallback): an
+/// [`UnsupportedView`] by default (on macOS, Linux and iOS, for now, every type does).
+///
+/// On Android the view is drawn by frus into the frame, so anything frus draws over it
+/// covers it. On Windows and the web the view is a window or an element over frus's surface:
+/// frus moves and clips it on every frame its box changes, leaves out of it the parts a frus
+/// overlay or a button covers, and while a dialog covers it whole, shows a picture of it
+/// (Windows) or nothing (the web) under the dialog.
+///
+/// ```
+/// use frus_widgets::{PlatformView, PlatformViewController, PlatformViewEvent};
+///
+/// #[derive(Clone)]
+/// enum Msg {
+///     Typed(String),
+/// }
+///
+/// let field = PlatformViewController::new();
+/// let name: PlatformView<Msg> = PlatformView::new("frus/edittext", "Your name")
+///     .height(40.0)
+///     .controller(&field)
+///     .on_event(|event: &PlatformViewEvent| {
+///         (event.name == "changed").then(|| Msg::Typed(event.data.clone()))
+///     });
+/// field.invoke("setText", "Ada");
+/// # let _ = name;
+/// ```
+pub struct PlatformView<Msg>(Embedded<Msg>);
+
+impl<Msg: 'static> PlatformView<Msg> {
+    /// The view `view_type` makes, given `params`.
+    pub fn new(view_type: impl Into<String>, params: impl Into<String>) -> Self {
         let view_type = view_type.into();
-        let fallback: Vec<Box<dyn Widget<Msg>>> = if PLATFORM_VIEWS_SUPPORTED {
-            Vec::new()
-        } else {
-            vec![Box::new(UnsupportedView::new(format!(
-                "AndroidView \"{view_type}\"\nnot available on this platform"
-            )))]
-        };
-        Self {
-            spec: PlatformViewSpec::new(view_type, params),
-            width: None,
-            height: None,
-            on_event: None,
-            label: None,
-            fallback,
-        }
-    }
-
-    /// The width, in logical pixels. By default the view takes the whole width it is given.
-    pub fn width(mut self, width: f32) -> Self {
-        self.width = Some(width.max(0.0));
-        self
-    }
-
-    /// The height, in logical pixels ([`ANDROID_VIEW_DEFAULT_HEIGHT`] by default).
-    pub fn height(mut self, height: f32) -> Self {
-        self.height = Some(height.max(0.0));
-        self
-    }
-
-    /// The controller the application calls the view's methods through.
-    pub fn controller(mut self, controller: &PlatformViewController) -> Self {
-        self.spec.controller = Some(controller.clone());
-        self
-    }
-
-    /// The message for each event the view sends (`None` sends nothing).
-    pub fn on_event(
-        mut self,
-        handler: impl Fn(&PlatformViewEvent) -> Option<Msg> + 'static,
-    ) -> Self {
-        self.on_event = Some(Box::new(handler));
-        self
-    }
-
-    /// What a screen reader says the view is, before it reads the view's own content.
-    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-
-    /// What stands in for the view where native views do not exist (every platform but
-    /// Android, for now). The default is an [`UnsupportedView`] naming the view type.
-    pub fn fallback(mut self, fallback: impl Widget<Msg> + 'static) -> Self {
-        if !PLATFORM_VIEWS_SUPPORTED {
-            self.fallback = vec![Box::new(fallback)];
-        }
-        self
-    }
-
-    /// What the widget asks the shell for.
-    pub fn spec(&self) -> &PlatformViewSpec {
-        &self.spec
+        let hosted = platform_view_type_available(&view_type);
+        Self(Embedded::new(
+            "PlatformView",
+            view_type,
+            params.into(),
+            hosted,
+        ))
     }
 }
 
-impl<Msg: 'static> Widget<Msg> for AndroidView<Msg> {
-    fn style(&self) -> Style {
-        Style {
-            width: self
-                .width
-                .map_or(Dimension::Percent(1.0), Dimension::Length),
-            height: Dimension::Length(self.height.unwrap_or(ANDROID_VIEW_DEFAULT_HEIGHT)),
-            min_width: Dimension::Length(0.0),
-            min_height: Dimension::Length(0.0),
-            flex_shrink: 0.0,
-            ..Default::default()
-        }
-    }
-
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        &self.fallback
-    }
-
-    fn paint(&self, bounds: Rect, status: Status, _theme: &Theme, scene: &mut Scene) {
-        if !PLATFORM_VIEWS_SUPPORTED {
-            return;
-        }
-        // Until the view's first image arrives there is nothing to show, which is what a
-        // native view shows before it has drawn.
-        if let Some(frame) = platform_view_frame(scene.current_owner()) {
-            scene.draw_image_with(
-                &frame,
-                bounds,
-                Rect::new(0.0, 0.0, 1.0, 1.0),
-                Color::WHITE.fade(status.opacity),
-                false,
-                // The image is the view's own pixels, one for one: no chain to make.
-                FilterQuality::Low,
-            );
-        }
-    }
-
-    fn on_click(&self) -> Option<Msg> {
-        None
-    }
-
-    fn debug_name(&self) -> &'static str {
-        "AndroidView"
-    }
-
-    fn semantics(&self) -> Option<SemanticsProperties> {
-        self.label
-            .as_ref()
-            .map(|label| SemanticsProperties::new(frus_core::Role::None).label(label.clone()))
-    }
-
-    fn platform_view(&self) -> Option<&PlatformViewSpec> {
-        PLATFORM_VIEWS_SUPPORTED.then_some(&self.spec)
-    }
-
-    fn on_platform_view_event(&self, event: &PlatformViewEvent) -> Option<Msg> {
-        self.on_event.as_ref().and_then(|handler| handler(event))
-    }
-}
+embedded_view!(PlatformView, "a platform without a factory for its type");
 
 /// What stands in for a native view where there are none: in a debug build an outlined box
 /// with a label saying what is missing; in a release build nothing at all,
@@ -823,6 +988,78 @@ mod tests {
         let custom: AndroidView<()> =
             AndroidView::new("com.example/map", "").fallback(crate::Placeholder::new());
         assert_eq!(custom.children()[0].debug_name(), "Placeholder");
+    }
+
+    #[test]
+    fn a_platform_view_is_hosted_where_its_type_is_registered() {
+        let missing: PlatformView<()> = PlatformView::new("test802/missing", "");
+        assert!(!missing.is_hosted());
+        assert!(missing.platform_view().is_none() || cfg!(target_os = "android"));
+        if !cfg!(target_os = "android") {
+            assert_eq!(missing.children()[0].debug_name(), "UnsupportedView");
+        }
+        register_platform_view_type("test802/hosted");
+        register_platform_view_type("test802/hosted");
+        let hosted: PlatformView<()> = PlatformView::new("test802/hosted", "p")
+            .fallback(crate::Placeholder::new())
+            .height(40.0);
+        assert!(hosted.is_hosted());
+        assert!(
+            hosted.children().is_empty(),
+            "no fallback where it is hosted"
+        );
+        assert_eq!(hosted.platform_view().map(|spec| spec.params()), Some("p"));
+        assert_eq!(Widget::<()>::debug_name(&hosted), "PlatformView");
+        // An Android view stays an Android view: hosted on Android alone.
+        let android: AndroidView<()> = AndroidView::new("test802/hosted", "");
+        assert_eq!(android.is_hosted(), cfg!(target_os = "android"));
+    }
+
+    #[test]
+    fn what_frus_paints_over_a_view_is_left_out_of_it() {
+        // A button laid over the view.
+        let tree = Stack::new()
+            .layer(native())
+            .layer(Container::new().width(40.0).height(40.0).on_click(1u8));
+        let rt = Runtime::default();
+        let ui = frame(&tree, &rt);
+        let view = &ui.platform_views()[0];
+        assert_eq!(
+            ui.platform_view_covers(view),
+            [Rect::new(0.0, 0.0, 40.0, 40.0)]
+        );
+        // A parent that answers presses, drawn first, covers nothing.
+        let under = Container::new().on_click(2u8).child(native());
+        let ui = frame(&under, &rt);
+        assert!(ui.platform_view_covers(&ui.platform_views()[0]).is_empty());
+        // A dialog: its scrim covers the whole window.
+        let dialog = crate::AlertDialog::new(true)
+            .title("Over it")
+            .on_dismiss(3u8)
+            .body(native());
+        let ui = frame(&dialog, &rt);
+        let view = &ui.platform_views()[0];
+        assert!(ui
+            .platform_view_covers(view)
+            .iter()
+            .any(|cover| cover.contains(Point::new(0.0, 0.0))
+                && cover.contains(Point::new(99.0, 99.0))));
+        // A menu below an anchor: its box, not the barrier around it.
+        let menu = Flex::column()
+            .child(
+                crate::OverlayPortal::new(Container::new().width(10.0).height(10.0))
+                    .overlay(
+                        Container::new().width(30.0).height(30.0),
+                        crate::Placement::Below,
+                    )
+                    .dismiss(4u8),
+            )
+            .child(native());
+        let ui = frame(&menu, &rt);
+        let view = &ui.platform_views()[0];
+        let covers = ui.platform_view_covers(view);
+        assert_eq!(covers.len(), 1, "{covers:?}");
+        assert!(covers[0].width <= 30.0 && covers[0].height <= 30.0);
     }
 
     #[test]

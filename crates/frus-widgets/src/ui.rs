@@ -774,6 +774,10 @@ pub struct Ui<Msg = crate::callback::Callback> {
     /// Where a press lands **on an overlay** rather than on the pages under it: an overlay's
     /// box, and the whole window under one that a press outside dismisses (milestone 642).
     overlay_cover: Vec<Rect>,
+    /// What overlays **paint** over the pages: each overlay's box, a tooltip's too, and the
+    /// whole window under a scrim (milestone 802). A native view hosted above frus's surface
+    /// leaves these out of its shape.
+    overlay_paint: Vec<Rect>,
     focusables: Vec<Focusable>,
     /// **Focus scope**: index of the topmost modal overlay's first focusable —
     /// Tab/arrows/click-to-focus are trapped from there on (`None` = no modal, every
@@ -999,6 +1003,35 @@ impl<Msg: Clone> Ui<Msg> {
             view.visible.y + view.visible.height / 2.0,
         );
         (self.platform_view_at(middle).map(|v| v.id) == Some(view.id)).then_some(view)
+    }
+
+    /// What frus painted **over** native view `view` (milestone 802): the boxes of the
+    /// overlays opened after it (the whole window under a dialog's scrim) and of the press
+    /// targets laid over it — a button in a `Stack` over the view. A view hosted above frus's
+    /// surface, as a Windows child window or a page element is, leaves these out of its shape
+    /// so that they show; only the parts that touch the view's visible box are given.
+    pub fn platform_view_covers(&self, view: &crate::PlatformViewPlacement) -> Vec<Rect> {
+        let above = view.above;
+        let touches = |r: &Rect| {
+            let common = r.intersect(view.visible);
+            common.width > 0.0 && common.height > 0.0
+        };
+        let barriers = &self.overlay_cover[above.overlay_cover.min(self.overlay_cover.len())..];
+        let presses = self.hits[above.hits.min(self.hits.len())..]
+            .iter()
+            .chain(&self.long_presses[above.long_presses.min(self.long_presses.len())..])
+            // A target under a rotating or scaling layer is tested through its inverse: its
+            // box is not where it is drawn, so it is left out.
+            .filter(|hit| hit.xform.is_none())
+            .map(|hit| hit.rect)
+            // The barrier a menu leaves around itself takes presses and paints nothing.
+            .filter(|rect| !barriers.contains(rect));
+        self.overlay_paint[above.overlay_paint.min(self.overlay_paint.len())..]
+            .iter()
+            .copied()
+            .chain(presses)
+            .filter(touches)
+            .collect()
     }
 
     /// Every box a press can land on, in painted order: what on the title bar's line is the
@@ -2948,6 +2981,7 @@ struct Builder<'a, Msg> {
     edit_actions: Vec<(WidgetId, crate::EditAction)>,
     toolbars: Vec<Rect>,
     overlay_cover: Vec<Rect>,
+    overlay_paint: Vec<Rect>,
     focusables: Vec<Focusable>,
     /// Start of the topmost modal overlay's focus scope.
     focus_scope_start: Option<usize>,
@@ -4367,6 +4401,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     pans: self.pans.len(),
                     pointer_listeners: self.pointer_listeners.len(),
                     overlay_cover: self.overlay_cover.len(),
+                    overlay_paint: self.overlay_paint.len(),
                     scrollables: self.scrollables.len(),
                 },
             });
@@ -6713,6 +6748,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 self.scene.set_clip(window);
                 self.scene
                     .fill_rect(window, base.with_alpha(base.a * progress));
+                // Read by the hosts of native views over the surface, which Android has not.
+                #[cfg(not(target_os = "android"))]
+                self.overlay_paint.push(window);
             }
 
             // Dismissal on a click **outside** the content (a modal, a menu…): a full-screen
@@ -6753,6 +6791,12 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // Where a press is the overlay's and not the pages' — a tooltip takes none.
             if placement != Placement::Tooltip && anchor_on_screen {
                 self.overlay_cover
+                    .push(Rect::new(pos.0, pos.1, size.width, size.height));
+            }
+            // And what it paints, a tooltip included (milestone 802).
+            #[cfg(not(target_os = "android"))]
+            if anchor_on_screen {
+                self.overlay_paint
                     .push(Rect::new(pos.0, pos.1, size.width, size.height));
             }
 
@@ -7098,6 +7142,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         edit_actions: Vec::new(),
         toolbars: Vec::new(),
         overlay_cover: Vec::new(),
+        overlay_paint: Vec::new(),
         focusables: Vec::new(),
         focus_scope_start: None,
         scrollables: Vec::new(),
@@ -7191,6 +7236,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         edit_actions: builder.edit_actions,
         toolbars: builder.toolbars,
         overlay_cover: builder.overlay_cover,
+        overlay_paint: builder.overlay_paint,
         focusables: builder.focusables,
         focus_scope_start: builder.focus_scope_start,
         scrollables: builder.scrollables,

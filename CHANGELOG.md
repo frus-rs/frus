@@ -8,11 +8,31 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 799 so far, each documenting the objective, the alternatives
+> record — one per step, 802 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Native views on Windows and the web** (J802). `PlatformView::new(view_type, params)` is the
+  native view widget for every platform: Android's `View` as before, a child window on
+  Windows, an element of the page on the web. `"frus/edittext"` is an `EDIT` control on Windows
+  and an `<input>` on the web; `"frus/webview"` is WebView2 on Windows (feature `webview2`) and
+  an `<iframe>` on the web; `"frus/video"` is a `<video>` on the web. They take the same
+  `PlatformViewController` calls and send the same events as on Android. The view is moved,
+  resized and clipped with the frame; what frus draws over it (a menu, a button) is cut out of
+  it, and under a dialog Windows shows a picture of it. `register_platform_view_factory` adds a
+  view type from Rust on Windows and the web. `AndroidView` is unchanged. macOS, Linux and iOS
+  still show the fallback.
+- **Android applications come back to the running activity** (J801). `frus run` and
+  `frus build` package frus's own activity, `dev.frus.FrusActivity` (the native activity with
+  `onNewIntent` forwarded, `launchMode="singleTop"`, about 900 bytes of code): a link, a share, a
+  notification's tap and a sign-in's redirect that open the application while it runs reach the
+  running one, with its state, instead of finishing and starting it again. Custom-scheme
+  redirects now work on Android with `frus::auth_session` (`com.example.app:/oauth`, in a Custom
+  Tab). New: receiving what other applications share — `Application::on_share`,
+  `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
+  application that names an activity of its own keeps it; a package made by hand with
+  `cargo apk` runs in the native activity as before.
 - **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
   build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
   assets; reloads and moves in the history; runs JavaScript, with or without its result (a

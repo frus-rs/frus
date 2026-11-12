@@ -384,13 +384,31 @@ pub(crate) fn android_project_files(
         &shadow.join(ANDROID_MANIFEST),
         &android_manifest(config_changes, deeplink),
     )?;
-    write_if_changed(
-        &shadow.join("MainActivity.kt"),
-        "package dev.dioxus.main\n\n\
-         // Written by `frus run --hot`: frus's Android shell runs in a native activity.\n\
-         class MainActivity : android.app.NativeActivity()\n",
-    )
+    write_if_changed(&shadow.join("MainActivity.kt"), MAIN_ACTIVITY)
 }
+
+/// The engine's activity: the native activity, handing a new intent to the running application
+/// as frus's own activity does (milestone 801, `android_activity`).
+const MAIN_ACTIVITY: &str = r#"package dev.dioxus.main
+
+import android.content.Intent
+
+// Written by `frus run --hot`: frus's Android shell runs in a native activity, which hands the
+// intents that open the application again to the running one (milestone 801).
+class MainActivity : android.app.NativeActivity() {
+    private external fun nativeNewIntent(intent: Intent)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        try {
+            nativeNewIntent(intent)
+        } catch (notYet: UnsatisfiedLinkError) {
+            // The native side has not started: it reads the activity's intent when it does.
+        }
+    }
+}
+"#;
 
 /// The engine's Android manifest, as the engine writes it (its pinned release's template, with
 /// nothing from `Dioxus.toml` but the library's name, `main`), except for the activity's
@@ -416,6 +434,7 @@ fn android_manifest(config_changes: &str, deeplink: Option<&crate::platforms::De
         android:theme="@style/AppTheme"
         android:networkSecurityConfig="@xml/network_security_config">
         <activity android:configChanges="{config_changes}" android:exported="true"
+            android:launchMode="singleTop"
             android:label="@string/app_name" android:name="dev.dioxus.main.MainActivity">
             <meta-data android:name="android.app.lib_name" android:value="main" />
             <meta-data android:name="android.app.func_name" android:value="ANativeActivity_onCreate" />
@@ -947,6 +966,15 @@ resources = "res"
         ] {
             assert!(manifest.contains(kept), "{kept}: {manifest}");
         }
+        // The running activity takes the intents that open the application again (milestone
+        // 801): one instance, and the activity's class forwards them.
+        assert!(
+            manifest.contains("android:launchMode=\"singleTop\""),
+            "{manifest}"
+        );
+        let activity = std::fs::read_to_string(shadow.join("MainActivity.kt")).unwrap();
+        assert!(activity.contains("external fun nativeNewIntent(intent: Intent)"));
+        assert!(activity.contains("override fun onNewIntent(intent: Intent)"));
         // The application's own files of these names are never linked over the written ones.
         assert!(is_kept_out(ANDROID_MANIFEST));
         std::fs::remove_dir_all(&shadow).unwrap();
