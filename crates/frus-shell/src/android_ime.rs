@@ -147,6 +147,8 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     // And video playback (milestone 797), loaded with the first clip.
     #[cfg(feature = "video")]
     crate::video::remember(&mut env, &loader, &activity);
+    // And what an intent that opens the application carries (milestone 801).
+    crate::android_link::install(&mut env, &loader);
 
     let name = env.new_string("dev.frus.input.FrusTextBridge")?;
     let class_obj = env

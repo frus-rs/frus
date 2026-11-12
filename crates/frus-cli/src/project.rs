@@ -68,9 +68,20 @@ pub(crate) struct Project {
     /// `[package.metadata.frus] deeplink`: the links that open it, `myapp` or
     /// `https://example.com` (milestone 791).
     pub deeplink: Option<String>,
+    /// `[package.metadata.android.application.activity] name`: an activity class the application
+    /// declares itself. None, as `frus create` writes it: frus's own (milestone 801).
+    pub android_activity: Option<String>,
 }
 
 impl Project {
+    /// The activity class the application runs in on Android: the one its manifest names, or
+    /// frus's own (see `android_activity`).
+    pub(crate) fn activity_class(&self) -> &str {
+        self.android_activity
+            .as_deref()
+            .unwrap_or(crate::android_activity::ACTIVITY)
+    }
+
     /// The application whose manifest is in `start` or the nearest directory above it.
     pub(crate) fn find(start: &Path) -> Result<Self, String> {
         let mut dir = Some(start);
@@ -129,6 +140,7 @@ impl Project {
         let mut windows_signing = Vec::new();
         let mut platforms = None;
         let mut deeplink = None;
+        let mut android_activity = None;
         for line in text.lines() {
             let line = line.trim();
             if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -214,6 +226,9 @@ impl Project {
                 ("package.metadata.android", "package", Some(value)) => {
                     android_package = Some(value)
                 }
+                ("package.metadata.android.application.activity", "name", Some(value)) => {
+                    android_activity = Some(value)
+                }
                 _ => {}
             }
         }
@@ -247,6 +262,7 @@ impl Project {
             variant: crate::variant::Resolved::default(),
             platforms,
             deeplink,
+            android_activity,
         })
     }
 

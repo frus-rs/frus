@@ -15,10 +15,13 @@
 //!   on the loopback interface, on the port the address names or, with none, a free one the
 //!   address is rewritten with (RFC 8252 §7.3). The browser is shown a page saying it can be
 //!   closed; on Android the page is a Custom Tab, and the application comes back over it.
-//! - **A custom scheme, `com.example.app:/oauth`** (a desktop application that registered it):
-//!   the link that opens the application. Not on Android yet ([`AuthError::Unsupported`]): the
-//!   browser hands such a link back with `FLAG_ACTIVITY_CLEAR_TOP`, which recreates the
-//!   application's activity and ends the sign-in with it. Use a loopback address there.
+//! - **A custom scheme, `com.example.app:/oauth`** (Android, and a desktop application that
+//!   registered it): the link that opens the application. On Android the page is a Custom Tab
+//!   and the browser hands the link back with `FLAG_ACTIVITY_CLEAR_TOP`, which reaches the
+//!   running activity (frus's own, milestone 801) and closes the tab. The application declares
+//!   the scheme (`frus create --deeplink`, or an intent filter); a package built by hand with
+//!   `cargo apk` runs in the native activity, which cannot take it
+//!   ([`AuthError::Unsupported`]).
 //! - **The Web**: a popup on the sign-in page, read once it is back on the application's own
 //!   origin; the redirect address is a page of this origin.
 //!
@@ -37,7 +40,8 @@ pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthError {
     /// This platform cannot run the flow, or the redirect address cannot come back to it
-    /// here (a loopback address on Android, a custom scheme on the Web).
+    /// here (a loopback address on the Web, a custom scheme in an Android package without
+    /// frus's activity).
     Unsupported(String),
     /// The request is not one that can be sent: an address that is not one, no token
     /// endpoint.
@@ -710,16 +714,23 @@ impl Redirect {
                 ))
             }
             // Chrome sends the link back with `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP`
-            // (from a Custom Tab and from a tab alike, measured on Android 10), which finishes
-            // and recreates the native activity, and the application with it. Saying so beats a
-            // sign-in that never comes back.
+            // (from a Custom Tab and from a tab alike, measured on Android 10). frus's activity,
+            // `singleTop`, takes it as a new intent and hands it here (milestone 801); the
+            // native activity is finished and made again, and the application with it, so a
+            // package that still names it is told so rather than left waiting.
             #[cfg(android)]
-            Redirect::Link(_) => {
-                let _ = (request, prepare);
-                Err(AuthError::Unsupported(
-                    "a custom-scheme redirect on Android: use http://127.0.0.1/… (loopback)"
-                        .to_string(),
-                ))
+            Redirect::Link(uri) => {
+                if crate::android_link::receives_new_intents() {
+                    link::wait(request, uri, prepare).await
+                } else {
+                    let _ = (request, prepare);
+                    Err(AuthError::Unsupported(
+                        "a custom-scheme redirect needs frus's Android activity, which \
+                         `frus build` and `frus run` put in the package; or use \
+                         http://127.0.0.1/… (loopback)"
+                            .to_string(),
+                    ))
+                }
             }
             #[cfg(not(any(web, android)))]
             Redirect::Link(uri) => link::wait(request, uri, prepare).await,
@@ -765,7 +776,6 @@ pub(crate) fn offer(link: &str) -> bool {
 }
 
 #[cfg(not(web))]
-#[cfg_attr(android, allow(dead_code))]
 mod link {
     use super::*;
 
@@ -805,9 +815,14 @@ mod link {
         Ok((link, prepared))
     }
 
-    /// The authorization page, in the system's browser.
+    /// The authorization page, in the system's browser — on Android in a Custom Tab over the
+    /// application, which the redirect's link closes as it hands the answer back.
     fn open_page(url: &str) -> Result<(), AuthError> {
-        crate::open_url(url).map_err(|e| AuthError::Browser(e.to_string()))
+        #[cfg(android)]
+        let opened = crate::android_share::open_auth_tab(url);
+        #[cfg(not(android))]
+        let opened = crate::open_url(url);
+        opened.map_err(|e| AuthError::Browser(e.to_string()))
     }
 }
 
