@@ -103,6 +103,7 @@ impl PixelRect {
 
     /// `rect`, in physical pixels already, with each edge rounded on its own: two boxes that
     /// touch still touch.
+    #[cfg_attr(android, allow(dead_code))]
     pub(crate) fn edges(rect: Rect) -> Self {
         let (left, top) = (rect.x.round() as i32, rect.y.round() as i32);
         let right = (rect.x + rect.width).round() as i32;
@@ -115,12 +116,14 @@ impl PixelRect {
         }
     }
 
+    #[cfg_attr(android, allow(dead_code))]
     /// Whether it holds no pixel.
     pub(crate) fn is_empty(&self) -> bool {
         self.w <= 0 || self.h <= 0
     }
 
     /// The pixels both hold.
+    #[cfg_attr(android, allow(dead_code))]
     pub(crate) fn intersect(self, other: PixelRect) -> PixelRect {
         let left = self.x.max(other.x);
         let top = self.y.max(other.y);
@@ -136,6 +139,7 @@ impl PixelRect {
 
     /// What is left of it once `cut` is taken out: up to four boxes, none overlapping — the
     /// band above the cut, the band below, and the two sides between.
+    #[cfg_attr(android, allow(dead_code))]
     pub(crate) fn minus(self, cut: PixelRect) -> Vec<PixelRect> {
         let common = self.intersect(cut);
         if common.is_empty() {
@@ -176,6 +180,7 @@ impl PixelRect {
 /// child window or a page element is drawn above every pixel frus draws, so the parts frus
 /// draws over it — a menu, a button laid on it, a dialog's scrim — are cut out of it, and the
 /// parts a scrolling area clips away too.
+#[cfg_attr(android, allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Shape {
     /// All of it shows.
@@ -192,6 +197,7 @@ pub(crate) enum Shape {
 impl Shape {
     /// The shape of the view whose box is `rect`, of which `visible` is inside every clip
     /// around it and `covers` are what frus drew over it: all in the window's physical pixels.
+    #[cfg_attr(android, allow(dead_code))]
     pub(crate) fn of(rect: Rect, visible: Rect, covers: &[Rect]) -> Self {
         // Where the view is placed, rounded as it is placed; and the part of it in sight. A
         // view in sight whole is its whole box, whatever the rounding of the clip's edges:
@@ -239,6 +245,7 @@ impl Shape {
     }
 
     /// Whether any of the view shows.
+    #[cfg_attr(android, allow(dead_code))]
     pub(crate) fn shows(&self) -> bool {
         matches!(self, Shape::Whole | Shape::Parts(_))
     }
@@ -255,7 +262,7 @@ pub(crate) struct Wanted<'a> {
     pub controller: Option<&'a PlatformViewController>,
     /// How much of it shows, for a view hosted over frus's surface; `None` for one frus draws
     /// itself (Android's).
-    #[cfg_attr(android, allow(dead_code))]
+    #[cfg(not(android))]
     pub shape: Option<Shape>,
 }
 
@@ -274,6 +281,7 @@ pub(crate) enum Command {
     /// Drop view `view`.
     Dispose { view: i32 },
     /// Show only `shape` of view `view` (a view hosted over frus's surface).
+    #[cfg(not(android))]
     Clip { view: i32, shape: Shape },
     /// Call `method` on view `view`.
     Invoke {
@@ -288,7 +296,7 @@ struct Live {
     view_type: String,
     at: PixelRect,
     controller: Option<PlatformViewController>,
-    #[cfg_attr(android, allow(dead_code))]
+    #[cfg(not(android))]
     shape: Option<Shape>,
 }
 
@@ -370,6 +378,7 @@ impl PlatformViews {
                             view_type: want.view_type.to_owned(),
                             at,
                             controller: want.controller.cloned(),
+                            #[cfg(not(android))]
                             shape: want.shape.clone(),
                         },
                     );

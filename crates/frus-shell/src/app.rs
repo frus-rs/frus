@@ -1956,7 +1956,6 @@ impl<A: Application> App<A> {
                 params: &p.params,
                 rect: p.rect,
                 controller: p.controller.as_ref(),
-                shape: None,
             })
             .collect();
         let before: Vec<(WidgetId, i32)> = self.platform_views.views().collect();
