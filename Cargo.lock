@@ -1698,6 +1698,7 @@ name = "frus-gpu"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bytemuck",
  "frus-core",
  "frus-glyphon",

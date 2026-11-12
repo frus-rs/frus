@@ -12,6 +12,11 @@ documentation = "https://docs.rs/frus-core"
 keywords = ["gui", "geometry", "colour", "wgpu"]
 categories = ["gui", "graphics"]
 
+[features]
+# Shader pipelines compiled ahead of their first frame (milestone 800): the loaded shaders are
+# listed for the renderer. Off by default; `frus`'s `warm-shaders` turns it on.
+warm-shaders = []
+
 [dependencies]
 bytemuck.workspace = true
 # An invalid OpenType tag or language tag in a text style is ignored, and the console is told.

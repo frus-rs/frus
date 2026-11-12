@@ -49,6 +49,13 @@ taskbar = ["frus-shell/taskbar"]
 # Global shortcuts: `GlobalShortcut`. The desktop (X11 on Linux); off by default.
 global-shortcuts = ["frus-shell/global-shortcuts"]
 json = ["frus-shell/json"]
+# Video and camera frames shown without a copy on Android (milestone 800): a `TextureSurface`
+# hands out GPU buffers the renderer imports, where the GPU allows it. Off by default.
+hardware-buffers = ["frus-shell/hardware-buffers"]
+# Custom shaders' GPU pipelines compiled on a thread of the renderer's as soon as
+# `Shader::from_wgsl` loads them, so their first frame does not wait (milestone 800). Off by
+# default.
+warm-shaders = ["frus-shell/warm-shaders"]
 # A web page inside the page on Windows, hosted by the system's WebView2:
 # `PlatformView::new("frus/webview", ..)` (milestone 802). Off by default; Android and the web
 # need no feature.

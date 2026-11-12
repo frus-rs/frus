@@ -56,6 +56,19 @@ any release may break.
   `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
   application that names an activity of its own keeps it; a package made by hand with
   `cargo apk` runs in the native activity as before.
+- **Video and camera frames without a copy on Android, shaders compiled ahead** (J800). Where
+  the GPU can import Android's hardware buffers (Vulkan with
+  `VK_ANDROID_external_memory_android_hardware_buffer` and the sampler Y'CbCr conversion), the
+  renderer opens its device with them, a `TextureSurface` hands out GPU buffers in the
+  decoder's or the camera's own format, and each frame is read by the GPU where the producer
+  wrote it, YUV converted as it is read: no plane is copied by the CPU (feature
+  `hardware-buffers` of `frus`, off by default). The copying path stays
+  for OpenGL ES, Android 7 and GPUs without the extensions, chosen at run time. A frame's buffer
+  goes back to the producer only once the GPU has read it. `ExternalTexture::push_hardware_buffer`
+  and `HardwareBuffer` let a producer of its own hand buffers over; `textures().hardware_buffers()`
+  says whether the renderer imports them. With the `warm-shaders` feature, `Shader::from_wgsl`
+  starts compiling the shader's GPU pipeline at once, on a thread of the renderer's: the first
+  frame that shows a shader finds its pipeline ready instead of waiting for the driver.
 - **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
   build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
   assets; reloads and moves in the history; runs JavaScript, with or without its result (a
