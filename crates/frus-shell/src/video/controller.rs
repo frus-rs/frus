@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn listeners_hear_each_report_and_positions_coalesce() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         let heard = Rc::new(Cell::new(0));
@@ -943,7 +943,7 @@ mod tests {
     #[test]
     fn the_end_stops_the_playback_and_play_starts_over() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         c.play();
@@ -962,7 +962,7 @@ mod tests {
     #[test]
     fn a_looping_clip_does_not_complete() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         c.set_looping(true);
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn seeking_and_volume_stay_within_bounds() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         calls();
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn the_background_pauses_and_the_return_plays_again() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         c.play();
@@ -1012,7 +1012,7 @@ mod tests {
         assert!(calls().is_empty());
         // One allowed in the background goes on.
         let b = controller().allow_background_playback(true);
-        let _ = b.initialize();
+        drop(b.initialize());
         send(ready());
         frus_widgets::run_local_tasks();
         b.play();
@@ -1024,7 +1024,7 @@ mod tests {
     fn the_last_handle_or_dispose_releases_the_player() {
         let before = RELEASED.load(Ordering::SeqCst);
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         let other = c.clone();
         drop(c);
         assert_eq!(RELEASED.load(Ordering::SeqCst), before);
@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn a_report_from_another_thread_wakes_the_interface() {
         let c = controller();
-        let _ = c.initialize();
+        drop(c.initialize());
         frus_widgets::run_local_tasks();
         let sink = SINK.with(|s| s.borrow().clone()).expect("opened");
         std::thread::spawn(move || sink.send(ready()))

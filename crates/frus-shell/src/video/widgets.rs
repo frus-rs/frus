@@ -583,21 +583,25 @@ mod tests {
         assert!(buffered.is_empty());
     }
 
-    /// The overlay driven through the shell, as on the phone where two bugs were found: the
-    /// play button must take its tap (a tap area under it took it instead), and the progress
-    /// bar must have the room between the two times (it had none, the times touching).
-    #[test]
-    fn the_controls_pause_and_the_bar_seeks_where_it_is_pressed() {
-        use super::super::controller::{DataSource, Event, Player, Sink, VideoError};
-        use crate::app::testing::Driver;
-        use crate::FrusApp;
-        use frus_widgets::{Point, Positioned, TextureId};
-        use std::cell::RefCell;
-        use std::sync::Arc;
+    use super::super::controller::{DataSource, Event, Player, Sink, VideoError};
+    use crate::app::testing::Driver;
+    use frus_widgets::{Point, Positioned, TextureId};
+    use std::cell::RefCell;
+    use std::sync::Arc;
 
-        thread_local! {
-            static SINK: RefCell<Option<Arc<Sink>>> = const { RefCell::new(None) };
-        }
+    thread_local! {
+        static SINK: RefCell<Option<Arc<Sink>>> = const { RefCell::new(None) };
+    }
+
+    /// Reports from the fake player, as the platform's thread sends them.
+    fn report(event: Event) {
+        SINK.with(|s| s.borrow().as_ref().expect("opened").send(event));
+        frus_widgets::run_local_tasks();
+    }
+
+    /// A ten-second clip, open and playing, under the default controls in a 400 x 300 window.
+    fn playing_under_controls() -> (VideoPlayerController, Driver<crate::FrusApp>) {
+        use crate::FrusApp;
         struct Silent;
         impl Player for Silent {
             fn play(&self) {}
@@ -613,16 +617,13 @@ mod tests {
         }
 
         let c = VideoPlayerController::with_opener(DataSource::File("x.mp4".into()), open);
-        let _ = c.initialize();
-        SINK.with(|s| {
-            s.borrow().as_ref().expect("opened").send(Event::Ready {
-                duration: Duration::from_secs(10),
-                width: 640,
-                height: 360,
-                texture: Some(TextureId::from_u64(1)),
-            })
+        drop(c.initialize());
+        report(Event::Ready {
+            duration: Duration::from_secs(10),
+            width: 640,
+            height: 360,
+            texture: Some(TextureId::from_u64(1)),
         });
-        frus_widgets::run_local_tasks();
         c.play();
         let shown = c.clone();
         let app = FrusApp::from_fn(move |_| {
@@ -638,6 +639,15 @@ mod tests {
         for _ in 0..3 {
             driver.frame(1.0 / 60.0);
         }
+        (c, driver)
+    }
+
+    /// The overlay driven through the shell, as on the phone where two bugs were found: the
+    /// play button must take its tap (a tap area under it took it instead), and the progress
+    /// bar must have the room between the two times (it had none, the times touching).
+    #[test]
+    fn the_controls_pause_and_the_bar_seeks_where_it_is_pressed() {
+        let (c, mut driver) = playing_under_controls();
         let texts = driver.texts();
         let rect = |label: &str| {
             texts
@@ -681,6 +691,39 @@ mod tests {
             (position - 5.0).abs() < 0.6,
             "seeked to {position}; pressed at {at:?}, texts {:?}",
             driver.texts()
+        );
+    }
+
+    /// As on the phone: the controls hidden, a tap brings them back, the clip reports its
+    /// position while they show, then a tap on the button in the middle pauses.
+    #[test]
+    fn the_button_pauses_after_a_tap_brought_the_controls_back() {
+        let (c, mut driver) = playing_under_controls();
+        let corner = Point::new(30.0, 30.0);
+        let middle = Point::new(200.0, 150.0);
+        let tap = |driver: &mut Driver<crate::FrusApp>, at: Point| {
+            driver.press(at);
+            driver.frame(1.0 / 60.0);
+            driver.release(at);
+            driver.frame(1.0 / 60.0);
+        };
+        // Hidden.
+        tap(&mut driver, corner);
+        assert!(c.value().is_playing);
+        // Back.
+        tap(&mut driver, corner);
+        for i in 1..=6 {
+            report(Event::Position(Duration::from_millis(250 * i)));
+            for _ in 0..15 {
+                driver.frame(1.0 / 60.0);
+            }
+        }
+        assert!(c.value().is_playing, "nothing paused it yet");
+        tap(&mut driver, middle);
+        assert!(
+            !c.value().is_playing,
+            "the tap on the button did not pause; hit {:?}",
+            driver.hit(middle)
         );
     }
 }
