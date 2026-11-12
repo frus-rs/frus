@@ -60,6 +60,8 @@
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+#[cfg(feature = "warm-shaders")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::{BlendMode, Color, ImageHandle, Rect};
@@ -395,6 +397,29 @@ fn compiled() -> &'static Mutex<HashMap<u64, Result<Shader, ShaderError>>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(feature = "warm-shaders")]
+/// Every shader loaded, in the order they were: what a renderer compiles ahead of their
+/// first frame (milestone 800). [`LOADED`] mirrors its length.
+fn loaded() -> &'static Mutex<Vec<Shader>> {
+    static LIST: OnceLock<Mutex<Vec<Shader>>> = OnceLock::new();
+    LIST.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(feature = "warm-shaders")]
+/// How many shaders [`loaded`] holds: read by renderers every frame, for nothing when no
+/// shader was loaded since.
+static LOADED: AtomicUsize = AtomicUsize::new(0);
+
+/// What a renderer asked to hear of each shader loaded: answers whether it still wants to.
+#[cfg(feature = "warm-shaders")]
+type LoadHook = Box<dyn Fn() -> bool + Send + Sync>;
+
+#[cfg(feature = "warm-shaders")]
+fn load_hooks() -> &'static Mutex<Vec<LoadHook>> {
+    static HOOKS: OnceLock<Mutex<Vec<LoadHook>>> = OnceLock::new();
+    HOOKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// FNV-1a, 64 bits.
 fn digest(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
@@ -409,6 +434,13 @@ impl Shader {
     /// The result is kept: the same text again answers the same shader for the cost of a
     /// hash, so this can be called where the paint is built. With `include_str!` and the
     /// hot patching of `frus run`, an edited shader is the new text, and is compiled anew.
+    ///
+    /// With the `warm-shaders` feature, the GPU's side is **compiled ahead** too: a running
+    /// renderer builds the new shader's pipeline on a thread of its own as soon as it is
+    /// loaded (on the Web, where there is no such thread, at the first frame that shows it). The first frame that
+    /// shows the shader then finds it ready instead of waiting for the driver. Loading
+    /// shaders early, before the screen that shows them (in `main`, in a state's `init`),
+    /// leaves the compilation the most time.
     ///
     /// ```
     /// use frus_core::Shader;
@@ -427,7 +459,81 @@ impl Shader {
         if let Ok(mut cache) = compiled().lock() {
             cache.insert(id, made.clone());
         }
+        #[cfg(feature = "warm-shaders")]
+        if let (Ok(shader), Ok(mut list)) = (&made, loaded().lock()) {
+            list.push(shader.clone());
+            LOADED.store(list.len(), Ordering::Release);
+        }
+        #[cfg(feature = "warm-shaders")]
+        if made.is_ok() {
+            // The renderers start compiling it now, while the frame that loaded it is built.
+            if let Ok(mut hooks) = load_hooks().lock() {
+                hooks.retain(|hook| hook());
+            }
+        }
         made
+    }
+
+    /// Calls `hook` after each new shader is loaded, until it answers `false`: how a renderer
+    /// starts compiling a shader's pipeline the moment it is loaded (milestone 800). The hook
+    /// runs on the loading thread, and must be quick: [`Shader::loaded_since`] says what is
+    /// new. Without the `warm-shaders` feature it is never called.
+    ///
+    /// ```
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    /// use frus_core::Shader;
+    ///
+    /// let heard = Arc::new(AtomicUsize::new(0));
+    /// let counter = heard.clone();
+    /// Shader::on_load(move || {
+    ///     counter.fetch_add(1, Ordering::SeqCst);
+    ///     false // once is enough
+    /// });
+    /// Shader::from_wgsl("fn shade(f: Fragment) -> vec4<f32> { return vec4<f32>(0.5); }").unwrap();
+    /// Shader::from_wgsl("fn shade(f: Fragment) -> vec4<f32> { return vec4<f32>(0.6); }").unwrap();
+    /// assert!(heard.load(Ordering::SeqCst) <= 1);
+    /// ```
+    #[doc(hidden)]
+    pub fn on_load(hook: impl Fn() -> bool + Send + Sync + 'static) {
+        #[cfg(feature = "warm-shaders")]
+        if let Ok(mut hooks) = load_hooks().lock() {
+            hooks.push(Box::new(hook));
+        }
+        #[cfg(not(feature = "warm-shaders"))]
+        let _ = hook;
+    }
+
+    /// The shaders loaded after the first `seen`, and how many have been loaded in all: a
+    /// renderer compiles the new ones' pipelines ahead of their first frame
+    /// (milestone 800). One atomic read when there is none; nothing without the
+    /// `warm-shaders` feature.
+    ///
+    /// ```
+    /// use frus_core::Shader;
+    ///
+    /// let (_, seen) = Shader::loaded_since(0);
+    /// let shader = Shader::from_wgsl(
+    ///     "fn shade(f: Fragment) -> vec4<f32> { return vec4<f32>(0.25, f.uv, 1.0); }",
+    /// )
+    /// .unwrap();
+    /// let (new, now) = Shader::loaded_since(seen);
+    /// assert!(now == seen || new.contains(&shader));
+    /// ```
+    #[doc(hidden)]
+    pub fn loaded_since(seen: usize) -> (Vec<Shader>, usize) {
+        #[cfg(feature = "warm-shaders")]
+        {
+            if LOADED.load(Ordering::Acquire) <= seen {
+                return (Vec::new(), seen);
+            }
+            let Ok(list) = loaded().lock() else {
+                return (Vec::new(), seen);
+            };
+            (list.get(seen..).unwrap_or(&[]).to_vec(), list.len())
+        }
+        #[cfg(not(feature = "warm-shaders"))]
+        (Vec::new(), seen)
     }
 
     /// **What to draw when a shader did not compile**: logs `error` (once per error, with

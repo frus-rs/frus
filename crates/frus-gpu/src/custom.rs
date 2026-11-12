@@ -10,14 +10,21 @@
 //! (`frus-core/src/shaders/frame.wgsl`). The frame's third bind group holds what the
 //! application adds: its uniforms, up to four images, and for a GPU pass the picture.
 //!
-//! Nothing here exists until a frame draws a shader: no pipeline, no buffer beyond a few
-//! bytes, no texture. A pipeline is made the first time its shader is drawn, kept for as
-//! long as the renderer lives, and made through the device's pipeline cache where there
-//! is one, so the next launch finds it compiled.
+//! Nothing here exists until a shader is loaded: no pipeline, no buffer beyond a few
+//! bytes, no texture, no thread. A pipeline is made **ahead** (milestone 800): when a
+//! renderer sees a newly loaded shader, at the start of a frame, it compiles the pipeline
+//! on a short-lived thread of its own, so the first frame that shows the shader does not
+//! wait for the driver; if that frame comes before the thread is done, it waits for that
+//! compilation rather than starting another. Pipelines are kept for as long as the
+//! renderer lives, and made through the device's pipeline cache where there is one, so the
+//! next launch finds them compiled.
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "warm-shaders")]
+use std::sync::{Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use frus_core::{ExternalPass, Rect, Scene, Shader, ShaderPaint, MAX_SHADER_IMAGES};
@@ -117,23 +124,188 @@ fn external_shader() -> Shader {
         .expect("the GPU pass shader compiles")
 }
 
-/// The custom pipelines, their bind group layout, this frame's uniforms, and the GPU
-/// passes' pictures.
-pub(crate) struct CustomPainter {
-    layout: wgpu::BindGroupLayout,
+/// What making a custom pipeline needs: everything but the shader. Cloned onto the
+/// warm-up thread.
+#[derive(Clone)]
+struct Builder {
     pipeline_layout: wgpu::PipelineLayout,
-    sampler: wgpu::Sampler,
-    /// 1×1 transparent black: an image slot the paint left empty.
-    blank: wgpu::TextureView,
     format: wgpu::TextureFormat,
     sample_count: u32,
     cache: Option<wgpu::PipelineCache>,
     /// WebGL 2 and OpenGL ES: shaders are translated to GLSL, which is checked first.
     gl: bool,
+}
+
+/// A pipeline being made ahead, or made: whoever asks first makes it, a second asker waits
+/// for it.
+#[cfg(feature = "warm-shaders")]
+type Ahead = Arc<OnceLock<Option<wgpu::RenderPipeline>>>;
+
+/// **Compiles shaders ahead of their first frame** (milestone 800): every pipeline of a
+/// custom painter is made through it, on the render thread when a frame asks first, or on a
+/// short-lived thread of its own as soon as the shader is loaded.
+pub(crate) struct Warmer {
+    builder: Builder,
+    device: wgpu::Device,
+    /// Every pipeline made or being made, by shader.
+    #[cfg(feature = "warm-shaders")]
+    ahead: Mutex<HashMap<u64, Ahead>>,
+    /// How many loaded shaders were looked at.
+    #[cfg(feature = "warm-shaders")]
+    seen: Mutex<usize>,
+    /// A pipeline was made since the renderer last wrote its pipeline cache.
+    made: Arc<AtomicBool>,
+}
+
+impl Warmer {
+    /// Starts compiling the shaders loaded since the last call, on a thread that ends when
+    /// they are done; answers it, for a test to wait on. Nothing on the Web, whose GPU objects
+    /// cannot leave the page's thread: a shader is compiled at its first frame there.
+    #[cfg(not(feature = "warm-shaders"))]
+    fn warm(&self) -> Option<std::thread::JoinHandle<()>> {
+        None
+    }
+
+    /// See the other `warm`: this one, with the feature, does the work.
+    #[cfg(feature = "warm-shaders")]
+    fn warm(&self) -> Option<std::thread::JoinHandle<()>> {
+        let work: Vec<(Shader, Ahead)> = {
+            let mut seen = self.seen.lock().ok()?;
+            let (shaders, now) = Shader::loaded_since(*seen);
+            *seen = now;
+            if shaders.is_empty() || cfg!(target_arch = "wasm32") {
+                return None;
+            }
+            let mut ahead = self.ahead.lock().ok()?;
+            shaders
+                .into_iter()
+                .filter_map(|shader| {
+                    if ahead.contains_key(&shader.id()) {
+                        return None;
+                    }
+                    let slot = Ahead::default();
+                    ahead.insert(shader.id(), slot.clone());
+                    Some((shader, slot))
+                })
+                .collect()
+        };
+        if work.is_empty() {
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let builder = self.builder.clone();
+            let device = self.device.clone();
+            let made = self.made.clone();
+            std::thread::Builder::new()
+                .name("frus-shader-warm-up".into())
+                .spawn(move || {
+                    for (shader, slot) in work {
+                        let pipeline = slot.get_or_init(|| {
+                            let started = web_time::Instant::now();
+                            let pipeline = builder.build(&device, &shader);
+                            log::info!(
+                                "shader {:016x}: pipeline compiled ahead in {:.1} ms",
+                                shader.id(),
+                                started.elapsed().as_secs_f32() * 1000.0
+                            );
+                            pipeline
+                        });
+                        if pipeline.is_some() {
+                            made.store(true, Ordering::Release);
+                        }
+                    }
+                })
+                .ok()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = work;
+            None
+        }
+    }
+
+    /// Whether a pipeline was made since the last call, here or ahead.
+    fn take_made(&self) -> bool {
+        self.made.swap(false, Ordering::AcqRel)
+    }
+
+    /// `shader`'s pipeline: the one made ahead (waiting for it when it is still being made),
+    /// or made now, on this thread.
+    #[cfg(not(feature = "warm-shaders"))]
+    fn pipeline(&self, shader: &Shader) -> Option<wgpu::RenderPipeline> {
+        let made = self.builder.build(&self.device, shader);
+        if made.is_some() {
+            self.made.store(true, Ordering::Release);
+        }
+        made
+    }
+
+    /// See the other `pipeline`: this one takes what was made ahead.
+    #[cfg(feature = "warm-shaders")]
+    fn pipeline(&self, shader: &Shader) -> Option<wgpu::RenderPipeline> {
+        let (slot, sent_ahead) = {
+            let mut ahead = self.ahead.lock().ok()?;
+            match ahead.get(&shader.id()) {
+                Some(slot) => (slot.clone(), true),
+                None => {
+                    let slot = Ahead::default();
+                    ahead.insert(shader.id(), slot.clone());
+                    (slot, false)
+                }
+            }
+        };
+        let ready = slot.get().is_some();
+        let started = web_time::Instant::now();
+        let mut built_here = false;
+        let made = slot
+            .get_or_init(|| {
+                built_here = true;
+                self.builder.build(&self.device, shader)
+            })
+            .clone();
+        // What the warm-up saved, or did not.
+        if !ready {
+            let ms = started.elapsed().as_secs_f32() * 1000.0;
+            log::info!(
+                "shader {:016x}: its first frame waited {ms:.1} ms for its pipeline ({})",
+                shader.id(),
+                if sent_ahead {
+                    "being compiled ahead"
+                } else {
+                    "not loaded ahead"
+                }
+            );
+        }
+        if built_here && made.is_some() {
+            self.made.store(true, Ordering::Release);
+        }
+        made
+    }
+
+    /// Whether `shader`'s pipeline is made, without waiting.
+    #[cfg(all(test, feature = "warm-shaders"))]
+    fn is_ready(&self, shader: &Shader) -> bool {
+        self.ahead
+            .lock()
+            .ok()
+            .and_then(|a| a.get(&shader.id()).map(|slot| slot.get().is_some()))
+            .unwrap_or(false)
+    }
+}
+
+/// The custom pipelines, their bind group layout, this frame's uniforms, and the GPU
+/// passes' pictures.
+pub(crate) struct CustomPainter {
+    layout: wgpu::BindGroupLayout,
+    /// What makes the pipelines, here or ahead.
+    warmer: Arc<Warmer>,
+    sampler: wgpu::Sampler,
+    /// 1×1 transparent black: an image slot the paint left empty.
+    blank: wgpu::TextureView,
     /// By shader: its pipeline, or `None` when it cannot be made on this device (said once).
+    /// What the draws read, with no lock; the warmer's map is where they are made.
     pipelines: HashMap<u64, Option<wgpu::RenderPipeline>>,
-    /// Whether a pipeline was made since the last [`CustomPainter::take_new_pipelines`].
-    new_pipelines: bool,
     buffer: Option<wgpu::Buffer>,
     /// By composite draw: the pipeline's shader and the third bind group.
     groups: Vec<Option<(u64, wgpu::BindGroup)>>,
@@ -149,6 +321,9 @@ struct PassSlot {
 }
 
 impl CustomPainter {
+    // On the Web wgpu's objects are not `Send`: the warmer is shared there with nothing but
+    // this thread, and with a warm-up thread only on native targets, where they are.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -229,15 +404,24 @@ impl CustomPainter {
         .create_view(&wgpu::TextureViewDescriptor::default());
         CustomPainter {
             layout,
-            pipeline_layout,
+            warmer: Arc::new(Warmer {
+                builder: Builder {
+                    pipeline_layout,
+                    format,
+                    sample_count,
+                    cache: cache.cloned(),
+                    gl: device.adapter_info().backend == wgpu::Backend::Gl,
+                },
+                device: device.clone(),
+                #[cfg(feature = "warm-shaders")]
+                ahead: Mutex::new(HashMap::new()),
+                #[cfg(feature = "warm-shaders")]
+                seen: Mutex::new(0),
+                made: Arc::new(AtomicBool::new(false)),
+            }),
             sampler,
             blank,
-            format,
-            sample_count,
-            cache: cache.cloned(),
-            gl: device.adapter_info().backend == wgpu::Backend::Gl,
             pipelines: HashMap::new(),
-            new_pipelines: false,
             buffer: None,
             groups: Vec::new(),
             passes: HashMap::new(),
@@ -247,24 +431,51 @@ impl CustomPainter {
     /// Whether a pipeline was made since the last call: the pipeline cache is then worth
     /// writing again.
     pub(crate) fn take_new_pipelines(&mut self) -> bool {
-        std::mem::take(&mut self.new_pipelines)
+        self.warmer.take_made()
     }
 
-    /// The pipeline of `shader`, made the first time it is asked for; `None` when this
-    /// device cannot run it, which is said once.
+    /// Starts compiling the shaders loaded so far, ahead of their first frame, and from now
+    /// on every shader **as it is loaded** (milestone 800). Answers the thread compiling
+    /// those loaded so far, for a test to wait on.
+    pub(crate) fn warm_shaders(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        let worker = self.warmer.warm();
+        #[cfg(all(feature = "warm-shaders", not(target_arch = "wasm32")))]
+        {
+            let warmer = Arc::downgrade(&self.warmer);
+            Shader::on_load(move || match warmer.upgrade() {
+                Some(warmer) => {
+                    let _ = warmer.warm();
+                    true
+                }
+                // The renderer is gone: the hook goes too.
+                None => false,
+            });
+        }
+        worker
+    }
+
+    /// The pipeline of `shader`, made ahead or now; `None` when this device cannot run it,
+    /// which is said once.
     fn pipeline(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         shader: &Shader,
     ) -> Option<&wgpu::RenderPipeline> {
         if !self.pipelines.contains_key(&shader.id()) {
-            let made = self.build(device, shader);
-            self.new_pipelines |= made.is_some();
+            let made = self.warmer.pipeline(shader);
             self.pipelines.insert(shader.id(), made);
         }
         self.pipelines.get(&shader.id()).and_then(|p| p.as_ref())
     }
 
+    /// Whether `shader`'s pipeline is ready without waiting.
+    #[cfg(all(test, feature = "warm-shaders"))]
+    fn is_ready(&self, shader: &Shader) -> bool {
+        self.pipelines.contains_key(&shader.id()) || self.warmer.is_ready(shader)
+    }
+}
+
+impl Builder {
     fn build(&self, device: &wgpu::Device, shader: &Shader) -> Option<wgpu::RenderPipeline> {
         if self.gl {
             if let Err(why) = gl_check(shader.module_source()) {
@@ -324,7 +535,9 @@ impl CustomPainter {
         }
         Some(pipeline)
     }
+}
 
+impl CustomPainter {
     /// Prepares this frame's custom draws: `draws[i]` is composite draw `i`'s, if it is
     /// one. The uniforms go into one buffer, one aligned slot each.
     pub(crate) fn prepare(
@@ -742,6 +955,15 @@ impl GpuCallback {
         F: Fn(&mut GpuPassContext<'_>) + Send + Sync + 'static,
     {
         use std::hash::{Hash, Hasher};
+        // The shader a pass is composited with, loaded with the first pass made: its pipeline
+        // then compiles ahead, while the frame that shows the pass is built (milestone 800).
+        #[cfg(feature = "warm-shaders")]
+        {
+            static COMPOSITING: std::sync::Once = std::sync::Once::new();
+            COMPOSITING.call_once(|| {
+                let _ = external_shader();
+            });
+        }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::any::TypeId::of::<F>().hash(&mut hasher);
         GpuCallback {
@@ -821,6 +1043,111 @@ fn shade(frag: Fragment) -> vec4<f32> {
         let f = FrameParams::new(Rect::new(1.0, 2.0, 3.0, 4.0), [5.0; 4], 6.0, 2.0, 12, 1);
         assert_eq!(f.rect, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(f.info, [6.0, 2.0, 12.0, 1.0]);
+    }
+
+    fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            ..Default::default()
+        }))
+        .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("frus.test.device"),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            ..Default::default()
+        }))
+        .ok()
+    }
+
+    /// Milestone 800: a shader loaded before its first frame has its pipeline compiled on a
+    /// thread of the renderer's, and the frame that draws it finds it there.
+    #[cfg(feature = "warm-shaders")]
+    #[test]
+    fn a_loaded_shader_is_compiled_ahead_of_its_first_frame() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let mut painters = crate::compositor::Painters::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            1,
+            None,
+        );
+        let custom = painters.custom_mut();
+        // What other tests loaded first.
+        if let Some(worker) = custom.warmer.warm() {
+            worker.join().unwrap();
+        }
+        let _ = custom.take_new_pipelines();
+        let shader = Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {
+    return vec4<f32>(frag.uv, 0.8, 1.0);
+}
+",
+        )
+        .unwrap();
+        assert!(
+            !custom.is_ready(&shader),
+            "nothing is compiled before a frame starts"
+        );
+        let worker = custom.warmer.warm().expect("a new shader is sent ahead");
+        worker.join().unwrap();
+        assert!(
+            custom.is_ready(&shader),
+            "compiled before any frame drew it"
+        );
+        assert!(custom.take_new_pipelines(), "the pipeline cache is told");
+        // The first frame takes the pipeline made ahead.
+        assert!(custom.pipeline(&device, &shader).is_some());
+        // Loading it again sends nothing more.
+        let again = Shader::from_wgsl(shader.source()).unwrap();
+        assert_eq!(again, shader);
+    }
+
+    /// Milestone 800: once a renderer warms shaders, one loaded later starts compiling the
+    /// moment it is loaded, with no frame asking.
+    #[cfg(feature = "warm-shaders")]
+    #[test]
+    fn a_shader_starts_compiling_as_it_is_loaded() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let mut painters = crate::compositor::Painters::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            1,
+            None,
+        );
+        let custom = painters.custom_mut();
+        if let Some(worker) = custom.warm_shaders() {
+            worker.join().unwrap();
+        }
+        let shader = Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {
+    return vec4<f32>(0.1, frag.uv, 1.0);
+}
+",
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        while !custom.is_ready(&shader) {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "never compiled ahead"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(custom.pipeline(&device, &shader).is_some());
     }
 
     #[test]

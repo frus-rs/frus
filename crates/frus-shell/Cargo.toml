@@ -65,6 +65,11 @@ auth = ["json", "dep:ring", "dep:async-channel", "web-sys/Crypto", "web-sys/Subt
 # a web view shows its fallback on Windows; Android and the web have one with no feature.
 webview2 = ["dep:webview2-com"]
 default = ["frus-gpu/default", "frus-widgets/default"]
+# Android (milestone 800): a `TextureSurface`'s frames shown without a copy where the GPU can
+# import hardware buffers (Vulkan). Off by default: an application with no video pays nothing.
+hardware-buffers = ["frus-gpu/hardware-buffers"]
+# Custom shaders compiled ahead of their first frame (milestone 800). Off by default.
+warm-shaders = ["frus-gpu/warm-shaders"]
 bundled-sans = ["frus-gpu/bundled-sans", "frus-widgets/bundled-sans"]
 bundled-italic = ["frus-gpu/bundled-italic", "frus-widgets/bundled-italic"]
 bundled-mono = ["frus-gpu/bundled-mono", "frus-widgets/bundled-mono"]

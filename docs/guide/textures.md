@@ -119,5 +119,16 @@ capture session's output, or `surface.lockHardwareCanvas()` for a view drawn by 
 demo application's *External texture* screen (`crates/frus-demo/src/screens/video.rs`) plays
 a clip through the NDK decoder this way.
 
-Frames are read from the surface's CPU planes and uploaded: a copy per frame, cheap at video
-sizes. Importing the platform's hardware buffers without the copy is not done yet.
+With the `hardware-buffers` feature of `frus` (off by default, so that an application with
+no video pays nothing for it), on a phone whose GPU can import Android's hardware buffers (Vulkan with
+`VK_ANDROID_external_memory_android_hardware_buffer` and the sampler Y'CbCr conversion, which
+most Vulkan phones have), the decoder's or the camera's frames are **not copied**: the surface
+hands out GPU buffers in the producer's own format, and the GPU reads each frame where the
+producer wrote it, converting YUV to RGB as it reads. Elsewhere (OpenGL ES, Android 7, an
+older GPU) frames are read from the surface's CPU planes and uploaded, a copy per frame. The
+choice is made when the surface is made, from what the running renderer says
+(`frus::textures().hardware_buffers()`); nothing changes for the application.
+
+A producer of its own that holds `AHardwareBuffer`s can hand them over the same way:
+`texture.push_hardware_buffer(HardwareBuffer::new(ptr, w, h, release), space)`, where
+`release` gives the buffer back once the GPU has read it.

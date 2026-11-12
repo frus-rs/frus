@@ -267,6 +267,25 @@ mod producer {
 
     /// A 320×240 H.264 clip, four seconds of a generated test picture.
     static CLIP: &[u8] = include_bytes!("../../assets/texture-demo.mp4");
+    /// The same picture at 1280×720, for measuring (milestone 800): played when the
+    /// `debug.frus.texture_clip` property is `720`.
+    static CLIP_720: &[u8] = include_bytes!("../../assets/texture-demo-720.mp4");
+
+    /// A system property, `adb shell setprop <name> <value>`: how the demo is told, with no
+    /// screen of settings, to play the larger clip or to copy frames rather than import them.
+    fn property(name: &CStr) -> String {
+        extern "C" {
+            fn __system_property_get(name: *const c_char, value: *mut c_char) -> c_int;
+        }
+        let mut value = [0 as c_char; 92];
+        let len = unsafe { __system_property_get(name.as_ptr(), value.as_mut_ptr()) };
+        if len <= 0 {
+            return String::new();
+        }
+        unsafe { CStr::from_ptr(value.as_ptr()) }
+            .to_string_lossy()
+            .into_owned()
+    }
 
     pub(crate) struct Producer {
         id: TextureId,
@@ -276,8 +295,20 @@ mod producer {
 
     impl Producer {
         pub(super) fn start() -> Result<Self, String> {
-            let surface =
-                TextureSurface::new(320, 240, SurfaceFormat::Yuv420).map_err(|e| e.to_string())?;
+            // `adb shell setprop debug.frus.texture_copy 1`: frames copied from their planes
+            // even where the GPU imports them, to compare the two (milestone 800).
+            if property(c"debug.frus.texture_copy") == "1" {
+                log::info!("texture demo: frames copied (debug.frus.texture_copy)");
+                frus_widgets::textures().set_hardware_buffers(false);
+            }
+            let large = property(c"debug.frus.texture_clip") == "720";
+            let (clip, width, height) = if large {
+                (CLIP_720, 1280, 720)
+            } else {
+                (CLIP, 320, 240)
+            };
+            let surface = TextureSurface::new(width, height, SurfaceFormat::Yuv420)
+                .map_err(|e| e.to_string())?;
             let id = surface.id();
             // The path a Java plugin would take: the same surface, as an `android.view.Surface`.
             match surface.java_surface() {
@@ -287,7 +318,7 @@ mod producer {
             let path = frus_shell::app_data_dir()
                 .ok_or("no application folder")?
                 .join("texture-demo.mp4");
-            std::fs::write(&path, CLIP).map_err(|e| e.to_string())?;
+            std::fs::write(&path, clip).map_err(|e| e.to_string())?;
             let stop = Arc::new(AtomicBool::new(false));
             let stopping = stop.clone();
             let thread = std::thread::Builder::new()
