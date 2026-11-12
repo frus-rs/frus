@@ -242,6 +242,7 @@ mod ui;
 mod undo;
 mod visualdensity;
 mod wavy;
+#[cfg(feature = "webview")]
 mod webview;
 mod wheel;
 mod widget;
@@ -667,6 +668,7 @@ pub use wavy::{
     wavy_amplitude, CircularWavyProgressIndicator, LinearWavyProgressIndicator, WavyProgressTheme,
     WavySliderTrackShape,
 };
+#[cfg(feature = "webview")]
 pub use webview::{
     handle_web_view_global_event, take_web_view_calls, web_view_cookies_cleared, web_view_wire,
     CookiesCleared, HttpResponseError, JavaScriptMessage, JavaScriptMode, JavaScriptResult,

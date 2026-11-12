@@ -22,6 +22,8 @@ categories = ["gui", "wasm"]
 # ~3.4 MB of faces, and an application that ships its own turns off the ones it does
 # not need. All on by default.
 [features]
+# Web views (milestone 799): the shell's side of `WebViewController`. Off by default.
+webview = ["frus-widgets/webview"]
 # A driver with no window, for an application's tests to feed input and frames through the
 # shell's own paths. Hidden; not for applications to ship.
 testing = []

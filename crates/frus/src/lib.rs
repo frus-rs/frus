@@ -62,7 +62,7 @@ pub struct GuideAnimation;
 pub struct GuideShaders;
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
-#[cfg(doctest)]
+#[cfg(all(doctest, feature = "webview"))]
 #[doc = include_str!("../../../docs/guide/webview.md")]
 pub struct GuideWebView;
 #[cfg(doctest)]

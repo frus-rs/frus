@@ -75,6 +75,10 @@ bundled-arabic = ["frus-shell/bundled-arabic", "frus-widgets/bundled-arabic", "f
 # Line breaking between the words of Thai, Lao, Khmer and Myanmar (milestone 784). Part of
 # `default`; see frus-text's manifest for its size.
 dictionary-line-breaks = ["frus-shell/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks", "frus-text/dictionary-line-breaks"]
+# Web pages inside the page: `WebViewController`, `WebViewWidget`, `NavigationDelegate`,
+# `WebViewCookieManager` (milestone 799). Android for now. Off by default: an application
+# without a web view pays nothing for it. `frus build` declares the INTERNET permission.
+webview = ["frus-shell/webview", "frus-widgets/webview"]
 icons-outlined = ["frus-widgets/icons-outlined"]
 icons-rounded = ["frus-widgets/icons-rounded"]
 icons-sharp = ["frus-widgets/icons-sharp"]

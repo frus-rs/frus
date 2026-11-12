@@ -78,9 +78,9 @@ agent, background, zoom, channels, whether navigations are decided) are also kep
 controller and passed as creation parameters, so a view made later starts with them.
 
 Calls that are not for one view (cookies, a page let go) go through a queue the shell drains
-each frame, and their answers (`web.cookiesCleared`) through a native method of their own.
-Draining an empty queue is one thread-local borrow; the answers are read only when a flag says
-there are some.
+each frame and makes on the web views' factory, which carries them out on the UI thread. Their
+answers (`web.cookiesCleared`) come back through the shared dex's own event method, as events
+of view -1. Draining an empty queue is one thread-local borrow.
 
 ### What the page says
 
@@ -110,10 +110,10 @@ pressed before the page answered pops the screen rather than going back twice.
 Milestone 794 gave the whole gesture to the view, so a frus list could not be scrolled by a
 drag that started on a web view. Now:
 
-- The Java host checks, each time it draws the view (scrolling redraws it), which ways the
-  view's content can still scroll (`canScrollVertically(±1)`, `canScrollHorizontally(±1)`), and
-  sends the four bits to the native side when they change (`nativeScroll`). No wake: they
-  matter only to the next touch.
+- The web view checks, each time it draws (scrolling redraws it), which ways its page can
+  still scroll (`canScrollVertically(±1)`, `canScrollHorizontally(±1)`), and sends the four
+  bits as a `frus.scroll` event when they change. The shell keeps them for the touch router and
+  does not hand them to the widget.
 - When a press lands on a view, the shell records which ways frus can scroll around it (the
   scroll areas under the press with room to move).
 - `TouchRouter`: once a one-finger drag passes the touch slop (8 dp), its axis is fixed. If
@@ -132,11 +132,43 @@ When the keyboard takes room and a native view holds the focus, the shell brings
 box above the keyboard with `Ui::reveal_rect`, the same least scroll that `Ui::reveal` makes for
 a frus field.
 
-### Zero cost
+### Zero cost: the `webview` feature
 
-No new thread, no polling, no GPU resource. With no web view: one empty queue checked per
-frame and an atomic flag. The Java side (a 12 KB larger bundled dex) is loaded only with the
-first native view. No new crate.
+Everything of this milestone is behind a `webview` cargo feature of `frus` (and of
+`frus-shell` and `frus-widgets`), off by default; `frus-demo` turns it on. Without it the web
+view API, the wire names, the shell's global calls, the drag hand-over, the keyboard reveal of
+a native view and the Back step are not compiled at all.
+
+The Java side is in a dex of its own, `frus_webview.dex` (package `dev.frus.webview`, built by
+`scripts/build-input-dex.sh` next to the shared one). The shared dex is embedded in every
+application's library, so it is left exactly as it was; the web views' dex is embedded only
+with the feature, and registered as a plugin's factory for `frus/webview` (the mechanism of
+milestone 794) the first time native views are used, over the plain web view the shared dex
+keeps for `AndroidView`. It needs no native method of its own: the scroll directions are
+events of their view, and the cookie answers events of view -1, through the shared dex's
+existing one. No new crate, no thread, no polling, no GPU resource.
+
+The first version compiled all of it into every application, and CI's Android size budget for
+the smallest application (`frus-hello`) failed by 10 776 bytes. Measured after the change (the
+stripped `libfrus_hello.so`, aarch64, the workspace's release profile, built as CI's size
+job builds it, from `master` and from this branch, with the same toolchain and sources):
+
+| `libfrus_hello.so` | bytes |
+| --- | --- |
+| `master` | 14 407 944 |
+| this branch, first gated version (Rust gated, dex shared) | 14 408 456 |
+| this branch, as merged | 14 407 944 |
+
+The shared dex had grown by 12 KB and is embedded in every application's library: that was
+most of the overrun, and why the web views' Java moved to a dex of its own. The last 512
+bytes were two small changes still compiled without the feature (the touch routing returning
+an enum, and the fix to unbinding a controller); without the feature both are now exactly as
+before. The web views' dex is 18 464 bytes, embedded only with the feature; the demo's
+release APK with it is 8 299 323 bytes.
+
+`frus build` and `frus run` declare `android.permission.INTERNET` for an application whose
+manifest turns the feature on (`permissions::uses_web_views`, tested on the three ways a
+manifest names a feature and on four look-alikes that must not count).
 
 ## How it was tested
 
@@ -189,7 +221,8 @@ first native view. No new crate.
 - **Idle**: 0 CPU ticks in 10 s on `/browser` and on `/native`, page loaded, nothing moving.
 - **Memory**: 114 MB PSS on `/browser`, 111 to 121 MB on `/native`, 133 MB on `/licenses`
   (PSS moves by tens of MB between runs on this phone; no web-view cost stands out).
-- **Size**: the bundled dex grew from 61 328 to 73 300 bytes. The release APK of the demo is 8 295 227 bytes,
+- **Size** (the first version, one dex): the bundled dex grew from 61 328 to 73 300 bytes. The
+  release APK of the demo is 8 295 227 bytes,
   against 8 237 883 built the same way from `master`: 57 344 bytes more, the demo's new screen
   included (the native library is 125 KB larger before compression, 58 KB after).
 
@@ -210,11 +243,19 @@ Android, so they were not run there.
 - **Windows, macOS, Linux, the web and iOS.** `WebViewWidget` shows its stand-in there, and the
   calls that need an answer answer `Unsupported`. Milestone 802 (branch
   `feat/desktop-web-views`) owns the desktop and web hosts (a WebView2 child window, an
-  `<iframe>` beside the canvas); they speak the names of `web_view_wire`, so this controller
-  drives them once both are merged.
+  `<iframe>` beside the canvas). Those hosts answer the plain web view's methods (`loadUrl`,
+  `loadHtml`, `evaluateJavascript`, `goBack`, `goForward`, `reload`, `stop`) and its events
+  (`pageFinished`, `javascriptResult`), not yet the `web.*` calls and events of
+  `web_view_wire` this controller speaks. A follow-up must teach the Windows and web hosts
+  those, and switch `WebViewWidget` to milestone 802's platform-neutral view, so that the same
+  controller works off Android.
 - **A script that throws** gives `null` on Android, as the platform reports it; it is not
   turned into an error.
 - **A POST that the delegate lets go** is loaded again as a GET of its address.
+- **Android 7 (API 24 and 25)**: the web views' dex is loaded with an in-memory class loader,
+  which Android has from API 26, as every plugin's factory is (milestone 794). On Android 7
+  the factory cannot be loaded, the plain web view of the shared dex stays, and the controller's
+  calls go unanswered.
 - **Pages that scroll inside an element** (a `div` with `overflow: auto` rather than the page
   itself) report to Android that they cannot scroll, so a drag on them goes to the frus list
   when the page sits in one. The leading toolkit has the same limit with its gesture

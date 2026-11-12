@@ -44,13 +44,11 @@ static HANDLE: OnceLock<Option<Handle>> = OnceLock::new();
 static FRAMES: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// The events the views sent since the loop last looked.
 static EVENTS: Mutex<Vec<(i32, String, String)>> = Mutex::new(Vec::new());
-/// The events for no view in particular (the web views' cookies) since the loop last looked.
-static GLOBALS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-/// Whether [`GLOBALS`] holds anything: read every turn, so a lock is only taken when it does.
-static GLOBALS_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The directions each view's content can still scroll, as `FrusPlatformViews.nativeScroll`
-/// sent them (milestone 799).
-static SCROLLS: Mutex<Vec<(i32, u8)>> = Mutex::new(Vec::new());
+/// The web views' Java (milestone 799), carried only with the `webview` feature
+/// (scripts/build-input-dex.sh builds it).
+#[cfg(feature = "webview")]
+static WEBVIEW_DEX: &[u8] = include_bytes!("../assets/frus_webview.dex");
+
 /// The factories registered before the class was loaded.
 static PENDING: Mutex<Vec<Factory>> = Mutex::new(Vec::new());
 
@@ -131,16 +129,6 @@ fn load(env: &mut JNIEnv, origin: &Origin) -> jni::errors::Result<Handle> {
                 sig: "(ILjava/lang/String;Ljava/lang/String;)V".into(),
                 fn_ptr: native_event as *mut _,
             },
-            jni::NativeMethod {
-                name: "nativeGlobal".into(),
-                sig: "(Ljava/lang/String;Ljava/lang/String;)V".into(),
-                fn_ptr: native_global as *mut _,
-            },
-            jni::NativeMethod {
-                name: "nativeScroll".into(),
-                sig: "(II)V".into(),
-                fn_ptr: native_scroll as *mut _,
-            },
         ],
     )?;
     env.call_static_method(
@@ -156,6 +144,18 @@ fn load(env: &mut JNIEnv, origin: &Origin) -> jni::errors::Result<Handle> {
     for factory in std::mem::take(&mut *PENDING.lock().unwrap()) {
         register_now(env, &handle, &factory);
     }
+    // The web views (milestone 799): their factory, from a dex of their own, over the plain
+    // one the shared dex has.
+    #[cfg(feature = "webview")]
+    register_now(
+        env,
+        &handle,
+        &Factory {
+            view_type: frus_widgets::WEB_VIEW_TYPE.to_owned(),
+            class_name: "dev.frus.webview.FrusWebViews".to_owned(),
+            dex: Some(WEBVIEW_DEX),
+        },
+    );
     Ok(handle)
 }
 
@@ -371,32 +371,35 @@ pub(crate) fn clear_focus() {
     });
 }
 
-/// A call for every web view rather than one (milestone 799): cookies, a page let go.
+/// A call for every web view rather than one (milestone 799): cookies, a page let go. Made on
+/// the web views' factory, which carries it out on the UI thread; its answers come back as
+/// events of view -1.
+#[cfg(feature = "webview")]
 pub(crate) fn web_call(method: &str, arguments: &str) {
     with_class("a web view call", |env, class| {
+        let view_type = env.new_string(frus_widgets::WEB_VIEW_TYPE)?;
+        let factory = env
+            .call_static_method(
+                class,
+                "factory",
+                "(Ljava/lang/String;)Ldev/frus/platform/PlatformViewFactory;",
+                &[JValue::Object(&view_type)],
+            )?
+            .l()?;
+        if factory.is_null() {
+            return Ok(());
+        }
+        let web = env.get_object_class(&factory)?;
         let method = env.new_string(method)?;
         let arguments = env.new_string(arguments)?;
         env.call_static_method(
-            class,
-            "webCall",
+            &web,
+            "global",
             "(Ljava/lang/String;Ljava/lang/String;)V",
             &[JValue::Object(&method), JValue::Object(&arguments)],
         )?;
         Ok(())
     });
-}
-
-/// The events for no view in particular since the last call: the name, the data.
-pub(crate) fn take_globals() -> Vec<(String, String)> {
-    if !GLOBALS_PENDING.swap(false, std::sync::atomic::Ordering::AcqRel) {
-        return Vec::new();
-    }
-    std::mem::take(&mut *GLOBALS.lock().unwrap())
-}
-
-/// The scroll directions the views reported since the last call: the view, its flags.
-pub(crate) fn take_scrolls() -> Vec<(i32, u8)> {
-    std::mem::take(&mut *SCROLLS.lock().unwrap())
 }
 
 /// The views with a new image since the last call.
@@ -474,26 +477,4 @@ extern "system" fn native_event(
     let data = text(&data);
     EVENTS.lock().unwrap().push((id, name, data));
     crate::android_ime::wake();
-}
-
-/// An event for no view in particular: queued, and the loop woken.
-extern "system" fn native_global(mut env: JNIEnv, _class: JClass, name: JString, data: JString) {
-    let mut text = |s: &JString| -> String {
-        if s.is_null() {
-            String::new()
-        } else {
-            env.get_string(s).map(Into::into).unwrap_or_default()
-        }
-    };
-    let name = text(&name);
-    let data = text(&data);
-    GLOBALS.lock().unwrap().push((name, data));
-    GLOBALS_PENDING.store(true, std::sync::atomic::Ordering::Release);
-    crate::android_ime::wake();
-}
-
-/// Which ways view `id`'s content can still scroll now. No wake: it matters only to the next
-/// touch.
-extern "system" fn native_scroll(_env: JNIEnv, _class: JClass, id: jint, flags: jint) {
-    SCROLLS.lock().unwrap().push((id, flags as u8));
 }

@@ -11,7 +11,16 @@ Elsewhere than on Android the widget shows its fallback for now (an `Unsupported
 labelled box in a debug build, nothing in a release build), and the calls that need an answer
 answer `WebViewError::Unsupported`.
 
-A page loaded from the internet needs one line in the application's `Cargo.toml`:
+Web views are a cargo feature, off by default, so that an application without one carries
+none of it:
+
+```toml
+[dependencies]
+frus = { version = "0.5", features = ["webview"] }
+```
+
+`frus build` and `frus run` then declare the `android.permission.INTERNET` permission a page
+from the network needs. An APK built by hand with cargo-apk needs it in `Cargo.toml`:
 
 ```toml
 [[package.metadata.android.uses_permission]]

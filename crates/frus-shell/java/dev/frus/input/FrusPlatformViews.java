@@ -28,6 +28,8 @@ import android.view.ViewTreeObserver;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.TextView;
@@ -63,16 +65,6 @@ public final class FrusPlatformViews {
     /** An event for the widget of view {@code id}. */
     private static native void nativeEvent(int id, String name, String data);
 
-    /** An event for no view in particular (the web views' cookies, milestone 799). */
-    private static native void nativeGlobal(String name, String data);
-
-    /**
-     * Which ways view {@code id}'s content can still scroll: 1 up, 2 down, 4 left, 8 right
-     * (milestone 799). Sent when it changes, so that a drag on the view goes to the frus list
-     * around it once the view is at its edge.
-     */
-    private static native void nativeScroll(int id, int flags);
-
     /** The event a view sends when it takes ({@code "true"}) or loses the input focus. */
     private static final String FOCUS = "frus.focus";
     /** The event that says a view could not be made, with the reason. */
@@ -98,7 +90,7 @@ public final class FrusPlatformViews {
         }
         activity = a;
         ui = new Handler(Looper.getMainLooper());
-        factories.put("frus/webview", new FrusWebViews());
+        factories.put("frus/webview", new WebViewFactory());
         factories.put("frus/edittext", new EditTextFactory());
         ui.post(new Runnable() {
             @Override
@@ -299,21 +291,6 @@ public final class FrusPlatformViews {
         });
     }
 
-    /** A call for every web view rather than one (milestone 799): cookies, a page let go. */
-    public static void webCall(final String method, final String arguments) {
-        ui.post(new Runnable() {
-            @Override
-            public void run() {
-                FrusWebViews.global(method, arguments == null ? "" : arguments);
-            }
-        });
-    }
-
-    /** An event for no view in particular. */
-    static void sendGlobal(String name, String data) {
-        nativeGlobal(name, data);
-    }
-
     /** Whether a native view holds the input focus (the keyboard is then its, not frus's). */
     public static boolean hasFocus() {
         return focused >= 0;
@@ -401,8 +378,6 @@ public final class FrusPlatformViews {
         private int y;
         private boolean scheduled;
         private long downTime;
-        /** The scroll directions last sent ({@link #nativeScroll}); -1 before the first. */
-        private int scrollFlags = -1;
 
         Host(Context context, int id) {
             super(context);
@@ -516,18 +491,6 @@ public final class FrusPlatformViews {
                 draw(canvas);
             } finally {
                 target.unlockCanvasAndPost(canvas);
-            }
-            // Scrolling invalidates the view, so a drawn frame is when its edges may have moved.
-            View content = view == null ? null : view.getView();
-            if (content != null) {
-                int flags = (content.canScrollVertically(-1) ? 1 : 0)
-                        | (content.canScrollVertically(1) ? 2 : 0)
-                        | (content.canScrollHorizontally(-1) ? 4 : 0)
-                        | (content.canScrollHorizontally(1) ? 8 : 0);
-                if (flags != scrollFlags) {
-                    scrollFlags = flags;
-                    nativeScroll(id, flags);
-                }
             }
         }
 
@@ -654,6 +617,73 @@ public final class FrusPlatformViews {
     }
 
     // --- Two views every application can embed with no plugin --------------------------
+
+    /**
+     * {@code frus/webview}: a WebView. Its parameters are a page's address, or HTML when they
+     * start with {@code <}. Calls: {@code loadUrl}, {@code loadHtml}, {@code evaluateJavascript}
+     * (answered by a {@code javascriptResult} event). Events: {@code pageFinished} (the
+     * address).
+     */
+    static final class WebViewFactory implements PlatformViewFactory {
+        @Override
+        public PlatformView create(Context context, int id, String params,
+                final PlatformViewChannel channel) {
+            final WebView web = new WebView(context);
+            web.getSettings().setJavaScriptEnabled(true);
+            web.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String url) {
+                    channel.send("pageFinished", url == null ? "" : url);
+                }
+            });
+            load(web, params);
+            return new PlatformView() {
+                @Override
+                public View getView() {
+                    return web;
+                }
+
+                @Override
+                public void dispose() {
+                    web.destroy();
+                }
+
+                @Override
+                public void onMethodCall(String method, String arguments) {
+                    if ("loadUrl".equals(method)) {
+                        web.loadUrl(arguments);
+                    } else if ("loadHtml".equals(method)) {
+                        web.loadDataWithBaseURL(null, arguments, "text/html", "utf-8", null);
+                    } else if ("evaluateJavascript".equals(method)) {
+                        web.evaluateJavascript(arguments, new android.webkit.ValueCallback<String>() {
+                            @Override
+                            public void onReceiveValue(String value) {
+                                channel.send("javascriptResult", value == null ? "" : value);
+                            }
+                        });
+                    }
+                }
+
+                @Override
+                public void onPause() {
+                    web.onPause();
+                }
+
+                @Override
+                public void onResume() {
+                    web.onResume();
+                }
+            };
+        }
+
+        private static void load(WebView web, String params) {
+            if (params.trim().startsWith("<")) {
+                web.loadDataWithBaseURL(null, params, "text/html", "utf-8", null);
+            } else if (params.length() > 0) {
+                web.loadUrl(params);
+            }
+        }
+    }
 
     /**
      * {@code frus/edittext}: an EditText. Its parameters are its hint. Calls: {@code setText},

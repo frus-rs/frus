@@ -137,6 +137,7 @@ pub struct PlatformViewCall {
 struct ControllerState {
     view: Option<i32>,
     calls: Vec<PlatformViewCall>,
+    #[cfg(feature = "webview")]
     handles_back: bool,
 }
 
@@ -190,11 +191,13 @@ impl PlatformViewController {
     /// Says whether the view would take the system's Back for itself — a web view with a page
     /// to go back to (milestone 799). While it does and shows, Back is sent to it as a
     /// `"web.goBack"` call instead of closing the screen.
+    #[cfg(feature = "webview")]
     pub fn set_handles_back(&self, handles: bool) {
         self.lock().handles_back = handles;
     }
 
     /// Whether the view takes the system's Back ([`set_handles_back`](Self::set_handles_back)).
+    #[cfg(feature = "webview")]
     pub fn handles_back(&self) -> bool {
         self.lock().handles_back
     }
@@ -234,7 +237,9 @@ pub struct PlatformViewPlacement {
     pub visible: Rect,
     /// The application's controller, if it gave one.
     pub controller: Option<PlatformViewController>,
-    /// The innermost scrolling area the widget is in, if any.
+    /// The innermost scrolling area the widget is in, if any (with the `webview` feature: what
+    /// brings a native view holding the keyboard above it).
+    #[cfg(feature = "webview")]
     pub scroll_host: Option<WidgetId>,
     /// How many of each kind of press target had been registered when the widget was:
     /// whatever comes after was drawn over it and takes the presses it covers.
@@ -614,6 +619,7 @@ mod tests {
         build_ui(tree, Size::new(400.0, 300.0), rt, &Theme::default())
     }
 
+    #[cfg(feature = "webview")]
     #[test]
     fn back_goes_to_a_view_in_sight_that_takes_it_and_not_under_a_dialog() {
         let controller = PlatformViewController::new();
@@ -637,6 +643,7 @@ mod tests {
         assert!(ui.platform_view_taking_back().is_none(), "the dialog first");
     }
 
+    #[cfg(feature = "webview")]
     #[test]
     fn a_view_holding_the_keyboard_is_scrolled_into_sight() {
         let tree = SingleChildScrollView::new().height(200.0).child(

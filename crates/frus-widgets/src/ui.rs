@@ -984,6 +984,7 @@ impl<Msg: Clone> Ui<Msg> {
     /// whose controller [takes it](crate::PlatformViewController::handles_back) — a web page
     /// with a page to go back to — unless something frus drew over it covers its middle (a
     /// dialog, a menu).
+    #[cfg(feature = "webview")]
     pub fn platform_view_taking_back(&self) -> Option<&crate::PlatformViewPlacement> {
         let view = self.platform_views.iter().rev().find(|view| {
             view.visible.width > 0.0
@@ -4358,6 +4359,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 rect: draw_rect,
                 visible: shown,
                 controller: spec.controller().cloned(),
+                #[cfg(feature = "webview")]
                 scroll_host: self.scroll_host,
                 above: crate::platformview::TargetCounts {
                     hits: self.hits.len(),

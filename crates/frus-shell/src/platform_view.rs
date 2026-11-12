@@ -227,8 +227,9 @@ impl PlatformViews {
             if let Some(live) = self.live.remove(&id) {
                 if let Some(controller) = live.controller {
                     // Unless another widget showing the same controller (a web page shown
-                    // somewhere else) has it already.
-                    if controller.view_id() == Some(live.view) {
+                    // somewhere else) has it already: only web views' controllers are shown by
+                    // two widgets (milestone 799).
+                    if cfg!(not(feature = "webview")) || controller.view_id() == Some(live.view) {
                         controller.attach(None);
                     }
                 }
@@ -310,6 +311,7 @@ pub(crate) enum Routed {
     Frus,
     /// A native view's.
     View(ViewTouch),
+    #[cfg(feature = "webview")]
     /// A drag the view had and frus takes from here (milestone 799): the view is sent
     /// `cancel`, and frus gets a press at `from` (the window's physical pixels), then this
     /// touch. The rest of the gesture is frus's.
@@ -317,6 +319,7 @@ pub(crate) enum Routed {
 }
 
 /// The ways frus can scroll under a press: what a drag on a native view may be handed to.
+#[cfg(feature = "webview")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Axes {
     pub vertical: bool,
@@ -328,10 +331,17 @@ pub(crate) struct Axes {
 pub(crate) struct ViewHit {
     pub view: i32,
     pub rect: PixelRect,
+    /// What frus can scroll around it (milestone 799).
+    #[cfg(feature = "webview")]
     pub frus: Axes,
 }
 
-/// The directions a view's content can still scroll, as `nativeScroll` sends them.
+/// The event a web view sends with the directions its content can still scroll ([`scroll`]).
+#[cfg(feature = "webview")]
+pub(crate) const SCROLL_EVENT: &str = "frus.scroll";
+
+/// The directions a view's content can still scroll, as a web view says them.
+#[cfg(feature = "webview")]
 pub(crate) mod scroll {
     pub const UP: u8 = 1;
     pub const DOWN: u8 = 2;
@@ -347,33 +357,43 @@ struct Gesture {
     /// (the lowest free one when it came, kept until it lifts) and the window position.
     pointers: Vec<(u64, i32, f32, f32)>,
     /// Where the first finger went down.
+    #[cfg(feature = "webview")]
     start: (f32, f32),
     /// What frus can scroll around the view.
+    #[cfg(feature = "webview")]
     frus: Axes,
     /// The drag's axis once it moved past the slop (`Some(true)`: vertical); `None` before,
     /// and for a gesture that stays the view's whatever it does (a pinch).
+    #[cfg(feature = "webview")]
     axis: Option<bool>,
     /// Whether the slop was passed, or a second finger came.
+    #[cfg(feature = "webview")]
     decided: bool,
 }
 
 /// Decides, touch by touch, whether frus or a native view gets it.
+#[cfg_attr(not(feature = "webview"), derive(Default))]
 pub(crate) struct TouchRouter {
     /// The pointers of a gesture frus has.
     frus: HashSet<u64>,
     gesture: Option<Gesture>,
     /// How far a finger moves, in physical pixels, before it is a drag.
+    #[cfg(feature = "webview")]
     pub slop: f32,
     /// Which ways each view's content can still scroll ([`scroll`]).
+    #[cfg(feature = "webview")]
     scrolls: HashMap<i32, u8>,
 }
 
+#[cfg(feature = "webview")]
 impl Default for TouchRouter {
     fn default() -> Self {
         Self {
             frus: HashSet::new(),
             gesture: None,
+            #[cfg(feature = "webview")]
             slop: 18.0,
+            #[cfg(feature = "webview")]
             scrolls: HashMap::new(),
         }
     }
@@ -381,10 +401,12 @@ impl Default for TouchRouter {
 
 impl TouchRouter {
     /// Which ways view `view`'s content can still scroll now ([`scroll`]).
+    #[cfg(feature = "webview")]
     pub(crate) fn set_scroll(&mut self, view: i32, flags: u8) {
         self.scrolls.insert(view, flags);
     }
 
+    #[cfg(feature = "webview")]
     /// Whether a drag of `delta` along an axis is frus's: frus scrolls that way around the
     /// view, and the view's content cannot move that way any further.
     fn frus_takes(&self, gesture: &Gesture, vertical: bool, delta: f32) -> bool {
@@ -431,8 +453,11 @@ impl TouchRouter {
                         .find(|n| !gesture.pointers.iter().any(|p| p.1 == *n))
                         .unwrap_or(0);
                     gesture.pointers.push((id, free, at.0, at.1));
-                    gesture.decided = true;
-                    gesture.axis = None;
+                    #[cfg(feature = "webview")]
+                    {
+                        gesture.decided = true;
+                        gesture.axis = None;
+                    }
                     let index = gesture.pointers.len() - 1;
                     return Routed::View(Self::touch(gesture, action::POINTER_DOWN, index));
                 }
@@ -442,9 +467,13 @@ impl TouchRouter {
                             view: hit.view,
                             origin: (hit.rect.x as f32, hit.rect.y as f32),
                             pointers: vec![(id, 0, at.0, at.1)],
+                            #[cfg(feature = "webview")]
                             start: at,
+                            #[cfg(feature = "webview")]
                             frus: hit.frus,
+                            #[cfg(feature = "webview")]
                             axis: None,
+                            #[cfg(feature = "webview")]
                             decided: false,
                         };
                         let touch = Self::touch(&gesture, action::DOWN, 0);
@@ -456,51 +485,21 @@ impl TouchRouter {
                 Routed::Frus
             }
             Phase::Moved => {
-                let Some(gesture) = self.gesture.as_ref() else {
-                    return Routed::Frus;
-                };
-                let Some(index) = gesture.pointers.iter().position(|p| p.0 == id) else {
-                    return Routed::Frus;
-                };
-                let previous = (gesture.pointers[index].2, gesture.pointers[index].3);
-                let mut decided = gesture.decided;
-                let mut axis = gesture.axis;
-                let mut handover = None;
-                if gesture.pointers.len() == 1 {
-                    if !decided {
-                        let total = (at.0 - gesture.start.0, at.1 - gesture.start.1);
-                        if total.0.abs().max(total.1.abs()) >= self.slop {
-                            decided = true;
-                            let vertical = total.1.abs() >= total.0.abs();
-                            axis = Some(vertical);
-                            let along = if vertical { total.1 } else { total.0 };
-                            if self.frus_takes(gesture, vertical, along) {
-                                handover = Some(gesture.start);
-                            }
+                // A drag the view cannot follow goes to frus (milestone 799).
+                #[cfg(feature = "webview")]
+                if let Some(routed) = self.hand_over(id, at) {
+                    return routed;
+                }
+                match self.gesture.as_mut() {
+                    Some(gesture) if gesture.pointers.iter().any(|p| p.0 == id) => {
+                        for pointer in gesture.pointers.iter_mut().filter(|p| p.0 == id) {
+                            pointer.2 = at.0;
+                            pointer.3 = at.1;
                         }
-                    } else if let Some(vertical) = axis {
-                        let step = if vertical {
-                            at.1 - previous.1
-                        } else {
-                            at.0 - previous.0
-                        };
-                        if self.frus_takes(gesture, vertical, step) {
-                            handover = Some(previous);
-                        }
+                        Routed::View(Self::touch(gesture, action::MOVE, 0))
                     }
+                    _ => Routed::Frus,
                 }
-                let gesture = self.gesture.as_mut().expect("checked above");
-                gesture.decided = decided;
-                gesture.axis = axis;
-                if let Some(from) = handover {
-                    let cancel = Self::touch(gesture, action::CANCEL, 0);
-                    self.gesture = None;
-                    self.frus.insert(id);
-                    return Routed::Handover { cancel, from };
-                }
-                gesture.pointers[index].2 = at.0;
-                gesture.pointers[index].3 = at.1;
-                Routed::View(Self::touch(gesture, action::MOVE, 0))
             }
             Phase::Ended | Phase::Cancelled => {
                 let Some(gesture) = self.gesture.as_mut() else {
@@ -530,6 +529,51 @@ impl TouchRouter {
         }
     }
 
+    /// Whether this movement of pointer `id` hands the view's drag to frus: past the slop in a
+    /// direction the view's content cannot go, or on, once it reached its edge. Records the
+    /// drag's axis on the way. `None`: the view keeps it.
+    #[cfg(feature = "webview")]
+    fn hand_over(&mut self, id: u64, at: (f32, f32)) -> Option<Routed> {
+        let gesture = self.gesture.as_ref()?;
+        let index = gesture.pointers.iter().position(|p| p.0 == id)?;
+        if gesture.pointers.len() != 1 {
+            return None;
+        }
+        let previous = (gesture.pointers[index].2, gesture.pointers[index].3);
+        let mut decided = gesture.decided;
+        let mut axis = gesture.axis;
+        let mut from = None;
+        if !decided {
+            let total = (at.0 - gesture.start.0, at.1 - gesture.start.1);
+            if total.0.abs().max(total.1.abs()) >= self.slop {
+                decided = true;
+                let vertical = total.1.abs() >= total.0.abs();
+                axis = Some(vertical);
+                let along = if vertical { total.1 } else { total.0 };
+                if self.frus_takes(gesture, vertical, along) {
+                    from = Some(gesture.start);
+                }
+            }
+        } else if let Some(vertical) = axis {
+            let step = if vertical {
+                at.1 - previous.1
+            } else {
+                at.0 - previous.0
+            };
+            if self.frus_takes(gesture, vertical, step) {
+                from = Some(previous);
+            }
+        }
+        let gesture = self.gesture.as_mut()?;
+        gesture.decided = decided;
+        gesture.axis = axis;
+        let from = from?;
+        let cancel = Self::touch(gesture, action::CANCEL, 0);
+        self.gesture = None;
+        self.frus.insert(id);
+        Some(Routed::Handover { cancel, from })
+    }
+
     /// The view a gesture is under way on, if any.
     #[cfg(test)]
     pub(crate) fn active_view(&self) -> Option<i32> {
@@ -541,6 +585,7 @@ impl TouchRouter {
         if self.gesture.as_ref().is_some_and(|g| g.view == view) {
             self.gesture = None;
         }
+        #[cfg(feature = "webview")]
         self.scrolls.remove(&view);
     }
 
@@ -716,11 +761,13 @@ mod tests {
         Some(ViewHit {
             view: 9,
             rect: VIEW,
+            #[cfg(feature = "webview")]
             frus: Axes::default(),
         })
     }
 
     /// A view inside a frus list that scrolls vertically.
+    #[cfg(feature = "webview")]
     fn in_list() -> Option<ViewHit> {
         Some(ViewHit {
             view: 9,
@@ -732,6 +779,7 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "webview")]
     #[test]
     fn a_drag_the_page_cannot_follow_is_handed_to_the_list() {
         let mut router = TouchRouter::default();
@@ -770,6 +818,7 @@ mod tests {
         assert_eq!(router.active_view(), None);
     }
 
+    #[cfg(feature = "webview")]
     #[test]
     fn a_drag_the_page_can_follow_stays_its_until_its_edge() {
         let mut router = TouchRouter::default();
@@ -793,6 +842,7 @@ mod tests {
         assert_eq!(from, (150.0, 380.0), "from where the page stopped");
     }
 
+    #[cfg(feature = "webview")]
     #[test]
     fn a_sideways_drag_a_pinch_or_a_view_outside_a_list_are_never_handed_over() {
         let mut router = TouchRouter::default();

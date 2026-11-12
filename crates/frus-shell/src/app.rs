@@ -1915,9 +1915,11 @@ impl<A: Application> App<A> {
         };
         // Calls for every web view (cookies, a page let go: milestone 799), sent after this
         // frame's commands, so that a page is let go only once its view is.
+        #[cfg(feature = "webview")]
         let web_calls = frus_widgets::take_web_view_calls();
         let placements = ui.platform_views();
         if placements.is_empty() && self.platform_views.is_empty() {
+            #[cfg(feature = "webview")]
             for (method, arguments) in &web_calls {
                 crate::android_platform_view::web_call(method, arguments);
             }
@@ -1946,6 +1948,7 @@ impl<A: Application> App<A> {
             }
         }
         crate::android_platform_view::run(&commands);
+        #[cfg(feature = "webview")]
         for (method, arguments) in &web_calls {
             crate::android_platform_view::web_call(method, arguments);
         }
@@ -1955,17 +1958,16 @@ impl<A: Application> App<A> {
     /// is copied for the next frame to draw, and each event becomes its widget's message.
     #[cfg(android)]
     fn drain_platform_views(&mut self) {
-        // What no view in particular answered: the web views' cookies (milestone 799).
-        for (name, data) in crate::android_platform_view::take_globals() {
-            if frus_widgets::handle_web_view_global_event(&name, &data) {
-                self.request_redraw();
-            }
-        }
         if self.platform_views.is_empty() {
+            // What no view in particular answered, a web views' cookie call (milestone 799),
+            // can come with no view left.
+            #[cfg(feature = "webview")]
+            for (view, name, data) in crate::android_platform_view::take_events() {
+                if view == -1 && frus_widgets::handle_web_view_global_event(&name, &data) {
+                    self.request_redraw();
+                }
+            }
             return;
-        }
-        for (view, flags) in crate::android_platform_view::take_scrolls() {
-            self.touch_router.set_scroll(view, flags);
         }
         for view in crate::android_platform_view::take_frames() {
             let (Some(widget), Some(at)) = (
@@ -1980,6 +1982,23 @@ impl<A: Application> App<A> {
             }
         }
         for (view, name, data) in crate::android_platform_view::take_events() {
+            // The web views' own (milestone 799): an answer for no view in particular, and
+            // which ways a view can still scroll, for the touch router.
+            #[cfg(feature = "webview")]
+            {
+                if view == -1 {
+                    if frus_widgets::handle_web_view_global_event(&name, &data) {
+                        self.request_redraw();
+                    }
+                    continue;
+                }
+                if name == crate::platform_view::SCROLL_EVENT {
+                    if let Ok(flags) = data.parse() {
+                        self.touch_router.set_scroll(view, flags);
+                    }
+                    continue;
+                }
+            }
             let Some(widget) = self.platform_views.widget_of(view) else {
                 continue;
             };
@@ -2013,17 +2032,19 @@ impl<A: Application> App<A> {
     /// Hands `touch` to the native view it belongs to, if it belongs to one, and says whether
     /// it did (milestone 794). A press that goes to frus while a native view has the focus
     /// takes the focus away from it, as a tap outside a native field does.
-    #[cfg(android)]
+    #[cfg(all(android, feature = "webview"))]
     fn route_native_touch(&mut self, touch: &winit::event::Touch, position: Point) -> NativeTouch {
-        use crate::platform_view::{Axes, Phase, Routed, ViewHit};
+        #[cfg(feature = "webview")]
+        use crate::platform_view::Axes;
+        use crate::platform_view::{Phase, Routed, ViewHit};
         if self.platform_views.is_empty() {
             return NativeTouch::Frus;
         }
-        for (view, flags) in crate::android_platform_view::take_scrolls() {
-            self.touch_router.set_scroll(view, flags);
-        }
         // The platform's own touch slop, 8 dp.
-        self.touch_router.slop = 8.0 * self.total_scale();
+        #[cfg(feature = "webview")]
+        {
+            self.touch_router.slop = 8.0 * self.total_scale();
+        }
         let phase = match touch.phase {
             TouchPhase::Started => Phase::Started,
             TouchPhase::Moved => Phase::Moved,
@@ -2039,7 +2060,9 @@ impl<A: Application> App<A> {
             let view = views.view_of(placement.id)?;
             // What frus can scroll around the view: a drag the view's content cannot follow
             // is handed to it (milestone 799).
+            #[cfg(feature = "webview")]
             let mut frus = Axes::default();
+            #[cfg(feature = "webview")]
             for area in ui.scroll_chain(position) {
                 frus.vertical |= area.max_y > 0.0;
                 frus.horizontal |= area.max_x > 0.0;
@@ -2047,6 +2070,7 @@ impl<A: Application> App<A> {
             Some(ViewHit {
                 view,
                 rect: views.rect_of(view)?,
+                #[cfg(feature = "webview")]
                 frus,
             })
         });
@@ -2055,6 +2079,7 @@ impl<A: Application> App<A> {
                 crate::android_platform_view::touch(&view_touch);
                 NativeTouch::View
             }
+            #[cfg(feature = "webview")]
             Routed::Handover { cancel, from } => {
                 crate::android_platform_view::touch(&cancel);
                 NativeTouch::Handover(self.to_logical(f64::from(from.0), f64::from(from.1)))
@@ -2064,6 +2089,48 @@ impl<A: Application> App<A> {
                     crate::android_platform_view::clear_focus();
                 }
                 NativeTouch::Frus
+            }
+        }
+    }
+
+    /// Hands `touch` to the native view it belongs to, if it belongs to one, and says whether
+    /// it did (milestone 794). A press that goes to frus while a native view has the focus
+    /// takes the focus away from it, as a tap outside a native field does.
+    // Without web views, exactly as it was before them: an application that has none pays
+    // nothing for them, not even in code size (milestone 799).
+    #[cfg(all(android, not(feature = "webview")))]
+    fn route_native_touch(&mut self, touch: &winit::event::Touch, position: Point) -> bool {
+        use crate::platform_view::{Phase, Routed};
+        if self.platform_views.is_empty() {
+            return false;
+        }
+        let phase = match touch.phase {
+            TouchPhase::Started => Phase::Started,
+            TouchPhase::Moved => Phase::Moved,
+            TouchPhase::Ended => Phase::Ended,
+            TouchPhase::Cancelled => Phase::Cancelled,
+        };
+        let at = (touch.location.x as f32, touch.location.y as f32);
+        let ui = self.ui.as_ref();
+        let views = &self.platform_views;
+        let routed = self.touch_router.route(touch.id, phase, at, || {
+            let placement = ui?.platform_view_at(position)?;
+            let view = views.view_of(placement.id)?;
+            Some(crate::platform_view::ViewHit {
+                view,
+                rect: views.rect_of(view)?,
+            })
+        });
+        match routed {
+            Routed::View(view_touch) => {
+                crate::android_platform_view::touch(&view_touch);
+                true
+            }
+            Routed::Frus => {
+                if phase == Phase::Started && self.native_focus.is_some() {
+                    crate::android_platform_view::clear_focus();
+                }
+                false
             }
         }
     }
@@ -3408,12 +3475,17 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let position = self.to_logical(touch.location.x, touch.location.y);
                 // A touch that belongs to a native view goes to it, and frus never sees it
                 // (milestone 794).
-                #[cfg(android)]
+                #[cfg(all(android, not(feature = "webview")))]
+                if self.route_native_touch(&touch, position) {
+                    return;
+                }
+                #[cfg(all(android, feature = "webview"))]
                 match self.route_native_touch(&touch, position) {
                     NativeTouch::View => return,
                     NativeTouch::Frus => {}
                     // The view had the drag until now: frus is pressed where it would have
                     // been, and this movement follows (milestone 799).
+                    #[cfg(feature = "webview")]
                     NativeTouch::Handover(from) => self.pointer(
                         event_loop,
                         PointerEvent {
@@ -4305,7 +4377,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     let moves = match (self.runtime.input.focused, self.ui.as_ref()) {
                         (Some(id), Some(ui)) => ui.reveal(id, &self.runtime),
                         // A native view holding the keyboard: its box (milestone 799).
-                        #[cfg(android)]
+                        #[cfg(all(android, feature = "webview"))]
                         (None, Some(ui)) => self
                             .native_focus
                             .and_then(|view| self.platform_views.widget_of(view))
@@ -9731,6 +9803,7 @@ impl<A: Application> App<A> {
         }
         // A web page in sight with a page to go back to goes back, as a browser does
         // (milestone 799).
+        #[cfg(feature = "webview")]
         if let Some(controller) = self
             .ui
             .as_ref()
@@ -10894,11 +10967,8 @@ fn gesture_was_a_tap(ended: Option<&Drag>) -> bool {
     )
 }
 
-/// A press lands at `at`: what is under it is pressed, and a surface that takes ink
-/// splashes from where it landed. The box comes from the frame that was on screen when the
-/// pointer came down, which is the one the user aimed at. Returns whether a splash started.
-/// What a touch on a native view came to (milestone 794, 799).
-#[cfg(android)]
+/// What a touch on a native view came to (milestone 799).
+#[cfg(all(android, feature = "webview"))]
 enum NativeTouch {
     /// The view's: frus never sees it.
     View,
@@ -10908,6 +10978,9 @@ enum NativeTouch {
     Handover(Point),
 }
 
+/// A press lands at `at`: what is under it is pressed, and a surface that takes ink
+/// splashes from where it landed. The box comes from the frame that was on screen when the
+/// pointer came down, which is the one the user aimed at. Returns whether a splash started.
 fn press_at<Msg: Clone>(runtime: &mut Runtime, ui: Option<&Ui<Msg>>, at: Point) -> bool {
     runtime.input.pressed = ui.and_then(|ui| ui.hit(at));
     let Some(pressed) = runtime.input.pressed else {

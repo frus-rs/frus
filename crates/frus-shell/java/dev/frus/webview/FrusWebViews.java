@@ -1,8 +1,11 @@
-package dev.frus.input;
+package dev.frus.webview;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +24,7 @@ import android.webkit.WebViewClient;
 import dev.frus.platform.PlatformView;
 import dev.frus.platform.PlatformViewChannel;
 import dev.frus.platform.PlatformViewFactory;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -32,6 +36,10 @@ import org.json.JSONTokener;
  * {@code frus/webview}: Android's WebView, driven by a {@code WebViewController} (milestone
  * 799), or, given an address or HTML as its parameters, the plain view of milestone 794.
  *
+ * <p>In a dex of its own ({@code frus_webview.dex}), which only an application built with
+ * frus's {@code webview} feature carries: it registers this factory for {@code frus/webview}
+ * the first time native views are used, over the plain one of the shared dex.
+ *
  * <p>A controller's page outlives the widget that shows it: the pages are kept by controller,
  * and a widget made again for the same controller -- a screen pushed over it and popped -- is
  * given the same WebView, with its history and its scroll. The page goes when the controller
@@ -40,7 +48,16 @@ import org.json.JSONTokener;
  * <p>Methods and events are named in {@code frus_widgets::web_view_wire}; their arguments and
  * data are JSON. Every method runs on the UI thread.
  */
-final class FrusWebViews implements PlatformViewFactory {
+public final class FrusWebViews implements PlatformViewFactory {
+    /** The event telling the native side which ways a view can still scroll: 1 up, 2 down,
+     * 4 left, 8 right (a drag it cannot follow goes to the frus list around it). */
+    private static final String SCROLL = "frus.scroll";
+
+    private static Handler ui;
+
+    /** Made by the shared dex's factory registry, with no argument. */
+    public FrusWebViews() {}
+
     /** Every controller's page, by controller. Touched on the UI thread only. */
     private static final HashMap<Long, Page> pages = new HashMap<Long, Page>();
 
@@ -70,12 +87,31 @@ final class FrusWebViews implements PlatformViewFactory {
             ((ViewGroup) parent).removeView(page.web);
         }
         page.channel = channel;
+        page.web.channel = channel;
+        page.web.flags = -1;
         page.state();
         return page.shownBy(channel, key < 0);
     }
 
-    /** A call for every web view: the cookies, a page let go. Returns nothing. */
-    static void global(String method, String arguments) {
+    /**
+     * A call for every web view: the cookies, a page let go. Called by the native side on any
+     * thread; carried out on the UI thread.
+     */
+    public static void global(final String method, final String arguments) {
+        synchronized (FrusWebViews.class) {
+            if (ui == null) {
+                ui = new Handler(Looper.getMainLooper());
+            }
+        }
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                globalNow(method, arguments == null ? "" : arguments);
+            }
+        });
+    }
+
+    private static void globalNow(String method, String arguments) {
         try {
             if ("web.release".equals(method)) {
                 long key = new JSONObject(arguments).optLong("controller", -1);
@@ -95,13 +131,53 @@ final class FrusWebViews implements PlatformViewFactory {
                 cookies.removeAllCookies(new ValueCallback<Boolean>() {
                     @Override
                     public void onReceiveValue(Boolean value) {
-                        FrusPlatformViews.sendGlobal("web.cookiesCleared",
+                        sendGlobal("web.cookiesCleared",
                                 "{\"id\":" + id + ",\"had\":" + had + "}");
                     }
                 });
             }
         } catch (Throwable error) {
             // A malformed call changes nothing.
+        }
+    }
+
+    /**
+     * An event for no view in particular: through the shared dex's own native method, as view
+     * -1. That class is this one's loader's parent's, so it is reached by reflection.
+     */
+    private static void sendGlobal(String name, String data) {
+        try {
+            Class<?> views = Class.forName("dev.frus.input.FrusPlatformViews", true,
+                    FrusWebViews.class.getClassLoader());
+            Method event = views.getDeclaredMethod("nativeEvent", int.class, String.class,
+                    String.class);
+            event.setAccessible(true);
+            event.invoke(null, -1, name, data);
+        } catch (Throwable ignored) {
+            // Nothing to tell it with: the answer is lost, its future waits.
+        }
+    }
+
+    /** A WebView that says, after each drawing, which ways its page can still scroll. */
+    static final class Web extends WebView {
+        private int flags = -1;
+        PlatformViewChannel channel;
+
+        Web(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            // Scrolling redraws the view, so a drawing is when its edges may have moved.
+            int now = (canScrollVertically(-1) ? 1 : 0) | (canScrollVertically(1) ? 2 : 0)
+                    | (canScrollHorizontally(-1) ? 4 : 0) | (canScrollHorizontally(1) ? 8 : 0);
+            PlatformViewChannel to = channel;
+            if (now != flags && to != null) {
+                flags = now;
+                to.send(SCROLL, String.valueOf(now));
+            }
         }
     }
 
@@ -147,14 +223,14 @@ final class FrusWebViews implements PlatformViewFactory {
 
     /** One controller's page. */
     private static final class Page {
-        final WebView web;
+        final Web web;
         /** Where its events go: the widget showing it now. */
         volatile PlatformViewChannel channel;
         volatile boolean decidesNavigation;
         final HashSet<String> channels = new HashSet<String>();
 
         Page(Context context, JSONObject p) {
-            web = new WebView(context);
+            web = new Web(context);
             WebSettings settings = web.getSettings();
             settings.setDomStorageEnabled(true);
             settings.setJavaScriptEnabled(p.optBoolean("javascript", true));
@@ -231,6 +307,7 @@ final class FrusWebViews implements PlatformViewFactory {
                     // has it already.
                     if (channel == host) {
                         channel = null;
+                        web.channel = null;
                     }
                     if (own) {
                         destroy();
@@ -438,7 +515,8 @@ final class FrusWebViews implements PlatformViewFactory {
      */
     private static final class Legacy {
         static PlatformView create(Context context, String params, final PlatformViewChannel channel) {
-            final WebView web = new WebView(context);
+            final Web web = new Web(context);
+            web.channel = channel;
             web.getSettings().setJavaScriptEnabled(true);
             web.setWebViewClient(new WebViewClient() {
                 @Override

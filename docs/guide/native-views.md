@@ -85,13 +85,14 @@ navigation decisions, JavaScript channels, cookies, and Back going back in the p
   under it moves it in the same frame, with no lag.
 - **Touches.** A press that lands on the view goes to the view, unless something frus drew over
   it takes presses there (a dialog's barrier, a button laid over the view). The gesture is
-  then the view's while the view can follow it. Inside a frus scrolling list, a one-finger drag
-  the view's content cannot follow (a page at its top pulled down, a page that does not scroll
-  at all) goes to the list, and so does the rest of a drag once the content reaches its edge.
-  A pinch stays the view's. A gesture that starts in frus stays in frus, even when it moves
-  over the view.
+  then the view's. With the `webview` feature, a web view inside a frus scrolling list keeps
+  a one-finger drag only while its page can follow it: a page at its top pulled down, or a
+  page that does not scroll at all, gives the drag to the list, and so does a page that
+  reaches its edge mid-drag. A pinch stays the view's. A gesture that starts in frus stays in
+  frus, even when it moves over the view.
 - **Keyboard.** A native text field, or a field in a web page, opens the keyboard as it would
-  in any Android application, and the view is scrolled above the keyboard as a frus field is.
+  in any Android application (with the `webview` feature, the view is scrolled above the
+  keyboard as a frus field is).
   A press anywhere in frus takes the focus away from it, and a frus text field taking the
   focus takes the keyboard back.
 - **Screen readers.** TalkBack reads the view's own content where the view is drawn, in the

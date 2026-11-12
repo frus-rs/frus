@@ -13,7 +13,8 @@ any release may break.
 
 ## [Unreleased]
 
-- **Web views** (J799). `WebViewController` loads requests (headers, `POST`), HTML, files and
+- **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
+  build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
   assets; reloads and moves in the history; runs JavaScript, with or without its result (a
   future); opens JavaScript channels the page posts to; sets the JavaScript mode, the user agent,
   the background and zoom; clears the cache and the local storage; and holds the page's address,
