@@ -314,6 +314,12 @@ impl Renderer {
             sample_count,
             pipeline_cache.as_ref().map(|(cache, _, _)| cache),
         );
+        // A tiled GPU — a phone's — keeps a multisampled target in its tile memory when it
+        // is never stored: no memory at all, where it was four times the screen (milestone
+        // 796).
+        let transient = adapter.get_info().transient_saves_memory == Some(true);
+        painters.set_transient_scratch(transient);
+        log::info!("transient multisampled targets: {transient}");
         let pipelines = pipelines_started.elapsed();
         // Warms every pipeline before the first real frame, to avoid jank.
         let warm_up_started = web_time::Instant::now();
@@ -398,6 +404,15 @@ impl Renderer {
     /// here.
     pub fn last_timings(&self) -> RenderTimings {
         self.timings
+    }
+
+    /// **The GPU memory this renderer holds**, at the end of the last frame (milestone 796):
+    /// the textures it keeps from one frame to the next and what they take.
+    ///
+    /// A page left and gone should leave this where it found it; the frame statistics
+    /// (`FRUS_FRAME_STATS=1`) print it with every line.
+    pub fn gpu_memory(&self) -> crate::GpuMemory {
+        self.painters.memory()
     }
 
     /// Draws the scene — rectangles, images, paths, text, layers — and presents it.
@@ -498,7 +513,7 @@ pub(crate) async fn request_device(
         required_features: adapter.features()
             & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
         required_limits,
-        memory_hints: wgpu::MemoryHints::Performance,
+        memory_hints: memory_hints(),
         ..Default::default()
     };
     // On Android, a Vulkan device that can import hardware buffers where the GPU offers it:
@@ -514,6 +529,21 @@ pub(crate) async fn request_device(
     let opened = adapter.request_device(&descriptor).await?;
     frus_core::textures().set_hardware_buffers(false);
     Ok(opened)
+}
+
+/// How the device's memory allocator cuts its blocks (milestone 796).
+///
+/// A phone's memory is the system's: on one, blocks of 8 to 64 MB, where the default takes
+/// 128 to 256 MB at a time from the driver and keeps a block for as long as one texture
+/// lives in it. A page that drew a few large textures for its transition and left one small
+/// one behind held a whole block: on the test phone, about 130 MB more after each page
+/// visited. A desktop keeps the larger blocks, which allocate less often.
+fn memory_hints() -> wgpu::MemoryHints {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        wgpu::MemoryHints::MemoryUsage
+    } else {
+        wgpu::MemoryHints::Performance
+    }
 }
 
 /// Whether the Vulkan this device offers is unusable: only the Android emulator's (gfxstream, the

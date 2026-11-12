@@ -339,6 +339,12 @@ impl TextAtlas {
         self.color_atlas.trim();
     }
 
+    /// The side of the mask atlas and of the colour atlas, in texels (frus: so the renderer
+    /// can say how much GPU memory its text holds).
+    pub fn sizes(&self) -> (u32, u32) {
+        (self.mask_atlas.size, self.color_atlas.size)
+    }
+
     pub(crate) fn grow(
         &mut self,
         state: &State,

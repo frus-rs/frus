@@ -755,6 +755,13 @@ impl CustomPainter {
         Some(view)
     }
 
+    /// Calls `each` with every GPU pass's picture, for the memory count (milestone 796).
+    pub(crate) fn each_texture(&self, mut each: impl FnMut(&wgpu::Texture)) {
+        for slot in self.passes.values() {
+            each(&slot.texture);
+        }
+    }
+
     /// Ends a frame: the pictures of the GPU passes no longer drawn go.
     pub(crate) fn end_frame(&mut self) {
         self.passes.retain(|_, s| s.used);

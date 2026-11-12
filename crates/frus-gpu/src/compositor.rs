@@ -232,6 +232,21 @@ fn layer_region(
     {
         return None;
     }
+    // No larger than what it holds (milestone 796): a layer's clip is often the screen's —
+    // a group faded, a shader mask over a title — while what it draws is a line of text.
+    // Its texture, its multisampled pass and its compositing draw were the screen's size;
+    // the shimmering title of the shader gallery was a full-screen shader every frame.
+    // What it holds is the batch planner's footprint, the one the draw order already trusts,
+    // grown by a margin for an antialiased edge; a line of text, its whole width.
+    let clip = match content_footprint(clip, filter, primitives) {
+        Some(content) => clip.intersect(Rect::new(
+            content.x - CONTENT_MARGIN,
+            content.y - CONTENT_MARGIN,
+            content.width + 2.0 * CONTENT_MARGIN,
+            content.height + 2.0 * CONTENT_MARGIN,
+        )),
+        None => clip,
+    };
     let x0 = clip.x.max(0.0).floor();
     let y0 = clip.y.max(0.0).floor();
     let x1 = (clip.x + clip.width).min(w as f32).ceil();
@@ -252,10 +267,121 @@ fn layer_region(
     Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
 }
 
+/// How far past its footprint a layer's content may paint, in pixels: an antialiased edge.
+const CONTENT_MARGIN: f32 = 16.0;
+
+/// Where a layer's content draws, inside `clip`: its primitives' footprints, and the box its
+/// shader or GPU pass paints. `None` when it holds nothing with a footprint.
+///
+/// Text is trusted for its lines, not its width: a title laid out in a box narrower than
+/// what it draws (a collapsing app bar's, mid-way) spills sideways, so a line of text counts
+/// as the clip's whole width, and as much again as its own height above and below. A layer
+/// inside counts as its own clip.
+fn content_footprint(clip: Rect, filter: &LayerFilter, primitives: &[Primitive]) -> Option<Rect> {
+    let own = filter
+        .shader
+        .as_ref()
+        .map(|s| s.rect())
+        .or(filter.external.as_ref().map(|e| e.rect()));
+    primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::Text { bounds, .. } | Primitive::RichText { bounds, .. } => {
+                let reach = bounds.height.max(CONTENT_MARGIN);
+                Some(Rect::new(
+                    clip.x,
+                    bounds.y - reach,
+                    clip.width,
+                    bounds.height + 2.0 * reach,
+                ))
+            }
+            Primitive::Layer { clip, .. } => Some(*clip),
+            _ => batch::footprint(p).map(|(_, bounds)| bounds),
+        })
+        .chain(own)
+        .reduce(|a, b| a.union(b))
+}
+
 /// Whether a layer is only an application's shader filling its box, or a GPU pass: it has
 /// no content of its own to render before it is composited (milestone 792).
 fn custom_only(filter: &LayerFilter, primitives: &[Primitive]) -> bool {
     filter.external.is_some() || (filter.shader.is_some() && primitives.is_empty())
+}
+
+/// **A clip around a shader or a GPU pass, folded into it** (milestone 796): the layer to
+/// composite instead of `primitive`, when `primitive` is a layer that only clips — or fades —
+/// a single shader filling a box, or a single GPU pass.
+///
+/// Such a layer has no content but the shader, and the shader changes every frame it
+/// plays: the layer was rendered again every frame into a texture of its own — a
+/// multisampled pass the size of the box — only to be composited with a rounded corner.
+/// The compositing draw clips with a rounded rectangle, an oval or a rectangle as well as
+/// the layer's draw would: the shader is composited once, straight onto the frame, clipped
+/// to the outer layer's shape. A rounded card around an animated shader (the gallery's
+/// plasma) costs one draw instead of two passes.
+///
+/// Only where the result is the same: the outer layer has no transform and no filter, its
+/// shape is not a path; the inner layer is unclipped by a shape of its own and untransformed;
+/// and its clip holds the outer one — or the outer one is a plain rectangle, and the two
+/// rectangles meet in a rectangle.
+fn folded_clip(primitive: &Primitive) -> Option<Primitive> {
+    let Primitive::Layer {
+        primitives,
+        opacity,
+        clip,
+        clip_shape,
+        transform: None,
+        filter,
+        ..
+    } = primitive
+    else {
+        return None;
+    };
+    let [Primitive::Layer {
+        primitives: inner,
+        opacity: inner_opacity,
+        clip: inner_clip,
+        clip_shape: frus_core::ClipShape::Rect,
+        transform: None,
+        filter: inner_filter,
+        owner,
+    }] = primitives.as_slice()
+    else {
+        return None;
+    };
+    if *filter != LayerFilter::NONE
+        || matches!(clip_shape, frus_core::ClipShape::Path(_))
+        || !custom_only(inner_filter, inner)
+        || inner_filter.backdrop.is_some()
+        || inner_filter.blend.is_some()
+    {
+        return None;
+    }
+    let (clip, clip_shape) = if matches!(clip_shape, frus_core::ClipShape::Rect) {
+        (clip.intersect(*inner_clip), frus_core::ClipShape::Rect)
+    } else if holds(*inner_clip, *clip) {
+        (*clip, clip_shape.clone())
+    } else {
+        return None;
+    };
+    Some(Primitive::Layer {
+        primitives: inner.clone(),
+        opacity: opacity * inner_opacity,
+        clip,
+        clip_shape,
+        transform: None,
+        filter: inner_filter.clone(),
+        owner: *owner,
+    })
+}
+
+/// Whether `outer` holds all of `inner`, to a hundredth of a pixel.
+fn holds(outer: Rect, inner: Rect) -> bool {
+    const SLACK: f32 = 0.01;
+    outer.x <= inner.x + SLACK
+        && outer.y <= inner.y + SLACK
+        && outer.x + outer.width >= inner.x + inner.width - SLACK
+        && outer.y + outer.height >= inner.y + inner.height - SLACK
 }
 
 /// Whether a primitive can be drawn moved: everything but a layer that needs the whole
@@ -401,6 +527,25 @@ struct MsaaScratch {
     height: u32,
     format: wgpu::TextureFormat,
     texture: wgpu::Texture,
+    /// Made with [`wgpu::TextureUsages::TRANSIENT_ATTACHMENT`]: on a tiled GPU it lives in
+    /// the tile memory and takes no memory of its own (milestone 796). It can only be
+    /// cleared at the start of a pass and is never stored, so only a draw done in **one**
+    /// pass may use it.
+    transient: bool,
+    /// Whether this frame drew with it: what no draw of a frame used is let go at its end.
+    used: bool,
+}
+
+/// What a texture takes in GPU memory, its samples and levels included. Every texture the
+/// painters keep is four bytes a texel (the glyph atlases are counted on their own).
+fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let mut texels = 0;
+    for level in 0..texture.mip_level_count() {
+        let w = (texture.width() >> level).max(1) as u64;
+        let h = (texture.height() >> level).max(1) as u64;
+        texels += w * h;
+    }
+    texels * 4 * texture.sample_count() as u64
 }
 
 /// The layer compositing pipeline.
@@ -907,6 +1052,9 @@ pub(crate) struct Painters {
     stage: Option<MsaaScratch>,
     /// Layer textures kept across frames, indexed by the layer's rank.
     layer_cache: Vec<CachedLayer>,
+    /// Whether the multisampled scratch targets may be transient: the adapter says it saves
+    /// memory there, a tiled GPU (milestone 796).
+    transient: bool,
     /// How many layer pre-passes were actually rendered — the cache's proof.
     #[allow(dead_code)]
     layer_renders: u64,
@@ -933,8 +1081,45 @@ impl Painters {
             msaa: Vec::new(),
             stage: None,
             layer_cache: Vec::new(),
+            transient: false,
             layer_renders: 0,
         }
+    }
+
+    /// Lets the multisampled scratch targets be transient, where the adapter says that saves
+    /// memory (`AdapterInfo::transient_saves_memory`): a phone's GPU keeps them in its tile
+    /// memory, and a full-screen one stops costing 40 MB (milestone 796).
+    pub(crate) fn set_transient_scratch(&mut self, transient: bool) {
+        self.transient = transient;
+    }
+
+    /// The GPU memory the painters hold in textures of their own, at the end of the last
+    /// frame: the layers kept, the multisampled scratch targets (a transient one counts for
+    /// nothing), the staging texture, the images, the glyph atlases and the GPU passes'
+    /// pictures (milestone 796).
+    pub(crate) fn memory(&self) -> crate::GpuMemory {
+        let mut memory = crate::GpuMemory::default();
+        let mut add = |texture: &wgpu::Texture, counted: bool| {
+            memory.textures += 1;
+            if counted {
+                memory.bytes += texture_bytes(texture);
+            }
+        };
+        for layer in &self.layer_cache {
+            add(&layer.texture, true);
+        }
+        for scratch in &self.msaa {
+            add(&scratch.texture, !scratch.transient);
+        }
+        if let Some(stage) = &self.stage {
+            add(&stage.texture, true);
+        }
+        self.image.each_texture(|t| add(t, true));
+        self.composite.custom.each_texture(|t| add(t, true));
+        // The two glyph atlases, mask and colour.
+        memory.textures += 2;
+        memory.bytes += self.text.atlas_bytes();
+        memory
     }
 
     /// Layer pre-passes rendered since creation, for the cache test.
@@ -947,20 +1132,24 @@ impl Painters {
     /// format changes, or `None` when MSAA is off (`sample_count == 1`). The view is
     /// created on the fly — it is cheap — and returned by value, which releases the
     /// borrow of `self` before the render pass opens.
+    ///
+    /// `one_pass` when the draw is done in a single pass that clears first: its scratch may
+    /// then be transient. A draw cut into segments reloads it, and needs one that is kept.
     fn ensure_msaa(
         &mut self,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         w: u32,
         h: u32,
+        one_pass: bool,
     ) -> Option<wgpu::TextureView> {
         if self.sample_count == 1 {
             return None;
         }
-        let at = self
-            .msaa
-            .iter()
-            .position(|s| s.width == w && s.height == h && s.format == format);
+        let transient = self.transient && one_pass;
+        let at = self.msaa.iter().position(|s| {
+            s.width == w && s.height == h && s.format == format && s.transient == transient
+        });
         let at = match at {
             Some(at) => at,
             None => {
@@ -981,7 +1170,12 @@ impl Painters {
                     sample_count: self.sample_count,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: if transient {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TRANSIENT_ATTACHMENT
+                    } else {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                    },
                     view_formats: &[],
                 });
                 self.msaa.push(MsaaScratch {
@@ -989,15 +1183,36 @@ impl Painters {
                     height: h,
                     format,
                     texture,
+                    transient,
+                    used: false,
                 });
                 self.msaa.len() - 1
             }
         };
+        self.msaa[at].used = true;
         Some(
             self.msaa[at]
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default()),
         )
+    }
+
+    /// Ends a frame: lets go of the scratch targets and the staging texture no draw of it
+    /// used (milestone 796). A layer drawn once and then kept as it is no longer needs the
+    /// multisampled target it was drawn in, four times its own size; a page that blurred
+    /// what was under it and is gone no longer needs a copy of the screen. Kept, they were
+    /// memory a page left behind it for as long as the application ran.
+    fn end_frame(&mut self) {
+        self.msaa.retain(|s| s.used);
+        for scratch in &mut self.msaa {
+            scratch.used = false;
+        }
+        if self.stage.as_ref().is_some_and(|s| !s.used) {
+            self.stage = None;
+        }
+        if let Some(stage) = &mut self.stage {
+            stage.used = false;
+        }
     }
 
     fn set_viewport(&self, queue: &wgpu::Queue, w: f32, h: f32) {
@@ -1028,6 +1243,24 @@ impl Painters {
         scene: &Scene,
         clear: Option<wgpu::Color>,
     ) {
+        self.text.begin_frame();
+        self.render_frame(device, queue, format, target, w, h, scene, clear);
+        self.end_frame();
+    }
+
+    /// [`Painters::render`]'s frame, between its start and its end.
+    #[allow(clippy::too_many_arguments)]
+    fn render_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        target: &wgpu::TextureView,
+        w: u32,
+        h: u32,
+        scene: &Scene,
+        clear: Option<wgpu::Color>,
+    ) {
         self.set_viewport(queue, w as f32, h as f32);
 
         // Pre-passes: each layer into its own full-surface texture — but **reused**
@@ -1044,6 +1277,8 @@ impl Painters {
         let mut layer_draws: HashMap<usize, std::ops::Range<usize>> = HashMap::new();
         let mut layer_index = 0usize;
         for (scene_index, primitive) in scene.primitives().iter().enumerate() {
+            let folded = folded_clip(primitive);
+            let primitive = folded.as_ref().unwrap_or(primitive);
             if let Primitive::Layer {
                 primitives,
                 opacity,
@@ -1174,7 +1409,9 @@ impl Painters {
 
         // With MSAA we paint into the multisampled texture then resolve; without it
         // we paint straight into whatever the pass is aimed at.
-        let msaa_view = self.ensure_msaa(device, format, w, h);
+        // One pass that clears: the scratch may be transient.
+        let one_pass = cuts.is_empty() && clear.is_some();
+        let msaa_view = self.ensure_msaa(device, format, w, h, one_pass);
         let load = match clear {
             Some(c) => wgpu::LoadOp::Clear(c),
             None => wgpu::LoadOp::Load,
@@ -1189,6 +1426,7 @@ impl Painters {
             self.pass(
                 &mut encoder,
                 msaa_view.as_ref(),
+                false,
                 target,
                 load,
                 &content,
@@ -1273,9 +1511,11 @@ impl Painters {
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("frus.encoder.segment"),
                 });
+                // Kept: the next segment goes on drawing over it.
                 self.pass(
                     &mut encoder,
                     msaa_view,
+                    true,
                     &view,
                     if first { load } else { wgpu::LoadOp::Load },
                     content,
@@ -1330,6 +1570,7 @@ impl Painters {
         self.pass(
             &mut encoder,
             msaa_view,
+            false,
             &view,
             if first { load } else { wgpu::LoadOp::Load },
             content,
@@ -1413,10 +1654,16 @@ impl Painters {
     /// home screen's translucent square painted over the Kanban board (milestone 349).
     /// The batches now hold the layers too, in the order they must be drawn, and this
     /// walks them: content pipelines and composite draws interleaved.
+    ///
+    /// `keep_msaa` when a pass after this one goes on drawing in the same multisampled
+    /// target: its samples are then stored. Otherwise only the resolved picture is written
+    /// and the samples are discarded — on a phone's tiled GPU they never leave the tile
+    /// memory, which saves writing four times the target's size every pass (milestone 796).
     fn pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         msaa_view: Option<&wgpu::TextureView>,
+        keep_msaa: bool,
         target: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
         content: &ContentPlan,
@@ -1429,9 +1676,10 @@ impl Painters {
         if batches.is_empty() && !matches!(load, wgpu::LoadOp::Clear(_)) {
             return;
         }
-        let (view, resolve_target) = match msaa_view {
-            Some(msaa) => (msaa, Some(target)),
-            None => (target, None),
+        let (view, resolve_target, store) = match msaa_view {
+            Some(msaa) if !keep_msaa => (msaa, Some(target), wgpu::StoreOp::Discard),
+            Some(msaa) => (msaa, Some(target), wgpu::StoreOp::Store),
+            None => (target, None, wgpu::StoreOp::Store),
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frus.render_pass"),
@@ -1439,10 +1687,7 @@ impl Painters {
                 view,
                 depth_slice: None,
                 resolve_target,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load, store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -1556,6 +1801,8 @@ impl Painters {
                 width: w,
                 height: h,
                 format,
+                transient: false,
+                used: false,
                 texture: device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("frus.stage"),
                     size: wgpu::Extent3d {
@@ -1575,12 +1822,14 @@ impl Painters {
                 }),
             });
         }
-        &self.stage.as_ref().expect("just created").texture
+        let stage = self.stage.as_mut().expect("just created");
+        stage.used = true;
+        &stage.texture
     }
 
     /// Returns the view of a layer's texture: **reused** as is when its content and
     /// dimensions are unchanged since the previous frame, otherwise (re)rendered by
-    /// [`Painters::render_group`] and, if the layer asks for one, put through the
+    /// [`Painters::render_group_into`] and, if the layer asks for one, put through the
     /// image-filter pre-pass. `index` is the layer's rank in the scene, a stable
     /// cache key; a key that slips — because layers were reordered — only misses the
     /// cache, which re-renders correctly and never wrongly.
@@ -1603,7 +1852,19 @@ impl Painters {
                 && c.primitives.as_slice() == primitives
         );
         if !hit {
-            let mut texture = self.render_group(device, queue, format, primitives, w, h);
+            // The texture it had, when it is the same size and nothing was filtered into it:
+            // drawn into again rather than made anew. A layer whose content moves every frame
+            // (a page coming in while it animates) otherwise made a texture the size of the
+            // screen every frame, which a phone's driver allocates and clears each time
+            // (milestone 796).
+            let reuse = match self.layer_cache.get(index) {
+                Some(c) if c.width == w && c.height == h && c.image.is_none() => {
+                    Some(c.texture.clone())
+                }
+                _ => None,
+            };
+            let mut texture =
+                self.render_group_into(device, queue, format, primitives, w, h, reuse);
             if let Some(f) = image {
                 texture = self.filter.apply(device, queue, format, &texture, f, w, h);
             }
@@ -1646,13 +1907,17 @@ impl Painters {
             clip: frus_core::Rect::UNBOUNDED,
             owner: 0,
         };
-        let tex = self.render_group(device, queue, format, &[prim], w, h);
+        let tex = self.render_group_into(device, queue, format, &[prim], w, h, None);
         tex.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Renders a group of primitives into a full-surface texture with a transparent
     /// background, for later compositing.
-    fn render_group(
+    ///
+    /// Into `reuse` when it is given — a texture of this size and format, the layer's own from
+    /// an earlier frame — and into a new one otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn render_group_into(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1660,6 +1925,7 @@ impl Painters {
         primitives: &[Primitive],
         w: u32,
         h: u32,
+        reuse: Option<wgpu::Texture>,
     ) -> wgpu::Texture {
         self.layer_renders += 1;
 
@@ -1680,6 +1946,8 @@ impl Painters {
         // The nested layers that blend with this group's drawing under them.
         let mut cuts: Vec<Cut> = Vec::new();
         for (scene_index, primitive) in primitives.iter().enumerate() {
+            let folded = folded_clip(primitive);
+            let primitive = folded.as_ref().unwrap_or(primitive);
             if let Primitive::Layer {
                 primitives: inner,
                 opacity,
@@ -1697,7 +1965,8 @@ impl Painters {
                     self.composite.white_mask_view()
                 } else {
                     let local = into_region(inner, region);
-                    let mut texture = self.render_group(device, queue, format, &local, rw, rh);
+                    let mut texture =
+                        self.render_group_into(device, queue, format, &local, rw, rh, None);
                     if let Some(f) = filter.image.filter(|f| !f.is_identity()) {
                         texture = self
                             .filter
@@ -1732,22 +2001,24 @@ impl Painters {
             sub.push_primitive(primitive.clone());
         }
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("frus.layer.texture"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            // Copied from, for a nested layer that blends with it.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+        let texture = reuse.unwrap_or_else(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frus.layer.texture"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                // Copied from, for a nested layer that blends with it.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
         });
 
         // Its own size for the painters: a nested layer set them to its own.
@@ -1767,7 +2038,7 @@ impl Painters {
 
         // With MSAA the layer is painted multisampled then resolved to its
         // single-sample texture, the one the compositor samples afterwards.
-        let msaa_view = self.ensure_msaa(device, format, w, h);
+        let msaa_view = self.ensure_msaa(device, format, w, h, cuts.is_empty());
 
         // The same plan the top of the frame draws from: a nested layer in its place
         // among this group's own drawing.
@@ -1986,8 +2257,13 @@ mod tests {
     /// 610): a texture of that size, not the target's.
     #[test]
     fn a_layer_is_drawn_in_its_clip_and_no_more() {
-        let (clip, shape, transform, filter, prims) =
-            layer(Rect::new(10.5, 20.2, 56.0, 32.0), vec![square()]);
+        // Content over the whole target: the clip decides.
+        let mut everywhere = Scene::new();
+        everywhere.fill_rect(Rect::new(-100.0, -100.0, 3000.0, 3000.0), Color::WHITE);
+        let (clip, shape, transform, filter, prims) = layer(
+            Rect::new(10.5, 20.2, 56.0, 32.0),
+            everywhere.primitives().to_vec(),
+        );
         let region = layer_region(clip, &shape, &transform, &filter, &prims, 1080, 2340);
         assert_eq!(region, Some(Rect::new(10.0, 20.0, 57.0, 33.0)));
         // Partly off the target: what is on it.
@@ -2025,6 +2301,69 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// **A layer's region is no larger than what it holds** (milestone 796): a group whose
+    /// clip is the whole screen and which holds a 20 px square gets a texture around the
+    /// square, with a margin, not one the size of the screen; and a shader's box counts as
+    /// held.
+    #[test]
+    fn a_layer_is_drawn_around_what_it_holds() {
+        let none = LayerFilter::NONE;
+        let region = layer_region(
+            Rect::UNBOUNDED,
+            &frus_core::ClipShape::Rect,
+            &None,
+            &none,
+            &[square()],
+            1080,
+            2340,
+        );
+        // The square is (10, 10, 20, 20); 16 px around it, held to the target.
+        assert_eq!(region, Some(Rect::new(0.0, 0.0, 46.0, 46.0)));
+        let shader = frus_core::Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+",
+        )
+        .expect("the test shader compiles");
+        let masked = LayerFilter {
+            shader: Some(Box::new(
+                shader.paint().at(Rect::new(100.0, 200.0, 300.0, 50.0)),
+            )),
+            ..LayerFilter::NONE
+        };
+        let region = layer_region(
+            Rect::UNBOUNDED,
+            &frus_core::ClipShape::Rect,
+            &None,
+            &masked,
+            &[square()],
+            1080,
+            2340,
+        );
+        assert_eq!(region, Some(Rect::new(0.0, 0.0, 416.0, 266.0)));
+        // A line of text laid out in a box narrower than it draws: the whole width, and its
+        // own height again above and below, plus the margin.
+        let mut title = Scene::new();
+        title.set_bounds(Rect::new(40.0, 400.0, 10.0, 30.0));
+        title.text(
+            frus_core::Point::new(40.0, 400.0),
+            "Library",
+            &frus_core::ResolvedTextStyle::exact(24.0),
+            Color::WHITE,
+        );
+        let region = layer_region(
+            Rect::new(0.0, 0.0, 1080.0, 2340.0),
+            &frus_core::ClipShape::Rect,
+            &None,
+            &none,
+            title.primitives(),
+            1080,
+            2340,
+        );
+        assert_eq!(region, Some(Rect::new(0.0, 354.0, 1080.0, 122.0)));
     }
 
     /// **What may draw past its clip, or holds the target's own coordinates, keeps the
@@ -2129,5 +2468,326 @@ mod tests {
             filter: LayerFilter::NONE,
             owner: 0,
         }));
+    }
+
+    /// A shader that plays, filling a box, the way `AnimatedShader` paints it at `seconds`.
+    fn playing_shader(rect: Rect, seconds: f32) -> Scene {
+        let shader = frus_core::Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {\n    return vec4<f32>(frag.uv, 0.5, 1.0);\n}\n",
+        )
+        .expect("the test shader compiles");
+        let mut scene = Scene::new();
+        scene.shader_rect(rect, &shader.paint().time(seconds));
+        scene
+    }
+
+    /// `content` inside a layer that clips it to a rounded rectangle, as `ClipRRect` does.
+    fn rounded(clip: Rect, content: Scene) -> Primitive {
+        Primitive::Layer {
+            primitives: content.primitives().to_vec(),
+            opacity: 1.0,
+            clip,
+            clip_shape: frus_core::ClipShape::RRect(frus_core::BorderRadius::from(8.0)),
+            transform: None,
+            filter: LayerFilter::NONE,
+            owner: 0,
+        }
+    }
+
+    /// **A rounded clip around a playing shader is not a layer of its own** (milestone 796).
+    ///
+    /// The gallery's plasma, in a rounded card: the shader changes every frame, and the clip
+    /// around it was rendered again every frame into a multisampled texture of its own, only
+    /// to be composited with its corners. Folded, the shader is composited straight onto the
+    /// frame through the rounded clip, and no frame renders a layer — and the corner is still
+    /// cut, the middle still painted.
+    #[test]
+    fn a_rounded_clip_around_a_playing_shader_renders_no_layer() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 64);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let card = Rect::new(8.0, 8.0, 48.0, 48.0);
+        for frame in 0..3 {
+            let mut scene = Scene::new();
+            scene.push_primitive(rounded(card, playing_shader(card, frame as f32 * 0.016)));
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                64,
+                64,
+                &scene,
+                Some(wgpu::Color::BLACK),
+            );
+        }
+        assert_eq!(
+            painters.layer_render_count(),
+            0,
+            "the shader is composited through the clip, frame after frame"
+        );
+        let folded = folded_clip(&rounded(card, playing_shader(card, 0.0)));
+        let Some(Primitive::Layer {
+            clip,
+            clip_shape,
+            filter,
+            ..
+        }) = folded
+        else {
+            panic!("folded into the shader's layer");
+        };
+        assert_eq!(clip, card);
+        assert!(matches!(clip_shape, frus_core::ClipShape::RRect(_)));
+        assert!(filter.shader.is_some());
+    }
+
+    /// The fold is taken only where it draws the same: a rounded clip that cuts into the
+    /// shader's box elsewhere than at its own edge, a clip that also fades through a filter,
+    /// or anything but a lone shader inside, stays a layer.
+    #[test]
+    fn a_clip_is_folded_only_where_it_draws_the_same() {
+        let card = Rect::new(8.0, 8.0, 48.0, 48.0);
+        // The shader's box smaller than the rounded clip: the corners would land elsewhere.
+        let inner = Rect::new(16.0, 16.0, 20.0, 20.0);
+        assert!(folded_clip(&rounded(card, playing_shader(inner, 0.0))).is_none());
+        // A plain rectangle: the two rectangles meet in one.
+        let Some(Primitive::Layer { clip, .. }) = folded_clip(&Primitive::Layer {
+            primitives: playing_shader(inner, 0.0).primitives().to_vec(),
+            opacity: 0.5,
+            clip: card,
+            clip_shape: frus_core::ClipShape::Rect,
+            transform: None,
+            filter: LayerFilter::NONE,
+            owner: 0,
+        }) else {
+            panic!("a rectangle folds")
+        };
+        assert_eq!(clip, inner);
+        // A shape inside a clip: not a lone shader.
+        let mut shape = Scene::new();
+        shape.fill_rect(card, Color::WHITE);
+        assert!(folded_clip(&rounded(card, shape)).is_none());
+        // A filter on the clip.
+        let Primitive::Layer {
+            primitives, clip, ..
+        } = rounded(card, playing_shader(card, 0.0))
+        else {
+            unreachable!()
+        };
+        let filtered = Primitive::Layer {
+            primitives,
+            opacity: 1.0,
+            clip,
+            clip_shape: frus_core::ClipShape::Rect,
+            transform: None,
+            filter: LayerFilter {
+                color: Some(frus_core::ColorFilter::grayscale()),
+                ..LayerFilter::NONE
+            },
+            owner: 0,
+        };
+        assert!(folded_clip(&filtered).is_none());
+    }
+
+    /// **Text under a playing shader mask is rendered once** (milestone 796): the mask's
+    /// time is the compositing draw's, not the layer's content, so the text's texture is kept
+    /// from frame to frame.
+    #[test]
+    fn a_playing_shader_mask_keeps_its_text() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 64);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shader = frus_core::Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {\n    return vec4<f32>(1.0, 1.0, 1.0, fract(frag.time));\n}\n",
+        )
+        .expect("the test shader compiles");
+        for frame in 0..3 {
+            let mut scene = Scene::new();
+            let rect = Rect::new(0.0, 0.0, 64.0, 32.0);
+            scene.shaded(rect, &shader.paint().time(frame as f32 * 0.016), |inner| {
+                inner.text(
+                    frus_core::Point::new(2.0, 2.0),
+                    "Shimmer",
+                    &frus_core::ResolvedTextStyle::exact(14.0),
+                    Color::WHITE,
+                )
+            });
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                64,
+                64,
+                &scene,
+                Some(wgpu::Color::BLACK),
+            );
+        }
+        assert_eq!(painters.layer_render_count(), 1, "rendered once, then kept");
+    }
+
+    /// **A page left leaves no GPU memory behind it** (milestone 796).
+    ///
+    /// A transition draws its pages into layers of their own, multisampled; once it has
+    /// settled, the page is drawn straight onto the frame again. The layers' textures went,
+    /// but the multisampled targets they were drawn in stayed — up to sixteen sizes of them,
+    /// four times their layer each — and so did the staging copy of a page that blurred what
+    /// was under it. The memory the painters hold after the page has gone must be what it
+    /// was before it came.
+    #[test]
+    fn a_page_left_leaves_no_memory_behind() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 4, None);
+        let tex = target(&device, format, 128);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let render = |painters: &mut Painters, scene: &Scene| {
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                128,
+                128,
+                scene,
+                Some(wgpu::Color::BLACK),
+            )
+        };
+        let mut home = Scene::new();
+        home.fill_rect(Rect::new(4.0, 4.0, 40.0, 40.0), Color::WHITE);
+        render(&mut painters, &home);
+        let before = painters.memory();
+
+        // The page comes in: fading, growing, over a frosted backdrop, frame after frame.
+        for frame in 0..12 {
+            let mut page = home.clone();
+            let size = 40.0 + frame as f32 * 6.0;
+            page.layer(0.1 * frame as f32, |s| {
+                s.fill_rect(Rect::new(10.0, 10.0, size, size), Color::rgb(1.0, 0.0, 0.0))
+            });
+            page.push_primitive(Primitive::Layer {
+                primitives: Vec::new(),
+                opacity: 1.0,
+                clip: Rect::new(0.0, 0.0, size, size),
+                clip_shape: frus_core::ClipShape::Rect,
+                transform: None,
+                filter: LayerFilter {
+                    backdrop: Some(frus_core::Backdrop::blur(4.0)),
+                    ..LayerFilter::NONE
+                },
+                owner: 0,
+            });
+            render(&mut painters, &page);
+        }
+        assert!(
+            painters.memory().bytes > before.bytes,
+            "the page held memory"
+        );
+
+        // And goes.
+        render(&mut painters, &home);
+        let after = painters.memory();
+        assert_eq!(
+            (after.textures, after.bytes),
+            (before.textures, before.bytes),
+            "home again holds what it held"
+        );
+    }
+
+    /// **The glyph atlas reuses its room** (milestone 796): text of a new size every frame,
+    /// for long enough that every glyph ever drawn could not fit in the first atlas, keeps the
+    /// atlas at a size that holds one frame's glyphs. Never trimmed, every glyph stayed in
+    /// use, the atlas could only double, and it never came back.
+    #[test]
+    fn the_glyph_atlas_reuses_its_room() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 256);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let first = painters.text.atlas_bytes();
+        for frame in 0..40 {
+            let mut scene = Scene::new();
+            scene.text(
+                frus_core::Point::new(0.0, 0.0),
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                &frus_core::ResolvedTextStyle::exact(30.0 + frame as f32),
+                Color::WHITE,
+            );
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                256,
+                256,
+                &scene,
+                Some(wgpu::Color::BLACK),
+            );
+        }
+        // 26 capitals at 30 to 70 px, every size: well over a 1024-texel atlas's room. One
+        // frame's fits in 512.
+        assert!(
+            painters.text.atlas_bytes() <= first.max(512 * 512 + 256 * 256 * 4),
+            "the atlas grew to {} bytes",
+            painters.text.atlas_bytes()
+        );
+    }
+
+    /// **A layer drawn again is drawn into the texture it had** (milestone 796): a page that
+    /// animates while it comes in changes every frame, and a texture the size of the screen
+    /// made every frame is one a phone's driver allocates and clears every frame.
+    #[test]
+    fn a_layer_drawn_again_reuses_its_texture() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 32);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut kept = Vec::new();
+        for frame in 0..3 {
+            let mut scene = Scene::new();
+            scene.layer(0.5, |s| {
+                s.fill_rect(
+                    Rect::new(4.0, 4.0, 8.0, 8.0),
+                    Color::rgb(1.0, 0.1 * frame as f32, 0.0),
+                )
+            });
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                32,
+                32,
+                &scene,
+                Some(wgpu::Color::BLACK),
+            );
+            kept.push(painters.layer_cache[0].texture.clone());
+        }
+        assert_eq!(painters.layer_render_count(), 3, "drawn again every frame");
+        assert!(
+            kept[0] == kept[1] && kept[1] == kept[2],
+            "into the same texture"
+        );
     }
 }
