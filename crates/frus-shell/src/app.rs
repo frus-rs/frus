@@ -3992,6 +3992,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.report_dev();
                 #[cfg(any(desktop, android))]
                 self.open_links_from_other_instances();
+                #[cfg(android)]
+                self.receive_shares();
                 // Work a component started brought something: build again to show it.
                 let arrived = self.take_task_arrivals();
                 // A hot-reload patch changed what the components build.
@@ -7563,6 +7565,12 @@ impl<A: Application> App<A> {
     /// argument — handed to the application as a location. Once, before the first frame.
     #[cfg(any(android, desktop))]
     fn open_launch_link(&mut self) {
+        // A share that started the application (milestone 801), handed over with the first
+        // frame's.
+        #[cfg(android)]
+        if let Some(app) = self.android_app.as_ref() {
+            crate::android_link::receive_launch_share(app);
+        }
         #[cfg(android)]
         let link = self
             .android_app
@@ -7665,6 +7673,18 @@ impl<A: Application> App<A> {
                 self.build_dirty = true;
                 self.request_redraw();
             }
+        }
+    }
+
+    /// What other applications shared into this one since the last frame (milestone 801),
+    /// handed to the application; the interface is built again for what it changed.
+    #[cfg(android)]
+    fn receive_shares(&mut self) {
+        for shared in crate::received_share::take() {
+            let command = self.app.on_share(shared);
+            self.run_command(command);
+            self.build_dirty = true;
+            self.request_redraw();
         }
     }
 

@@ -103,7 +103,7 @@ value = "frus_native_activity_on_create"
 
 # `frusdemo://task/3` opens the task's screen (milestone 563): a link with the application's own
 # scheme, from a browser, a mail or `adb shell am start -a android.intent.action.VIEW -d ...`.
-# A link opened while the demo runs starts a second activity, which hands it to the running one.
+# A link opened while the demo runs reaches the running activity, frus's own (milestone 801).
 # A task's reminder is a notification, which Android 13 and later ask the person to allow; the
 # question is only put to an application that asks for the permission here.
 [[package.metadata.android.uses_permission]]
@@ -121,6 +121,12 @@ name = "android.permission.ACCESS_NETWORK_STATE"
 actions = ["android.intent.action.VIEW"]
 categories = ["android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"]
 data = [{ scheme = "frusdemo" }]
+
+# Text shared from another application's share sheet (milestone 801): the demo shows it.
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.SEND"]
+categories = ["android.intent.category.DEFAULT"]
+data = [{ mime_type = "text/plain" }]
 
 [package.metadata.android.sdk]
 min_sdk_version = 24

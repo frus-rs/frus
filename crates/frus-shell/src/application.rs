@@ -112,6 +112,15 @@ pub trait Application {
         Command::none()
     }
 
+    /// **Something another application shared into this one** (milestone 801): text, a
+    /// subject, files, from the system's share sheet — on Android, once the application declares
+    /// an `ACTION_SEND` intent filter. Delivered while the application runs, and once after a
+    /// launch the share started. The default ignores it. See [`SharedContent`](crate::SharedContent).
+    fn on_share(&mut self, shared: crate::SharedContent) -> Command<Self::Message> {
+        let _ = shared;
+        Command::none()
+    }
+
     /// **State restoration** (milestone 753): the id the application's restorable values are
     /// kept under, in the parcel the system keeps when it ends a process in the background —
     /// Android's saved instance state, a browser tab's session storage. `None`, the default,

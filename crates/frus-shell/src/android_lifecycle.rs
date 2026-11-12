@@ -29,6 +29,11 @@
 //! sees the application they had, at the link's location. Ending the process instead would
 //! end the running activity too, with whatever it had not saved.
 //!
+//! Since milestone 801 the package names frus's own activity, `singleTop`: an intent that opens
+//! the application again reaches the running activity as `onNewIntent`, which hands it here
+//! ([`crate::android_link::listen`]), and a second activity is the exception — an intent from
+//! another application's task that asked for none of the flags that find the running one.
+//!
 //! As everywhere on this side, **every failed JNI call clears its exception**: a pending
 //! Java exception left behind takes the process down on the next, unrelated call.
 
@@ -68,6 +73,23 @@ pub(crate) fn set_window(window: Option<Arc<Window>>) {
     *WINDOW.lock().unwrap_or_else(|e| e.into_inner()) = window;
 }
 
+/// Queues `link` for the running loop's next frame: one a second activity handed over, or one
+/// the running activity was handed as a new intent (milestone 801).
+pub(crate) fn queue_link(link: String) {
+    LINKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push_back(link);
+}
+
+/// Asks the running loop for a frame, which reads what was queued for it. A request for a
+/// redraw, not a bare wake: winit on Android drops a wake that asks for nothing.
+pub(crate) fn wake() {
+    if let Some(window) = WINDOW.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        window.request_redraw();
+    }
+}
+
 /// The links handed over since the last call, oldest first.
 pub(crate) fn take_links() -> Vec<String> {
     LINKS
@@ -92,10 +114,7 @@ pub(crate) fn hand_over(app: &AndroidApp) {
             .unwrap_or_default()
     );
     if let Some(link) = link {
-        LINKS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push_back(link);
+        queue_link(link);
     }
     let running = RUNNING_ACTIVITY
         .lock()
@@ -104,9 +123,7 @@ pub(crate) fn hand_over(app: &AndroidApp) {
     if let Some(running) = running {
         bring_forward(app, &running);
     }
-    if let Some(window) = WINDOW.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        window.request_redraw();
-    }
+    wake();
 }
 
 /// When `new` is in another task than `running` — a link opened from another application's

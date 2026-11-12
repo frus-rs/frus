@@ -1044,7 +1044,8 @@ fn run_android(
             installed.set(digest);
         }
         let _ = adb_on(&["shell", "am", "force-stop", package]).output();
-        let activity = format!("{package}/android.app.NativeActivity");
+        // The activity the package runs in: frus's own, or the one the manifest names.
+        let activity = format!("{package}/{}", project.activity_class());
         let mut start = adb_on(&[
             "shell", "am", "start", "-n", &activity, "--es", "frus_dev", "log",
         ]);

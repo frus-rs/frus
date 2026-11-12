@@ -354,14 +354,12 @@ pub(crate) fn cargo_apk(
     let apk = newest_apk(&project.target_dir()?.join(mode.dir()).join("apk"), started).ok_or_else(
         || "cargo-apk finished but wrote no new .apk in the target directory".to_string(),
     )?;
-    // `autoVerify` on the filters of `https` links, which cargo-apk cannot write (milestone
-    // 791). Without it the package still works, the links opening with a question.
-    if let Err(error) = crate::app_links::verify_https_links(project, &apk, mode) {
-        crate::report::warn(&format!(
-            "the https links are not marked for verification ({error}): Android will ask which \
-             application opens them"
-        ));
-    }
+    // What cargo-apk cannot write: frus's own activity, which hands the running application the
+    // intents that open it again (milestone 801), and `autoVerify` on the filters of `https`
+    // links (milestone 791). Without the activity a sign-in's redirect would end the
+    // application, so a failure here fails the build.
+    crate::app_links::finish_package(project, &apk, mode, device_target.is_some())
+        .map_err(|error| format!("the package could not be finished: {error}"))?;
     Ok(apk)
 }
 
