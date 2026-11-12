@@ -100,6 +100,155 @@ impl PixelRect {
             h: (rect.height * scale).round().max(0.0) as i32,
         }
     }
+
+    /// `rect`, in physical pixels already, with each edge rounded on its own: two boxes that
+    /// touch still touch.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn edges(rect: Rect) -> Self {
+        let (left, top) = (rect.x.round() as i32, rect.y.round() as i32);
+        let right = (rect.x + rect.width).round() as i32;
+        let bottom = (rect.y + rect.height).round() as i32;
+        Self {
+            x: left,
+            y: top,
+            w: (right - left).max(0),
+            h: (bottom - top).max(0),
+        }
+    }
+
+    #[cfg_attr(android, allow(dead_code))]
+    /// Whether it holds no pixel.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.w <= 0 || self.h <= 0
+    }
+
+    /// The pixels both hold.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn intersect(self, other: PixelRect) -> PixelRect {
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = (self.x + self.w).min(other.x + other.w);
+        let bottom = (self.y + self.h).min(other.y + other.h);
+        PixelRect {
+            x: left,
+            y: top,
+            w: (right - left).max(0),
+            h: (bottom - top).max(0),
+        }
+    }
+
+    /// What is left of it once `cut` is taken out: up to four boxes, none overlapping — the
+    /// band above the cut, the band below, and the two sides between.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn minus(self, cut: PixelRect) -> Vec<PixelRect> {
+        let common = self.intersect(cut);
+        if common.is_empty() {
+            return vec![self];
+        }
+        let (right, bottom) = (self.x + self.w, self.y + self.h);
+        let pieces = [
+            PixelRect {
+                x: self.x,
+                y: self.y,
+                w: self.w,
+                h: common.y - self.y,
+            },
+            PixelRect {
+                x: self.x,
+                y: common.y + common.h,
+                w: self.w,
+                h: bottom - (common.y + common.h),
+            },
+            PixelRect {
+                x: self.x,
+                y: common.y,
+                w: common.x - self.x,
+                h: common.h,
+            },
+            PixelRect {
+                x: common.x + common.w,
+                y: common.y,
+                w: right - (common.x + common.w),
+                h: common.h,
+            },
+        ];
+        pieces.into_iter().filter(|p| !p.is_empty()).collect()
+    }
+}
+
+/// How much of a native view hosted **over** frus's surface shows (milestone 802): a Windows
+/// child window or a page element is drawn above every pixel frus draws, so the parts frus
+/// draws over it — a menu, a button laid on it, a dialog's scrim — are cut out of it, and the
+/// parts a scrolling area clips away too.
+#[cfg_attr(android, allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// All of it shows.
+    Whole,
+    /// These parts of it show, in its own pixels (from its top-left corner), none overlapping.
+    Parts(Vec<PixelRect>),
+    /// None of it: it is scrolled or clipped out of sight.
+    Hidden,
+    /// None of it: frus draws over all of it — a dialog's scrim. A host that can take a
+    /// picture of the view hands it to frus to draw under the dialog.
+    Covered,
+}
+
+impl Shape {
+    /// The shape of the view whose box is `rect`, of which `visible` is inside every clip
+    /// around it and `covers` are what frus drew over it: all in the window's physical pixels.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn of(rect: Rect, visible: Rect, covers: &[Rect]) -> Self {
+        // Where the view is placed, rounded as it is placed; and the part of it in sight. A
+        // view in sight whole is its whole box, whatever the rounding of the clip's edges:
+        // a page scrolling by fractions of a pixel must not reshape it on every frame.
+        let at = PixelRect::from_logical(rect, 1.0);
+        let whole = visible.x <= rect.x + 0.5
+            && visible.y <= rect.y + 0.5
+            && visible.x + visible.width >= rect.x + rect.width - 0.5
+            && visible.y + visible.height >= rect.y + rect.height - 0.5;
+        let seen = if whole {
+            at
+        } else {
+            PixelRect::edges(visible).intersect(at)
+        };
+        if seen.is_empty() || at.is_empty() {
+            return Shape::Hidden;
+        }
+        let mut parts = vec![seen];
+        for cover in covers {
+            let cover = PixelRect::edges(*cover);
+            if cover.is_empty() {
+                continue;
+            }
+            parts = parts
+                .into_iter()
+                .flat_map(|part| part.minus(cover))
+                .collect();
+            if parts.is_empty() {
+                return Shape::Covered;
+            }
+        }
+        if parts == [at] {
+            return Shape::Whole;
+        }
+        Shape::Parts(
+            parts
+                .into_iter()
+                .map(|part| PixelRect {
+                    x: part.x - at.x,
+                    y: part.y - at.y,
+                    ..part
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether any of the view shows.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn shows(&self) -> bool {
+        matches!(self, Shape::Whole | Shape::Parts(_))
+    }
 }
 
 /// One native view the frame wants.
@@ -111,6 +260,10 @@ pub(crate) struct Wanted<'a> {
     /// The widget's whole box, in logical pixels.
     pub rect: Rect,
     pub controller: Option<&'a PlatformViewController>,
+    /// How much of it shows, for a view hosted over frus's surface; `None` for one frus draws
+    /// itself (Android's).
+    #[cfg(not(android))]
+    pub shape: Option<Shape>,
 }
 
 /// What the Java side must do.
@@ -127,6 +280,9 @@ pub(crate) enum Command {
     Place { view: i32, at: PixelRect },
     /// Drop view `view`.
     Dispose { view: i32 },
+    /// Show only `shape` of view `view` (a view hosted over frus's surface).
+    #[cfg(not(android))]
+    Clip { view: i32, shape: Shape },
     /// Call `method` on view `view`.
     Invoke {
         view: i32,
@@ -140,6 +296,8 @@ struct Live {
     view_type: String,
     at: PixelRect,
     controller: Option<PlatformViewController>,
+    #[cfg(not(android))]
+    shape: Option<Shape>,
 }
 
 /// The native views that exist, by widget.
@@ -171,6 +329,18 @@ impl PlatformViews {
                             at,
                         });
                     }
+                    // Only a view hosted over the surface has a shape: none on Android, which
+                    // pays nothing for it.
+                    #[cfg(not(android))]
+                    if want.shape.is_some() && live.shape != want.shape {
+                        live.shape = want.shape.clone();
+                        if let Some(shape) = &want.shape {
+                            commands.push(Command::Clip {
+                                view: live.view,
+                                shape: shape.clone(),
+                            });
+                        }
+                    }
                     if live.controller.as_ref() != want.controller {
                         if let Some(old) = live.controller.take() {
                             old.attach(None);
@@ -194,6 +364,13 @@ impl PlatformViews {
                         params: want.params.to_owned(),
                         at,
                     });
+                    #[cfg(not(android))]
+                    if let Some(shape) = &want.shape {
+                        commands.push(Command::Clip {
+                            view,
+                            shape: shape.clone(),
+                        });
+                    }
                     self.live.insert(
                         want.id,
                         Live {
@@ -201,6 +378,8 @@ impl PlatformViews {
                             view_type: want.view_type.to_owned(),
                             at,
                             controller: want.controller.cloned(),
+                            #[cfg(not(android))]
+                            shape: want.shape.clone(),
                         },
                     );
                 }
@@ -469,6 +648,7 @@ mod tests {
             params: "<p>hi</p>",
             rect,
             controller: None,
+            shape: None,
         }
     }
 
@@ -673,6 +853,122 @@ mod tests {
             router.route(2, Phase::Moved, (160.0, 250.0), || None),
             Routed::Frus
         );
+    }
+
+    #[test]
+    fn a_view_in_sight_is_whole_and_what_covers_it_is_cut_out() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert_eq!(Shape::of(rect, rect, &[]), Shape::Whole);
+        // A page scrolled by fractions of a pixel: whole on every frame, never reshaped.
+        for step in 0..60 {
+            let moved = rect.translate(0.3, step as f32 * 0.37);
+            assert_eq!(Shape::of(moved, moved, &[]), Shape::Whole);
+        }
+        // Half under the top of the scrolling area.
+        let area = Rect::new(0.0, 45.0, 400.0, 400.0);
+        assert_eq!(
+            Shape::of(rect, area.intersect(rect), &[]),
+            Shape::Parts(vec![PixelRect {
+                x: 0,
+                y: 25,
+                w: 100,
+                h: 25
+            }])
+        );
+        assert_eq!(
+            Shape::of(rect, Rect::new(0.0, 0.0, 0.0, 0.0), &[]),
+            Shape::Hidden
+        );
+        // A menu over its top-left corner: the band under the menu and the part beside it.
+        assert_eq!(
+            Shape::of(rect, rect, &[Rect::new(0.0, 0.0, 40.0, 40.0)]),
+            Shape::Parts(vec![
+                PixelRect {
+                    x: 0,
+                    y: 20,
+                    w: 100,
+                    h: 30
+                },
+                PixelRect {
+                    x: 30,
+                    y: 0,
+                    w: 70,
+                    h: 20
+                },
+            ])
+        );
+        // A dialog's scrim: none of it shows, and a picture can stand in.
+        let scrim = Rect::new(0.0, 0.0, 1000.0, 1000.0);
+        assert_eq!(Shape::of(rect, rect, &[scrim]), Shape::Covered);
+        assert!(!Shape::Covered.shows() && !Shape::Hidden.shows() && Shape::Whole.shows());
+        // Something drawn beside it covers nothing of it.
+        assert_eq!(
+            Shape::of(rect, rect, &[Rect::new(200.0, 0.0, 50.0, 50.0)]),
+            Shape::Whole
+        );
+    }
+
+    #[test]
+    fn what_is_left_after_a_cut_is_every_pixel_but_the_cut_once() {
+        let whole = PixelRect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 9,
+        };
+        for (x, y, w, h) in [
+            (-3, -3, 5, 5),
+            (4, 2, 3, 3),
+            (10, 7, 9, 9),
+            (0, 0, 12, 9),
+            (5, -1, 2, 20),
+        ] {
+            let cut = PixelRect { x, y, w, h };
+            let pieces = whole.minus(cut);
+            for py in 0..whole.h {
+                for px in 0..whole.w {
+                    let inside =
+                        |r: &PixelRect| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+                    let count = pieces.iter().filter(|p| inside(p)).count();
+                    assert_eq!(
+                        count,
+                        usize::from(!inside(&cut)),
+                        "({px}, {py}) after {cut:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hosted_view_is_reshaped_only_when_its_shape_changes() {
+        let mut views = PlatformViews::default();
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let mut wanted = want(1, rect);
+        wanted.shape = Some(Shape::Whole);
+        let made = views.sync(std::slice::from_ref(&wanted), 1.0);
+        assert!(matches!(made[0], Command::Create { view: 1, .. }));
+        assert_eq!(
+            made[1],
+            Command::Clip {
+                view: 1,
+                shape: Shape::Whole
+            }
+        );
+        assert!(views.sync(std::slice::from_ref(&wanted), 1.0).is_empty());
+        wanted.shape = Some(Shape::Covered);
+        assert_eq!(
+            views.sync(std::slice::from_ref(&wanted), 1.0),
+            [Command::Clip {
+                view: 1,
+                shape: Shape::Covered
+            }]
+        );
+        // A view frus draws itself is never clipped.
+        let mut drawn = PlatformViews::default();
+        let plain = want(2, rect);
+        let made = drawn.sync(std::slice::from_ref(&plain), 1.0);
+        assert_eq!(made.len(), 1);
     }
 
     #[test]

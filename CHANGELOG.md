@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 801 so far, each documenting the objective, the alternatives
+> record — one per step, 802 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Native views on Windows and the web** (J802). `PlatformView::new(view_type, params)` is the
+  native view widget for every platform: Android's `View` as before, a child window on
+  Windows, an element of the page on the web. `"frus/edittext"` is an `EDIT` control on Windows
+  and an `<input>` on the web; `"frus/webview"` is WebView2 on Windows (feature `webview2`) and
+  an `<iframe>` on the web; `"frus/video"` is a `<video>` on the web. They take the same
+  `PlatformViewController` calls and send the same events as on Android. The view is moved,
+  resized and clipped with the frame; what frus draws over it (a menu, a button) is cut out of
+  it, and under a dialog Windows shows a picture of it. `register_platform_view_factory` adds a
+  view type from Rust on Windows and the web. `AndroidView` is unchanged. macOS, Linux and iOS
+  still show the fallback.
 - **Android applications come back to the running activity** (J801). `frus run` and
   `frus build` package frus's own activity, `dev.frus.FrusActivity` (the native activity with
   `onNewIntent` forwarded, `launchMode="singleTop"`, about 900 bytes of code): a link, a share, a

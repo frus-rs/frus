@@ -56,6 +56,10 @@ web-sys = { version = "0.3", features = ["Window", "Storage"] }
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "notifications", "taskbar", "tray"] }
 
+# The native views screen's web page on Windows: WebView2 (milestone 802).
+[target.'cfg(windows)'.dependencies]
+frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "notifications", "taskbar", "tray", "webview2"] }
+
 [dev-dependencies]
 # The shell's windowless driver: a gesture seen on a phone, replayed through the shell.
 frus-shell = { path = "../frus-shell", features = ["testing"] }

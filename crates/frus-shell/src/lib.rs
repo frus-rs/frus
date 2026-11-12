@@ -180,6 +180,10 @@ mod subscription;
 mod theming;
 #[cfg(windows)]
 mod title_bar;
+// Native views hosted over frus's surface (milestone 802): what the Windows and the web hosts
+// share, and the factories plugins register.
+#[cfg_attr(not(any(windows, web)), allow(dead_code))]
+mod view_host;
 #[cfg(web)]
 mod web_clipboard;
 #[cfg(any(web, test))]
@@ -190,12 +194,18 @@ mod web_failure;
 mod web_icon;
 #[cfg(any(web, test))]
 mod web_keys;
+// The web host of native views (milestone 802).
 #[cfg(any(web, test))]
 mod web_page;
+#[cfg(web)]
+mod web_platform_view;
 mod widget_app;
 // The desktop window's size, place and maximized state, kept between runs (milestone 783).
 #[cfg(any(desktop, test))]
 mod window_memory;
+// The Windows host of native views (milestone 802).
+#[cfg(windows)]
+mod windows_platform_view;
 // When the next frame comes, with decoration alone moving (milestone 783).
 mod pacing;
 
@@ -247,6 +257,9 @@ pub use taskbar::{Taskbar, TaskbarProgress};
 pub use tester::Tester;
 pub use texture_surface::{SurfaceFormat, TextureSurface};
 pub use tray::Tray;
+pub use view_host::{
+    register_platform_view_factory, NativeView, PlatformViewChannel, PlatformViewContext,
+};
 pub use widget_app::FrusApp;
 
 /// Cross-platform HTTP (`net` feature) — the [`fetch`] shorthand, the [`Request`]

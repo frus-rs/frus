@@ -1389,6 +1389,17 @@ pub struct App<A: Application> {
     /// The native view holding the input focus, as it last said.
     #[cfg(android)]
     native_focus: Option<i32>,
+    /// The native views hosted over frus's surface, Windows' child windows and the page's
+    /// elements (milestone 802): which exist, the host that makes them (made with the first),
+    /// the ones a dialog covers, and the one holding the input focus.
+    #[cfg(any(windows, web))]
+    hosted_views: crate::platform_view::PlatformViews,
+    #[cfg(any(windows, web))]
+    view_host: Option<NativeHost>,
+    #[cfg(any(windows, web))]
+    view_covers: crate::view_host::Covers,
+    #[cfg(any(windows, web))]
+    hosted_focus: Option<i32>,
     /// The system bars as the platform was last told them, so that it is told only of a
     /// change (#46).
     #[cfg(android)]
@@ -1403,6 +1414,12 @@ pub struct App<A: Application> {
     page_toolbar: Option<frus_widgets::Color>,
 }
 
+/// The host of the native views laid over frus's surface (milestone 802).
+#[cfg(windows)]
+type NativeHost = crate::windows_platform_view::Host;
+#[cfg(web)]
+type NativeHost = crate::web_platform_view::Host;
+
 impl<A: Application> App<A> {
     /// Creates the driver around an application and its message channel.
     pub fn new(app: A, proxy: EventLoopProxy<A::Message>) -> Self {
@@ -1411,6 +1428,12 @@ impl<A: Application> App<A> {
         // Only a real window: a test's shell is never a simulation.
         // The device's networks are watched from the first read (milestone 777).
         crate::connectivity::install();
+        // The native view types this platform hosts with no plugin (milestone 802): a list of
+        // names; nothing is made until a view is laid out.
+        #[cfg(windows)]
+        crate::windows_platform_view::register_builtins();
+        #[cfg(web)]
+        crate::web_platform_view::register_builtins();
         shell.simulated = crate::simulated::Simulated::from_env();
         if let Some(simulated) = &shell.simulated {
             frus_widgets::set_debug_default_target_platform_override(Some(
@@ -1595,6 +1618,14 @@ impl<A: Application> App<A> {
             touch_router: Default::default(),
             #[cfg(android)]
             native_focus: None,
+            #[cfg(any(windows, web))]
+            hosted_views: Default::default(),
+            #[cfg(any(windows, web))]
+            view_host: None,
+            #[cfg(any(windows, web))]
+            view_covers: Default::default(),
+            #[cfg(any(windows, web))]
+            hosted_focus: None,
             #[cfg(android)]
             system_bars: None,
             restoration_published: None,
@@ -1989,6 +2020,210 @@ impl<A: Application> App<A> {
                 self.dispatch(message);
                 self.request_redraw();
             }
+        }
+    }
+
+    /// Moves, clips, hides, makes and drops the native views hosted over frus's surface to
+    /// match the frame just presented, and sends the calls queued on their controllers
+    /// (milestone 802). A frame with no native view, before or now, does nothing — and makes
+    /// no host.
+    #[cfg(any(windows, web))]
+    fn sync_hosted_views(&mut self) {
+        use crate::platform_view::{Shape, Wanted};
+        // The views whose picture the frame just presented drew go now (see `Covers`).
+        let due = self.view_covers.take_due();
+        if let Some(host) = self.view_host.as_mut() {
+            for view in due {
+                crate::view_host::ViewHost::shape(host, view, &Shape::Covered);
+            }
+        }
+        let Some(ui) = self.ui.as_ref() else {
+            return;
+        };
+        let placements = ui.platform_views();
+        if placements.is_empty() && self.hosted_views.is_empty() {
+            return;
+        }
+        // The host's pixels: the window's physical ones on Windows, the page's CSS pixels on
+        // the web. A simulated device's screen sits inside the window, zoomed.
+        #[cfg(windows)]
+        let unit = self.scale;
+        #[cfg(web)]
+        let unit = 1.0;
+        let placement = self.placement();
+        let content = self.total_scale() / self.scale.max(0.01) * unit;
+        let to_host = |r: Rect| -> Rect {
+            let (r, factor) = match placement {
+                Some(placement) => (crate::simulated::Simulated::to_window(placement, r), unit),
+                None => (r, content),
+            };
+            Rect::new(
+                r.x * factor,
+                r.y * factor,
+                r.width * factor,
+                r.height * factor,
+            )
+        };
+        let wanted: Vec<Wanted> = placements
+            .iter()
+            .map(|p| {
+                let rect = to_host(p.rect);
+                let visible = to_host(p.visible);
+                let covers: Vec<Rect> = ui
+                    .platform_view_covers(p)
+                    .into_iter()
+                    .map(to_host)
+                    .collect();
+                Wanted {
+                    id: p.id,
+                    view_type: &p.view_type,
+                    params: &p.params,
+                    rect,
+                    controller: p.controller.as_ref(),
+                    shape: Some(Shape::of(rect, visible, &covers)),
+                }
+            })
+            .collect();
+        let before: Vec<(WidgetId, i32)> = self.hosted_views.views().collect();
+        let commands = self.hosted_views.sync(&wanted, 1.0);
+        drop(wanted);
+        for (widget, view) in before {
+            if self.hosted_views.view_of(widget) != Some(view) {
+                // The view went: its picture and its focus with it.
+                frus_widgets::set_platform_view_frame(widget, None);
+                self.view_covers.release(view);
+                if self.hosted_focus == Some(view) {
+                    self.hosted_focus = None;
+                }
+            }
+        }
+        if commands.is_empty() {
+            return;
+        }
+        if self.view_host.is_none() {
+            self.view_host = self.make_view_host();
+        }
+        #[cfg(windows)]
+        let font_scale = self.total_scale() * placement.map_or(1.0, |p| p.zoom.min(1.0));
+        let Some(host) = self.view_host.as_mut() else {
+            return;
+        };
+        #[cfg(windows)]
+        host.set_scale(font_scale);
+        crate::view_host::run(host, &commands, &mut self.view_covers);
+        let mut redraw = false;
+        // A view covered whole: its picture, drawn by the next frame under what covers it.
+        for (view, picture) in self.view_covers.take_fresh() {
+            if let Some(widget) = self.hosted_views.widget_of(view) {
+                frus_widgets::set_platform_view_frame(widget, Some(picture));
+                redraw = true;
+            }
+        }
+        // A view shown again: its picture is no longer needed.
+        for command in &commands {
+            if let crate::platform_view::Command::Clip { view, shape } = command {
+                if shape.shows() && self.view_covers.release(*view) {
+                    if let Some(widget) = self.hosted_views.widget_of(*view) {
+                        frus_widgets::set_platform_view_frame(widget, None);
+                        redraw = true;
+                    }
+                }
+            }
+        }
+        if redraw {
+            self.request_redraw();
+        }
+    }
+
+    /// The host of the native views, made with the first of them.
+    #[cfg(any(windows, web))]
+    fn make_view_host(&self) -> Option<NativeHost> {
+        let window = self.window.as_ref()?;
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let hwnd = match window.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(win)) => {
+                    win.hwnd.get() as windows_sys::Win32::Foundation::HWND
+                }
+                _ => return None,
+            };
+            crate::windows_platform_view::Host::new(window, hwnd)
+        }
+        #[cfg(web)]
+        {
+            crate::web_platform_view::Host::new(window)
+        }
+    }
+
+    /// Takes in what the native views hosted over the surface sent since the last turn
+    /// (milestone 802): each event becomes its widget's message; a view taking the focus
+    /// takes it from frus's own fields.
+    #[cfg(any(windows, web))]
+    fn drain_hosted_views(&mut self) {
+        if self.hosted_views.is_empty() {
+            return;
+        }
+        for (view, name, data) in crate::view_host::take_events() {
+            let Some(widget) = self.hosted_views.widget_of(view) else {
+                continue;
+            };
+            let event = frus_widgets::PlatformViewEvent::new(name, data);
+            if event.name == frus_widgets::PlatformViewEvent::FOCUS {
+                if event.data == "true" {
+                    self.hosted_focus = Some(view);
+                    if self.runtime.input.focused.take().is_some() {
+                        self.request_redraw();
+                    }
+                    // The window is still the one in use, though frus's own lost the focus.
+                    if self.lifecycle == Lifecycle::Inactive {
+                        self.set_lifecycle(Lifecycle::Resumed);
+                    }
+                } else if self.hosted_focus == Some(view) {
+                    self.hosted_focus = None;
+                }
+            } else if event.is_error() {
+                log::warn!("native view {view}: {}", event.data);
+            }
+            let message = self
+                .tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), widget))
+                .and_then(|widget| widget.on_platform_view_event(&event));
+            if let Some(message) = message {
+                self.dispatch(message);
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// A press went to frus: a hosted native view holding the keyboard focus lets it go, as a
+    /// press outside a native field does (milestone 802).
+    #[cfg(any(windows, web))]
+    fn release_hosted_focus(&mut self) {
+        if self.hosted_focus.take().is_some() {
+            if let Some(host) = self.view_host.as_mut() {
+                crate::view_host::ViewHost::clear_focus(host);
+            }
+        }
+    }
+
+    /// Whether the keyboard focus is in a hosted native view's window, inside frus's own
+    /// (milestone 802).
+    #[cfg(windows)]
+    fn focus_in_hosted_view(&self) -> bool {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if self.hosted_views.is_empty() {
+            return false;
+        }
+        let Some(window) = self.window.as_ref() else {
+            return false;
+        };
+        match window.window_handle().map(|h| h.as_raw()) {
+            Ok(RawWindowHandle::Win32(win)) => crate::windows_platform_view::Host::focus_inside(
+                win.hwnd.get() as windows_sys::Win32::Foundation::HWND,
+            ),
+            _ => false,
         }
     }
 
@@ -3212,6 +3447,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // What the native views sent: new images, events (milestone 794).
         #[cfg(android)]
         self.drain_platform_views();
+        // And what the views hosted over the surface sent (milestone 802).
+        #[cfg(any(windows, web))]
+        self.drain_hosted_views();
         // And what the browser did to the field it edits for the application (milestone 711).
         #[cfg(web)]
         self.drain_web_editing();
@@ -3259,6 +3497,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // On the web the "window" is the canvas, and it loses the focus to the page's
                 // own elements — the accessibility bridge's, the field being edited — while
                 // the page keeps it (milestone 711). Only the page losing it is the window's.
+                // On Windows the focus goes to a native view's window, inside frus's own: the
+                // window is still the one in use (milestone 802).
+                #[cfg(windows)]
+                let focused = focused || self.focus_in_hosted_view();
                 #[cfg(web)]
                 let focused = focused
                     || web_sys::window()
@@ -3373,6 +3615,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 if self.route_native_touch(&touch, position) {
                     return;
                 }
+                // A press on frus takes the keyboard from a hosted native view (milestone 802).
+                #[cfg(any(windows, web))]
+                if touch.phase == TouchPhase::Started {
+                    self.release_hosted_focus();
+                }
                 let kind = match touch.phase {
                     TouchPhase::Started => PointerKind::Down,
                     TouchPhase::Moved => PointerKind::Move,
@@ -3401,14 +3648,19 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => self.pointer(
-                event_loop,
-                PointerEvent {
-                    kind: PointerKind::Down,
-                    position: self.cursor,
-                    touch: false,
-                },
-            ),
+            } => {
+                // A press on frus takes the keyboard from a hosted native view (milestone 802).
+                #[cfg(any(windows, web))]
+                self.release_hosted_focus();
+                self.pointer(
+                    event_loop,
+                    PointerEvent {
+                        kind: PointerKind::Down,
+                        position: self.cursor,
+                        touch: false,
+                    },
+                )
+            }
 
             WindowEvent::MouseInput {
                 state: ElementState::Released,
@@ -4421,6 +4673,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.sync_platform_views();
                 #[cfg(android)]
                 self.sync_android_a11y();
+                // The views hosted over the surface follow the frame just presented: moved,
+                // clipped, hidden under a dialog (milestone 802).
+                #[cfg(any(windows, web))]
+                self.sync_hosted_views();
 
                 // The system bars follow the frame: the regions under them, then the theme.
                 self.sync_system_bars(&theme);

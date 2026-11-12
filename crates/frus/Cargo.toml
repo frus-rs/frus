@@ -49,6 +49,10 @@ taskbar = ["frus-shell/taskbar"]
 # Global shortcuts: `GlobalShortcut`. The desktop (X11 on Linux); off by default.
 global-shortcuts = ["frus-shell/global-shortcuts"]
 json = ["frus-shell/json"]
+# A web page inside the page on Windows, hosted by the system's WebView2:
+# `PlatformView::new("frus/webview", ..)` (milestone 802). Off by default; Android and the web
+# need no feature.
+webview2 = ["frus-shell/webview2"]
 # A SQLite database in the application's data folder: `database()` (milestone 795). Off by
 # default: SQLite itself is compiled in. Not on the Web, where `open` answers `Unsupported`.
 sqlite = ["frus-shell/sqlite"]
