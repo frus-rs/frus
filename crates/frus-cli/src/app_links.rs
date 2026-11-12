@@ -102,22 +102,6 @@ fn build_tool(sdk: &Path, name: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Every file below `dir`, as paths relative to `base` with `/`.
-fn files_below(base: &Path, dir: &Path, out: &mut Vec<String>) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files_below(base, &path, out);
-        } else if let Ok(relative) = path.strip_prefix(base) {
-            let parts: Vec<String> = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect();
-            out.push(parts.join("/"));
-        }
-    }
-}
-
 fn tool(command: &mut Command) -> Result<(), String> {
     let program = command.get_program().to_string_lossy().into_owned();
     let output = command
@@ -209,11 +193,9 @@ pub(crate) fn finish_package(
     // that holds only them; compressed as cargo-apk compresses them (milestone 801 measured it:
     // a release library stored whole doubled the download), and in a debug build nothing is
     // compressed, which is quicker to make, as cargo-apk does.
-    let mut libraries = Vec::new();
-    files_below(dir, &dir.join("lib"), &mut libraries);
-    if libraries.is_empty() {
-        return Err("cargo-apk left no lib/ beside the package to add again".into());
-    }
+    // Only those cargo-apk put in this package: the folder beside it also keeps the libraries
+    // of every other application built into the same target directory.
+    let libraries = crate::android_pack::packaged_libraries(apk)?;
     let raw = patched_dir.join("raw");
     let _ = std::fs::remove_dir_all(&raw);
     for library in &libraries {

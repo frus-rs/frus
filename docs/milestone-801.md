@@ -93,8 +93,11 @@ packages no code (`android:hasCode="false"`) and names `android.app.NativeActivi
 ### The shell (`android_link.rs`, `received_share.rs`, `auth.rs`)
 
 - `android_link::listen` registers the native method at startup; `native_new_intent` runs on the
-  Java main thread and reads the intent: `ACTION_SEND` / `ACTION_SEND_MULTIPLE` become a share,
-  anything with data a link. A link joins the queue milestone 763's hand-over already fills
+  Java main thread and hands the intent to `FrusIntents` in the bundled dex, which reads it in
+  Java and answers through one native method with strings: `{"link", data}` or
+  `{"share", text, subject, type, file…}`. Reading the intent from Rust through JNI was the
+  first version, and cost the library 35 KB of generic JNI code (see Size); the Java class costs
+  3.3 KB of dex. A link joins the queue milestone 763's hand-over already fills
   (`android_lifecycle::queue_link`), so the next frame gives it to a waiting sign-in
   (`auth::offer`) or opens it as a location — the same path for app links (milestone 791),
   custom schemes and redirects. The loop is woken with `Window::request_redraw` (winit on
@@ -104,10 +107,10 @@ packages no code (`android:hasCode="false"`) and names `android.app.NativeActivi
   (`NotificationResponse::Clicked`) is read as before.
 - **Receiving shares is new:** `frus::SharedContent { text, subject, mime_type, files }`, handed
   to `Application::on_share` (default: ignored) or to the handler given `FrusApp::on_share`.
-  Files arrive as `content://` addresses only the receiving activity may read; each is copied
-  (name from `_display_name`, made safe) into `<cache>/shared/` on a thread of its own, so a
-  large video does not stall the main thread, and the share is delivered once the copies are
-  done. A share that starts the application is delivered after the first frame. The
+  Files arrive as `content://` addresses only the receiving activity may read; `FrusIntents`
+  copies each (name from `_display_name`, made safe) into `<cache>/shared/` on a thread of its
+  own, so a large video does not stall the main thread, and the share is delivered once the
+  copies are done. A share that starts the application is delivered after the first frame. The
   application declares what it takes with an `ACTION_SEND` intent filter (commented in the
   template's `Cargo.toml`, used by `frus-demo` and `frus-data-example`).
 - **Sign-in:** on Android a custom-scheme redirect now waits for its link like a desktop's,
@@ -137,8 +140,7 @@ offer to sign in again.
   dex holds `Ldev/frus/FrusActivity;` and `nativeNewIntent`.
 - `hot` (frus-cli): the engine's project declares `singleTop` and its `MainActivity.kt` forwards
   `onNewIntent`.
-- `received_share` (frus-shell): shares are taken once and in order, empty ones dropped; shared
-  file names cannot leave their folder (`../../etc/passwd` → `passwd`, `..` → `shared`).
+- `received_share` (frus-shell): shares are taken once and in order, empty ones dropped.
 - `create` (frus-cli): the template's commented share filter is not taken for a declared one.
 - Clippy with `-D warnings`: host (frus-shell with `net,json,sqlite,auth,secure-store,
   notifications`, frus-cli, frus-demo, all targets) and `aarch64-linux-android --no-deps`.
@@ -172,6 +174,14 @@ manifest in the package names `dev.frus.FrusActivity` with `launchMode="singleTo
   18148 before and after) — and the application read `Ok(Clicked)`. The example had no launcher
   icon, and Android refuses a notification whose small icon is 0 (`Java exception was thrown` on
   the first try): it now ships the frus logo as `frus create` does.
+- **The smallest application's library** (`frus-hello`, `cargo build --release --target
+  aarch64-linux-android`, the CI's size budget): master 14,471,048 bytes in CI; the first
+  version of this milestone 14,506,504 (+35,456, 6,504 over the 14,500,000 budget), because it
+  read intents and copied shared files from Rust through JNI — each `call_method` with its
+  signature strings is generic code of its own. Moving that reading into `FrusIntents` (Java,
+  in the bundled dex: +3,272 bytes of dex) took the library from 14,476,880 to 14,456,784 bytes
+  on this machine's NDK (−20,096), so about 14,486,400 in CI: +15.4 KB over master, under the
+  budget without raising it. The rest is the native methods, the queue and `on_share`.
 - **Idle after all of it**: 0.0 % CPU (`top`), 125 MB total PSS.
 - **Size**: the package frus makes again is 9,138,662 bytes against cargo-apk's 9,129,282
   (+9.4 KB: the dex and the signature blocks). The first device build stored the library
@@ -179,6 +189,14 @@ manifest in the package names `dev.frus.FrusActivity` with `launchMode="singleTo
   with an `https` link paid that); the libraries are now compressed in a release build as
   cargo-apk compresses them, and stored in a debug build, as cargo-apk stores them. Nothing runs
   for the feature until an intent arrives: no thread, no polling.
+- **A new application** (`frus create ag801_app --frus-path <this checkout>`, then
+  `frus build apk`): the package names `dev.frus.FrusActivity` (`singleTop`) and carries the
+  dex — and, the first time, **also the data example's library**: the re-packaging step added
+  every library in the `lib/` folder cargo-apk leaves beside its package, which a target
+  directory shared between applications fills with all of them (milestone 791's step had the
+  same flaw, as had the flavor and bundle packaging of milestone 790). The libraries are now
+  read from cargo-apk's package itself; the new application's package then held only `libag801_app.so` and
+  the 892-byte `classes.dex`.
 
 ## Not done
 

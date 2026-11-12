@@ -90,27 +90,6 @@ pub(crate) fn take() -> Vec<SharedContent> {
     queue.drain(..).collect()
 }
 
-/// A file name that is safe to create in a folder: the last segment of `name`, with anything a
-/// file system could take for a separator or a device replaced, and never empty or a dot name.
-#[cfg_attr(not(android), allow(dead_code))]
-pub(crate) fn safe_file_name(name: &str) -> String {
-    let last = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let cleaned: String = last
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
-    if cleaned.is_empty() {
-        "shared".to_string()
-    } else {
-        cleaned.chars().take(120).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,16 +113,5 @@ mod tests {
         assert_eq!(taken[0].text.as_deref(), Some("first"));
         assert_eq!(taken[1].files, [PathBuf::from("/cache/b.jpg")]);
         assert!(take().is_empty());
-    }
-
-    #[test]
-    fn shared_file_names_cannot_leave_their_folder() {
-        assert_eq!(safe_file_name("IMG_0042.jpg"), "IMG_0042.jpg");
-        assert_eq!(safe_file_name("../../etc/passwd"), "passwd");
-        assert_eq!(safe_file_name("primary:DCIM/a?b.png"), "a_b.png");
-        assert_eq!(safe_file_name(".."), "shared");
-        assert_eq!(safe_file_name(""), "shared");
-        assert_eq!(safe_file_name(".hidden"), "hidden");
-        assert_eq!(safe_file_name("a\u{0}b"), "a_b");
     }
 }
