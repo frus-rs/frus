@@ -186,6 +186,11 @@ impl VideoPlayerValue {
 // ---------------------------------------------------------------------------------------
 
 /// A report from the platform's player.
+// Only a platform with a player (Android, Windows, the web) and the tests report events.
+#[cfg_attr(
+    not(any(target_os = "android", windows, target_arch = "wasm32")),
+    allow(dead_code)
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Event {
     /// The clip is open: its duration (zero for a live stream), its picture's size, and the
@@ -233,6 +238,10 @@ impl Sink {
 
     /// Queues `event` and wakes the interface's thread. Positions coalesce: only the latest
     /// one not yet applied is kept.
+    #[cfg_attr(
+        not(any(target_os = "android", windows, target_arch = "wasm32")),
+        allow(dead_code)
+    )]
     pub(crate) fn send(&self, event: Event) {
         let waker = {
             let Ok(mut state) = self.state.lock() else {
