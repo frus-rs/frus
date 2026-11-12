@@ -161,8 +161,23 @@ The answer comes back to the redirect address, which decides how:
 | Redirect address | How the answer arrives | Where |
 | --- | --- | --- |
 | `http://127.0.0.1/…`, `http://localhost:8400/…` | A listener on the loopback interface, on that port or, with none, a free one; on Android the page is a Custom Tab and the application comes back over it | The desktops, Android |
-| `com.example.app:/oauth` | The link that opens the application | A desktop that registered the scheme; not Android yet (`AuthError::Unsupported`: the browser's link back recreates the activity) |
+| `com.example.app:/oauth` | The link that opens the application; on Android the page is a Custom Tab, and the browser's link back reaches the running application and closes the tab | Android, and a desktop that registered the scheme |
 | `https://your.site/callback.html` | A popup, read once it is back on the page's own origin | The web |
+
+For a custom scheme, the application declares it, as for any link that opens it:
+`frus create --deeplink com.example.app://` on a new application or `frus create --deeplink
+com.example.app:// .` on an existing one (see "Links that open the application" in
+[getting started](../getting-started.md)). On Android the link comes back to the activity frus
+packages (`frus run`, `frus build`); a package made by hand with `cargo apk` runs in the system's
+native activity, which the browser's link would start over, and there a custom scheme answers
+`AuthError::Unsupported` — use a loopback address.
+
+**If Android ends the process** while the browser is in front (a phone short of memory), the
+sign-in is lost with it: the verifier that proves the code is this run's was never written down,
+on purpose. The browser's link then starts the application afresh at the redirect's location —
+`/oauth?code=…` for `com.example.app:/oauth` — which an application should treat as "sign in
+again" (a router's fallback page does). A loopback sign-in in that case ends with the browser on
+a page that no longer answers.
 
 The `state` sent is checked on the way back (an answer that is not this request's is
 `AuthError::StateMismatch`), the code is exchanged with the PKCE verifier only this run knows,

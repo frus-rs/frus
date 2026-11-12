@@ -144,6 +144,8 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     // And native views (milestone 794): only what loading them will take, kept for the first
     // one an application lays out.
     crate::android_platform_view::remember(&mut env, &loader, &activity);
+    // And what an intent that opens the application carries (milestone 801).
+    crate::android_link::install(&mut env, &loader);
 
     let name = env.new_string("dev.frus.input.FrusTextBridge")?;
     let class_obj = env

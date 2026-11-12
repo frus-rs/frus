@@ -171,6 +171,8 @@ pub(crate) mod runtime;
 #[cfg(feature = "secure-store")]
 mod secure_store;
 mod selection;
+// What other applications share into this one (milestone 801).
+mod received_share;
 // Sharing through the system's share sheet (milestone 775).
 mod share;
 mod simulated;
@@ -228,6 +230,7 @@ pub use open_url::{open_url, OpenUrlError};
 pub use pacing::DECORATIVE_FRAME_RATE;
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use platform_view::{register_android_view_factory, PlatformViewError};
+pub use received_share::SharedContent;
 pub use remote::RemoteData;
 #[cfg(feature = "secure-store")]
 pub use secure_store::{secure_store, SecureStore, SecureStoreError};
@@ -568,6 +571,9 @@ pub fn run_android<A: Application>(app: A, android_app: AndroidApp) -> anyhow::R
         // Input bridge (a real InputConnection): composition, swipe, CJK. On failure the
         // shell falls back to key mode (TYPE_NULL).
         android_ime::install(&android_app);
+        // The intents that open the application again, handed to it while it runs (milestone
+        // 801): a link, a share, a sign-in's redirect.
+        android_link::listen(&android_app);
         // Keep the activity handle around to query the system insets.
         app.set_android_app(android_app);
         event_loop.run_app(&mut app)?;
