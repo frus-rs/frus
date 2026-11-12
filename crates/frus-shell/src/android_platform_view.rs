@@ -44,6 +44,11 @@ static HANDLE: OnceLock<Option<Handle>> = OnceLock::new();
 static FRAMES: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// The events the views sent since the loop last looked.
 static EVENTS: Mutex<Vec<(i32, String, String)>> = Mutex::new(Vec::new());
+/// The web views' Java (milestone 799), carried only with the `webview` feature
+/// (scripts/build-input-dex.sh builds it).
+#[cfg(feature = "webview")]
+static WEBVIEW_DEX: &[u8] = include_bytes!("../assets/frus_webview.dex");
+
 /// The factories registered before the class was loaded.
 static PENDING: Mutex<Vec<Factory>> = Mutex::new(Vec::new());
 
@@ -139,6 +144,18 @@ fn load(env: &mut JNIEnv, origin: &Origin) -> jni::errors::Result<Handle> {
     for factory in std::mem::take(&mut *PENDING.lock().unwrap()) {
         register_now(env, &handle, &factory);
     }
+    // The web views (milestone 799): their factory, from a dex of their own, over the plain
+    // one the shared dex has.
+    #[cfg(feature = "webview")]
+    register_now(
+        env,
+        &handle,
+        &Factory {
+            view_type: frus_widgets::WEB_VIEW_TYPE.to_owned(),
+            class_name: "dev.frus.webview.FrusWebViews".to_owned(),
+            dex: Some(WEBVIEW_DEX),
+        },
+    );
     Ok(handle)
 }
 
@@ -350,6 +367,37 @@ pub(crate) fn clear_focus() {
     }
     with_class("letting the focus go", |env, class| {
         env.call_static_method(class, "clearFocus", "()V", &[])?;
+        Ok(())
+    });
+}
+
+/// A call for every web view rather than one (milestone 799): cookies, a page let go. Made on
+/// the web views' factory, which carries it out on the UI thread; its answers come back as
+/// events of view -1.
+#[cfg(feature = "webview")]
+pub(crate) fn web_call(method: &str, arguments: &str) {
+    with_class("a web view call", |env, class| {
+        let view_type = env.new_string(frus_widgets::WEB_VIEW_TYPE)?;
+        let factory = env
+            .call_static_method(
+                class,
+                "factory",
+                "(Ljava/lang/String;)Ldev/frus/platform/PlatformViewFactory;",
+                &[JValue::Object(&view_type)],
+            )?
+            .l()?;
+        if factory.is_null() {
+            return Ok(());
+        }
+        let web = env.get_object_class(&factory)?;
+        let method = env.new_string(method)?;
+        let arguments = env.new_string(arguments)?;
+        env.call_static_method(
+            &web,
+            "global",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[JValue::Object(&method), JValue::Object(&arguments)],
+        )?;
         Ok(())
     });
 }

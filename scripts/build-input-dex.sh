@@ -9,7 +9,7 @@
 # screen reader's view of the window, milestone 782; FrusPlatformViews.java and the
 # dev.frus.platform interfaces plugins implement, the native views of milestone 794;
 # FrusIntents.java, what an intent that opens the application carries, milestone 801) into one
-# embedded dex.
+# embedded dex, and the web views of milestone 799 (dev.frus.webview) into a second one.
 # Only re-run this when a Java file changes; the resulting dex is checked in
 # (crates/frus-shell/assets/frus_input.dex) so that `cargo apk` never needs javac.
 #
@@ -40,3 +40,12 @@ mkdir -p "$OUT_DIR/dex"
 mkdir -p "$ROOT/crates/frus-shell/assets"
 cp "$OUT_DIR/dex/classes.dex" "$ROOT/crates/frus-shell/assets/frus_input.dex"
 echo "OK: $(wc -c < "$ROOT/crates/frus-shell/assets/frus_input.dex") bytes"
+
+# The web views (milestone 799), in a dex of their own: only an application built with frus's
+# `webview` feature carries it, and loads it as a plugin's factory over the shared dex.
+WEB_DIR="$ROOT/crates/frus-shell/java/dev/frus/webview"
+javac --release 8 -cp "$PLATFORM:$OUT_DIR/classes" -d "$OUT_DIR/web" "$WEB_DIR"/*.java
+mkdir -p "$OUT_DIR/webdex"
+"$BUILD_TOOLS/d8" --release --min-api 24 --lib "$PLATFORM" --classpath "$OUT_DIR/classes"     --output "$OUT_DIR/webdex" "$OUT_DIR"/web/dev/frus/webview/*.class
+cp "$OUT_DIR/webdex/classes.dex" "$ROOT/crates/frus-shell/assets/frus_webview.dex"
+echo "OK: $(stat -c%s "$ROOT/crates/frus-shell/assets/frus_webview.dex") bytes (web views)"

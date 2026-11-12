@@ -405,7 +405,12 @@ impl PlatformViews {
         for id in gone {
             if let Some(live) = self.live.remove(&id) {
                 if let Some(controller) = live.controller {
-                    controller.attach(None);
+                    // Unless another widget showing the same controller (a web page shown
+                    // somewhere else) has it already: only web views' controllers are shown by
+                    // two widgets (milestone 799).
+                    if cfg!(not(feature = "webview")) || controller.view_id() == Some(live.view) {
+                        controller.attach(None);
+                    }
                 }
                 commands.push(Command::Dispose { view: live.view });
             }
@@ -485,6 +490,42 @@ pub(crate) enum Routed {
     Frus,
     /// A native view's.
     View(ViewTouch),
+    #[cfg(feature = "webview")]
+    /// A drag the view had and frus takes from here (milestone 799): the view is sent
+    /// `cancel`, and frus gets a press at `from` (the window's physical pixels), then this
+    /// touch. The rest of the gesture is frus's.
+    Handover { cancel: ViewTouch, from: (f32, f32) },
+}
+
+/// The ways frus can scroll under a press: what a drag on a native view may be handed to.
+#[cfg(feature = "webview")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Axes {
+    pub vertical: bool,
+    pub horizontal: bool,
+}
+
+/// A press on a native view: which, where it is, and what frus can scroll around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ViewHit {
+    pub view: i32,
+    pub rect: PixelRect,
+    /// What frus can scroll around it (milestone 799).
+    #[cfg(feature = "webview")]
+    pub frus: Axes,
+}
+
+/// The event a web view sends with the directions its content can still scroll ([`scroll`]).
+#[cfg(feature = "webview")]
+pub(crate) const SCROLL_EVENT: &str = "frus.scroll";
+
+/// The directions a view's content can still scroll, as a web view says them.
+#[cfg(feature = "webview")]
+pub(crate) mod scroll {
+    pub const UP: u8 = 1;
+    pub const DOWN: u8 = 2;
+    pub const LEFT: u8 = 4;
+    pub const RIGHT: u8 = 8;
 }
 
 struct Gesture {
@@ -494,44 +535,125 @@ struct Gesture {
     /// The pointers down, in the order they came: winit's id, the id Android knows it by
     /// (the lowest free one when it came, kept until it lifts) and the window position.
     pointers: Vec<(u64, i32, f32, f32)>,
+    /// Where the first finger went down.
+    #[cfg(feature = "webview")]
+    start: (f32, f32),
+    /// What frus can scroll around the view.
+    #[cfg(feature = "webview")]
+    frus: Axes,
+    /// The drag's axis once it moved past the slop (`Some(true)`: vertical); `None` before,
+    /// and for a gesture that stays the view's whatever it does (a pinch).
+    #[cfg(feature = "webview")]
+    axis: Option<bool>,
+    /// Whether the slop was passed, or a second finger came.
+    #[cfg(feature = "webview")]
+    decided: bool,
 }
 
 /// Decides, touch by touch, whether frus or a native view gets it.
-#[derive(Default)]
+#[cfg_attr(not(feature = "webview"), derive(Default))]
 pub(crate) struct TouchRouter {
     /// The pointers of a gesture frus has.
     frus: HashSet<u64>,
     gesture: Option<Gesture>,
+    /// How far a finger moves, in physical pixels, before it is a drag.
+    #[cfg(feature = "webview")]
+    pub slop: f32,
+    /// Which ways each view's content can still scroll ([`scroll`]).
+    #[cfg(feature = "webview")]
+    scrolls: HashMap<i32, u8>,
+}
+
+#[cfg(feature = "webview")]
+impl Default for TouchRouter {
+    fn default() -> Self {
+        Self {
+            frus: HashSet::new(),
+            gesture: None,
+            #[cfg(feature = "webview")]
+            slop: 18.0,
+            #[cfg(feature = "webview")]
+            scrolls: HashMap::new(),
+        }
+    }
 }
 
 impl TouchRouter {
+    /// Which ways view `view`'s content can still scroll now ([`scroll`]).
+    #[cfg(feature = "webview")]
+    pub(crate) fn set_scroll(&mut self, view: i32, flags: u8) {
+        self.scrolls.insert(view, flags);
+    }
+
+    #[cfg(feature = "webview")]
+    /// Whether a drag of `delta` along an axis is frus's: frus scrolls that way around the
+    /// view, and the view's content cannot move that way any further.
+    fn frus_takes(&self, gesture: &Gesture, vertical: bool, delta: f32) -> bool {
+        if delta == 0.0 {
+            return false;
+        }
+        let frus = if vertical {
+            gesture.frus.vertical
+        } else {
+            gesture.frus.horizontal
+        };
+        // A finger moving down shows what is above: the content must be able to scroll up.
+        let needs = match (vertical, delta > 0.0) {
+            (true, true) => scroll::UP,
+            (true, false) => scroll::DOWN,
+            (false, true) => scroll::LEFT,
+            (false, false) => scroll::RIGHT,
+        };
+        // A view that has not drawn yet has said nothing: it cannot scroll.
+        let flags = self.scrolls.get(&gesture.view).copied().unwrap_or(0);
+        frus && flags & needs == 0
+    }
+
     /// Routes touch `id` at `at` (the window's physical pixels). `hit` is asked only for a
     /// press that would start a gesture: the native view under it, if no frus target drawn
-    /// over the view takes it, and where that view is.
+    /// over the view takes it.
+    ///
+    /// A one-finger drag on a view inside a frus scrolling area is the view's while its
+    /// content can scroll that way. Past the slop in a direction the content cannot go, or
+    /// once the content reaches its edge, the drag is handed to frus ([`Routed::Handover`]).
     pub(crate) fn route(
         &mut self,
         id: u64,
         phase: Phase,
         at: (f32, f32),
-        hit: impl FnOnce() -> Option<(i32, PixelRect)>,
+        hit: impl FnOnce() -> Option<ViewHit>,
     ) -> Routed {
         match phase {
             Phase::Started => {
                 if let Some(gesture) = self.gesture.as_mut() {
-                    // Another finger on a gesture a view has: the view's too.
+                    // Another finger on a gesture a view has: the view's too, for good (a
+                    // pinch is never handed over).
                     let free = (0..)
                         .find(|n| !gesture.pointers.iter().any(|p| p.1 == *n))
                         .unwrap_or(0);
                     gesture.pointers.push((id, free, at.0, at.1));
+                    #[cfg(feature = "webview")]
+                    {
+                        gesture.decided = true;
+                        gesture.axis = None;
+                    }
                     let index = gesture.pointers.len() - 1;
                     return Routed::View(Self::touch(gesture, action::POINTER_DOWN, index));
                 }
                 if self.frus.is_empty() {
-                    if let Some((view, rect)) = hit() {
+                    if let Some(hit) = hit() {
                         let gesture = Gesture {
-                            view,
-                            origin: (rect.x as f32, rect.y as f32),
+                            view: hit.view,
+                            origin: (hit.rect.x as f32, hit.rect.y as f32),
                             pointers: vec![(id, 0, at.0, at.1)],
+                            #[cfg(feature = "webview")]
+                            start: at,
+                            #[cfg(feature = "webview")]
+                            frus: hit.frus,
+                            #[cfg(feature = "webview")]
+                            axis: None,
+                            #[cfg(feature = "webview")]
+                            decided: false,
                         };
                         let touch = Self::touch(&gesture, action::DOWN, 0);
                         self.gesture = Some(gesture);
@@ -541,16 +663,23 @@ impl TouchRouter {
                 self.frus.insert(id);
                 Routed::Frus
             }
-            Phase::Moved => match self.gesture.as_mut() {
-                Some(gesture) if gesture.pointers.iter().any(|p| p.0 == id) => {
-                    for pointer in gesture.pointers.iter_mut().filter(|p| p.0 == id) {
-                        pointer.2 = at.0;
-                        pointer.3 = at.1;
-                    }
-                    Routed::View(Self::touch(gesture, action::MOVE, 0))
+            Phase::Moved => {
+                // A drag the view cannot follow goes to frus (milestone 799).
+                #[cfg(feature = "webview")]
+                if let Some(routed) = self.hand_over(id, at) {
+                    return routed;
                 }
-                _ => Routed::Frus,
-            },
+                match self.gesture.as_mut() {
+                    Some(gesture) if gesture.pointers.iter().any(|p| p.0 == id) => {
+                        for pointer in gesture.pointers.iter_mut().filter(|p| p.0 == id) {
+                            pointer.2 = at.0;
+                            pointer.3 = at.1;
+                        }
+                        Routed::View(Self::touch(gesture, action::MOVE, 0))
+                    }
+                    _ => Routed::Frus,
+                }
+            }
             Phase::Ended | Phase::Cancelled => {
                 let Some(gesture) = self.gesture.as_mut() else {
                     self.frus.remove(&id);
@@ -579,6 +708,51 @@ impl TouchRouter {
         }
     }
 
+    /// Whether this movement of pointer `id` hands the view's drag to frus: past the slop in a
+    /// direction the view's content cannot go, or on, once it reached its edge. Records the
+    /// drag's axis on the way. `None`: the view keeps it.
+    #[cfg(feature = "webview")]
+    fn hand_over(&mut self, id: u64, at: (f32, f32)) -> Option<Routed> {
+        let gesture = self.gesture.as_ref()?;
+        let index = gesture.pointers.iter().position(|p| p.0 == id)?;
+        if gesture.pointers.len() != 1 {
+            return None;
+        }
+        let previous = (gesture.pointers[index].2, gesture.pointers[index].3);
+        let mut decided = gesture.decided;
+        let mut axis = gesture.axis;
+        let mut from = None;
+        if !decided {
+            let total = (at.0 - gesture.start.0, at.1 - gesture.start.1);
+            if total.0.abs().max(total.1.abs()) >= self.slop {
+                decided = true;
+                let vertical = total.1.abs() >= total.0.abs();
+                axis = Some(vertical);
+                let along = if vertical { total.1 } else { total.0 };
+                if self.frus_takes(gesture, vertical, along) {
+                    from = Some(gesture.start);
+                }
+            }
+        } else if let Some(vertical) = axis {
+            let step = if vertical {
+                at.1 - previous.1
+            } else {
+                at.0 - previous.0
+            };
+            if self.frus_takes(gesture, vertical, step) {
+                from = Some(previous);
+            }
+        }
+        let gesture = self.gesture.as_mut()?;
+        gesture.decided = decided;
+        gesture.axis = axis;
+        let from = from?;
+        let cancel = Self::touch(gesture, action::CANCEL, 0);
+        self.gesture = None;
+        self.frus.insert(id);
+        Some(Routed::Handover { cancel, from })
+    }
+
     /// The view a gesture is under way on, if any.
     #[cfg(test)]
     pub(crate) fn active_view(&self) -> Option<i32> {
@@ -590,6 +764,8 @@ impl TouchRouter {
         if self.gesture.as_ref().is_some_and(|g| g.view == view) {
             self.gesture = None;
         }
+        #[cfg(feature = "webview")]
+        self.scrolls.remove(&view);
     }
 
     fn touch(gesture: &Gesture, action: i32, index: usize) -> ViewTouch {
@@ -761,8 +937,118 @@ mod tests {
         h: 300,
     };
 
-    fn on_view() -> Option<(i32, PixelRect)> {
-        Some((9, VIEW))
+    fn on_view() -> Option<ViewHit> {
+        Some(ViewHit {
+            view: 9,
+            rect: VIEW,
+            #[cfg(feature = "webview")]
+            frus: Axes::default(),
+        })
+    }
+
+    /// A view inside a frus list that scrolls vertically.
+    #[cfg(feature = "webview")]
+    fn in_list() -> Option<ViewHit> {
+        Some(ViewHit {
+            view: 9,
+            rect: VIEW,
+            frus: Axes {
+                vertical: true,
+                horizontal: false,
+            },
+        })
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_drag_the_page_cannot_follow_is_handed_to_the_list() {
+        let mut router = TouchRouter::default();
+        // The page is at its top: it can only scroll down.
+        router.set_scroll(9, scroll::DOWN);
+        assert!(matches!(
+            router.route(1, Phase::Started, (150.0, 250.0), in_list),
+            Routed::View(_)
+        ));
+        // Within the slop: still the view's.
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 260.0), || None),
+            Routed::View(_)
+        ));
+        // Past it, pulling down (showing what is above): the page cannot, the list can.
+        let Routed::Handover { cancel, from } =
+            router.route(1, Phase::Moved, (152.0, 300.0), || None)
+        else {
+            panic!("the list takes the drag");
+        };
+        assert_eq!((cancel.view, cancel.action), (9, action::CANCEL));
+        assert_eq!(
+            from,
+            (150.0, 250.0),
+            "frus is pressed where the finger went down"
+        );
+        // From then on everything is frus's, and the view is out of it.
+        assert_eq!(
+            router.route(1, Phase::Moved, (152.0, 340.0), || None),
+            Routed::Frus
+        );
+        assert_eq!(
+            router.route(1, Phase::Ended, (152.0, 340.0), || None),
+            Routed::Frus
+        );
+        assert_eq!(router.active_view(), None);
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_drag_the_page_can_follow_stays_its_until_its_edge() {
+        let mut router = TouchRouter::default();
+        router.set_scroll(9, scroll::UP | scroll::DOWN);
+        router.route(1, Phase::Started, (150.0, 450.0), in_list);
+        // Pushing up (scrolling the page down): the page can.
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 400.0), || None),
+            Routed::View(_)
+        ));
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 380.0), || None),
+            Routed::View(_)
+        ));
+        // The page reached its bottom while the finger keeps pushing: the list goes on.
+        router.set_scroll(9, scroll::UP);
+        let Routed::Handover { from, .. } = router.route(1, Phase::Moved, (150.0, 360.0), || None)
+        else {
+            panic!("the list takes the rest of the drag");
+        };
+        assert_eq!(from, (150.0, 380.0), "from where the page stopped");
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_sideways_drag_a_pinch_or_a_view_outside_a_list_are_never_handed_over() {
+        let mut router = TouchRouter::default();
+        router.set_scroll(9, 0);
+        // Sideways, in a list that only scrolls vertically.
+        router.route(1, Phase::Started, (150.0, 250.0), in_list);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (220.0, 255.0), || None),
+            Routed::View(_)
+        ));
+        router.route(1, Phase::Ended, (220.0, 255.0), || None);
+        // A pinch.
+        router.route(1, Phase::Started, (150.0, 250.0), in_list);
+        router.route(2, Phase::Started, (200.0, 300.0), || None);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 350.0), || None),
+            Routed::View(_)
+        ));
+        router.route(1, Phase::Ended, (150.0, 350.0), || None);
+        router.route(2, Phase::Ended, (200.0, 300.0), || None);
+        // No list around the view.
+        router.route(1, Phase::Started, (150.0, 250.0), on_view);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 350.0), || None),
+            Routed::View(_)
+        ));
     }
 
     #[test]

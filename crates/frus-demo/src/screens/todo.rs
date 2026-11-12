@@ -667,6 +667,7 @@ impl HomeState {
                         link("Kanban board →", "/board"),
                         link("External texture →", "/video"),
                         link("Native views →", "/native"),
+                        link("Web browser →", "/browser"),
                     ]
                     .gap(12.0),
                 ),
