@@ -278,6 +278,8 @@ pub(crate) fn run(commands: &[Command]) {
                 Command::Dispose { view } => {
                     env.call_static_method(class, "dispose", "(I)V", &[JValue::Int(*view)])?;
                 }
+                // frus draws an Android view itself: nothing to clip.
+                Command::Clip { .. } => {}
                 Command::Invoke {
                     view,
                     method,

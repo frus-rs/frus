@@ -513,9 +513,10 @@ pub use physics::{
 };
 pub use placeholder::{Placeholder, PLACEHOLDER_COLOR, PLACEHOLDER_FALLBACK, PLACEHOLDER_STROKE};
 pub use platformview::{
-    platform_view_frame, set_platform_view_frame, AndroidView, PlatformViewCall,
-    PlatformViewController, PlatformViewEvent, PlatformViewPlacement, PlatformViewSpec,
-    UnsupportedView, ANDROID_VIEW_DEFAULT_HEIGHT, PLATFORM_VIEWS_SUPPORTED,
+    platform_view_frame, platform_view_type_available, register_platform_view_type,
+    set_platform_view_frame, AndroidView, PlatformView, PlatformViewCall, PlatformViewController,
+    PlatformViewEvent, PlatformViewPlacement, PlatformViewSpec, UnsupportedView,
+    ANDROID_VIEW_DEFAULT_HEIGHT, PLATFORM_VIEWS_SUPPORTED,
 };
 pub use popover::MenuAnchor;
 pub use portal::{OverlayPortal, Placement};
