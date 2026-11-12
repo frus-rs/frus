@@ -536,19 +536,16 @@ struct MsaaScratch {
     used: bool,
 }
 
-/// What a texture takes in GPU memory, its samples and levels included.
+/// What a texture takes in GPU memory, its samples and levels included. Every texture the
+/// painters keep is four bytes a texel (the glyph atlases are counted on their own).
 fn texture_bytes(texture: &wgpu::Texture) -> u64 {
-    let texel = texture
-        .format()
-        .block_copy_size(Some(wgpu::TextureAspect::All))
-        .unwrap_or(4) as u64;
-    let mut bytes = 0;
+    let mut texels = 0;
     for level in 0..texture.mip_level_count() {
         let w = (texture.width() >> level).max(1) as u64;
         let h = (texture.height() >> level).max(1) as u64;
-        bytes += w * h * texel;
+        texels += w * h;
     }
-    bytes * texture.sample_count() as u64
+    texels * 4 * texture.sample_count() as u64
 }
 
 /// The layer compositing pipeline.
