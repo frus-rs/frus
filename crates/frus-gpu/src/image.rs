@@ -409,6 +409,13 @@ impl ImagePainter {
         ranges
     }
 
+    /// Calls `each` with every texture the cache holds, for the memory count (milestone 796).
+    pub(crate) fn each_texture(&self, mut each: impl FnMut(&wgpu::Texture)) {
+        for cached in self.cache.values() {
+            each(cached.view.texture());
+        }
+    }
+
     /// Ends a frame: evicts the textures no draw of the frame used. Called once a frame,
     /// after the frame's last `prepare_frame`.
     pub(crate) fn end_frame(&mut self) {

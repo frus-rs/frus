@@ -294,7 +294,10 @@ pub(crate) enum Command {
 struct Live {
     view: i32,
     view_type: String,
+    /// Where the frame drew it.
     at: PixelRect,
+    /// Where the native side was last told it is: behind `at` while it moves (milestone 796).
+    placed: PixelRect,
     controller: Option<PlatformViewController>,
     #[cfg(not(android))]
     shape: Option<Shape>,
@@ -305,6 +308,10 @@ struct Live {
 pub(crate) struct PlatformViews {
     live: HashMap<WidgetId, Live>,
     next: i32,
+    /// Whether a view that moves is placed only once it stops (milestone 796): where frus
+    /// draws the view's picture itself (Android), not where the system draws the view over
+    /// frus's surface and its container has to follow every frame (Windows, the web).
+    settle: bool,
 }
 
 impl PlatformViews {
@@ -322,8 +329,19 @@ impl PlatformViews {
             let at = PixelRect::from_logical(want.rect, scale);
             match self.live.get_mut(&want.id) {
                 Some(live) if live.view_type == want.view_type => {
-                    if live.at != at {
-                        live.at = at;
+                    // **On Android, moved once it stops** (milestone 796). frus draws the
+                    // view's image where the frame has it, so its native place only matters
+                    // to the screen reader and the keyboard's popups. Moved on every frame of
+                    // a scroll, the native view was drawn again every frame — Android redraws
+                    // a view that moves in its window — and its image copied and uploaded
+                    // again. A new size is placed at once: the image itself changes.
+                    let settle = self.settle || cfg!(android);
+                    let resized = (at.w, at.h) != (live.placed.w, live.placed.h);
+                    let moved = at != live.placed;
+                    let settled = moved && (!settle || at == live.at);
+                    live.at = at;
+                    if resized || settled {
+                        live.placed = at;
                         commands.push(Command::Place {
                             view: live.view,
                             at,
@@ -377,6 +395,7 @@ impl PlatformViews {
                             view,
                             view_type: want.view_type.to_owned(),
                             at,
+                            placed: at,
                             controller: want.controller.cloned(),
                             #[cfg(not(android))]
                             shape: want.shape.clone(),
@@ -416,6 +435,12 @@ impl PlatformViews {
             }
         }
         commands
+    }
+
+    /// Whether a view moved and has not been placed there yet: one more frame places it once
+    /// it has stopped (milestone 796).
+    pub(crate) fn placing(&self) -> bool {
+        self.live.values().any(|live| live.at != live.placed)
     }
 
     /// Whether no native view exists: then nothing of this is done at all.
@@ -928,6 +953,38 @@ mod tests {
             matches!(&moved[..], [Command::Place { at, .. }] if (at.w, at.h) == first),
             "a move, at the same size"
         );
+    }
+
+    /// **On Android, a view that moves is placed once it stops** (milestone 796): a scroll
+    /// moves it every frame, and each move made Android draw it again and frus copy its image
+    /// again. While it moves nothing is sent, the views say one is still to be placed, and the
+    /// first frame it stays put places it; a new size is sent at once.
+    #[test]
+    fn a_moving_view_is_placed_once_it_stops() {
+        let mut views = PlatformViews {
+            settle: true,
+            ..PlatformViews::default()
+        };
+        views.sync(&[want(1, Rect::new(0.0, 100.0, 200.0, 100.0))], 2.0);
+        for y in [90.0, 80.0, 70.0, 60.0] {
+            let commands = views.sync(&[want(1, Rect::new(0.0, y, 200.0, 100.0))], 2.0);
+            assert!(commands.is_empty(), "nothing while it moves: {commands:?}");
+            assert!(views.placing());
+        }
+        let settled = views.sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 100.0))], 2.0);
+        assert!(
+            matches!(&settled[..], [Command::Place { at, .. }] if at.y == 120),
+            "{settled:?}"
+        );
+        assert!(!views.placing());
+        assert!(views
+            .sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 100.0))], 2.0)
+            .is_empty());
+        let resized = views.sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 150.0))], 2.0);
+        assert!(matches!(&resized[..], [Command::Place { at, .. }] if at.h == 300));
+        // The view's own rectangle follows the frame all along: touches are mapped through it.
+        views.sync(&[want(1, Rect::new(0.0, 30.0, 200.0, 150.0))], 2.0);
+        assert_eq!(views.rect_of(1).map(|r| r.y), Some(60));
     }
 
     const VIEW: PixelRect = PixelRect {

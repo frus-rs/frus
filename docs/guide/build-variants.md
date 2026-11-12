@@ -30,7 +30,9 @@ debug = "line-tables-only"
 
 A project made before it existed builds in profile all the same: `frus` gives cargo that
 profile through its environment. Its frame timings are the ones `FRUS_FRAME_STATS=1` turns on
-in any build (`FRUS_FRAME_STATS=0` turns them off).
+in any build (`FRUS_FRAME_STATS=0` turns them off). Each line ends with the GPU memory the
+renderer holds — its textures and what they take — so a page that leaves memory behind it
+shows from one line to the next.
 
 The code knows its mode:
 
