@@ -137,6 +137,7 @@ pub struct PlatformViewCall {
 struct ControllerState {
     view: Option<i32>,
     calls: Vec<PlatformViewCall>,
+    handles_back: bool,
 }
 
 /// How an application talks to the native view of an [`AndroidView`]: keep one in the
@@ -186,6 +187,18 @@ impl PlatformViewController {
         self.lock().view = view;
     }
 
+    /// Says whether the view would take the system's Back for itself — a web view with a page
+    /// to go back to (milestone 799). While it does and shows, Back is sent to it as a
+    /// `"web.goBack"` call instead of closing the screen.
+    pub fn set_handles_back(&self, handles: bool) {
+        self.lock().handles_back = handles;
+    }
+
+    /// Whether the view takes the system's Back ([`set_handles_back`](Self::set_handles_back)).
+    pub fn handles_back(&self) -> bool {
+        self.lock().handles_back
+    }
+
     /// The calls queued since the last time — for the shell, which sends them to the view.
     pub fn take_calls(&self) -> Vec<PlatformViewCall> {
         std::mem::take(&mut self.lock().calls)
@@ -221,6 +234,8 @@ pub struct PlatformViewPlacement {
     pub visible: Rect,
     /// The application's controller, if it gave one.
     pub controller: Option<PlatformViewController>,
+    /// The innermost scrolling area the widget is in, if any.
+    pub scroll_host: Option<WidgetId>,
     /// How many of each kind of press target had been registered when the widget was:
     /// whatever comes after was drawn over it and takes the presses it covers.
     pub(crate) above: TargetCounts,
@@ -597,6 +612,46 @@ mod tests {
 
     fn frame(tree: &dyn Widget<u8>, rt: &Runtime) -> crate::ui::Ui<u8> {
         build_ui(tree, Size::new(400.0, 300.0), rt, &Theme::default())
+    }
+
+    #[test]
+    fn back_goes_to_a_view_in_sight_that_takes_it_and_not_under_a_dialog() {
+        let controller = PlatformViewController::new();
+        let spec =
+            || Native(PlatformViewSpec::new("frus/webview", "").with_controller(&controller));
+        let rt = Runtime::default();
+        let ui = frame(&Flex::column().child(spec()), &rt);
+        assert!(ui.platform_view_taking_back().is_none(), "no history yet");
+        controller.set_handles_back(true);
+        let ui = frame(&Flex::column().child(spec()), &rt);
+        assert_eq!(
+            ui.platform_view_taking_back()
+                .and_then(|v| v.controller.clone()),
+            Some(controller.clone())
+        );
+        let covered = crate::AlertDialog::new(true)
+            .title("Over it")
+            .on_dismiss(3u8)
+            .body(spec());
+        let ui = frame(&covered, &rt);
+        assert!(ui.platform_view_taking_back().is_none(), "the dialog first");
+    }
+
+    #[test]
+    fn a_view_holding_the_keyboard_is_scrolled_into_sight() {
+        let tree = SingleChildScrollView::new().height(200.0).child(
+            Flex::column()
+                .child(Container::new().height(500.0))
+                .child(native()),
+        );
+        let rt = Runtime::default();
+        let ui = frame(&tree, &rt);
+        let view = &ui.platform_views()[0];
+        let moves = ui.reveal_rect(view.rect, view.scroll_host, &rt);
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        let (_, offset) = moves[0];
+        // Its bottom at the viewport's: 500 + 100 - 200.
+        assert_eq!(offset, (0.0, 400.0));
     }
 
     #[test]

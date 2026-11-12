@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 799 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Web views** (J799). `WebViewController` loads requests (headers, `POST`), HTML, files and
+  assets; reloads and moves in the history; runs JavaScript, with or without its result (a
+  future); opens JavaScript channels the page posts to; sets the JavaScript mode, the user agent,
+  the background and zoom; clears the cache and the local storage; and holds the page's address,
+  title, progress and history, notifying on each change. `NavigationDelegate` hears the page
+  starting, progressing, finishing, failing (`WebResourceError`, `HttpResponseError`), changing
+  its address, and decides each navigation. `WebViewWidget` shows the controller's page; the
+  controller owns it, so a widget built again shows the same page with its history.
+  `WebViewCookieManager` sets and clears cookies. The system's Back goes back in the page while
+  it can. Android only for now; elsewhere the widget shows its stand-in. Native views on
+  Android: a drag on a view inside a frus list goes to the list once the view's content cannot
+  follow it, and a focused native view is scrolled above the keyboard. Demo: `/browser`.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

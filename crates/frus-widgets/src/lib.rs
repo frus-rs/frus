@@ -242,6 +242,7 @@ mod ui;
 mod undo;
 mod visualdensity;
 mod wavy;
+mod webview;
 mod wheel;
 mod widget;
 mod widgetstate;
@@ -665,6 +666,14 @@ pub use visualdensity::VisualDensity;
 pub use wavy::{
     wavy_amplitude, CircularWavyProgressIndicator, LinearWavyProgressIndicator, WavyProgressTheme,
     WavySliderTrackShape,
+};
+pub use webview::{
+    handle_web_view_global_event, take_web_view_calls, web_view_cookies_cleared, web_view_wire,
+    CookiesCleared, HttpResponseError, JavaScriptMessage, JavaScriptMode, JavaScriptResult,
+    NavigationDecision, NavigationDelegate, NavigationRequest, UrlChange, WeakWebViewController,
+    WebMethod, WebRequest, WebResourceError, WebResourceErrorType, WebViewController,
+    WebViewCookie, WebViewCookieManager, WebViewError, WebViewWidget, WEB_VIEWS_SUPPORTED,
+    WEB_VIEW_DEFAULT_HEIGHT, WEB_VIEW_TYPE,
 };
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
 pub use widget::{

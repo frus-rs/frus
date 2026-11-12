@@ -63,6 +63,9 @@ pub struct GuideShaders;
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
 #[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/webview.md")]
+pub struct GuideWebView;
+#[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/build-variants.md")]
 pub struct GuideBuildVariants;
 #[cfg(all(doctest, feature = "testing"))]

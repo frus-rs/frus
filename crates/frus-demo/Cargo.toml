@@ -113,6 +113,10 @@ name = "android.permission.VIBRATE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_NETWORK_STATE"
 
+# The browser screen (milestone 799) loads pages from the internet.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
 [[package.metadata.android.application.activity.intent_filter]]
 actions = ["android.intent.action.VIEW"]
 categories = ["android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"]
