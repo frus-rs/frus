@@ -46,6 +46,19 @@ any release may break.
   `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
   application that names an activity of its own keeps it; a package made by hand with
   `cargo apk` runs in the native activity as before.
+- **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
+  build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
+  assets; reloads and moves in the history; runs JavaScript, with or without its result (a
+  future); opens JavaScript channels the page posts to; sets the JavaScript mode, the user agent,
+  the background and zoom; clears the cache and the local storage; and holds the page's address,
+  title, progress and history, notifying on each change. `NavigationDelegate` hears the page
+  starting, progressing, finishing, failing (`WebResourceError`, `HttpResponseError`), changing
+  its address, and decides each navigation. `WebViewWidget` shows the controller's page; the
+  controller owns it, so a widget built again shows the same page with its history.
+  `WebViewCookieManager` sets and clears cookies. The system's Back goes back in the page while
+  it can. Android only for now; elsewhere the widget shows its stand-in. Native views on
+  Android: a drag on a view inside a frus list goes to the list once the view's content cannot
+  follow it, and a focused native view is scrolled above the keyboard. Demo: `/browser`.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown
