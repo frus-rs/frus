@@ -168,6 +168,11 @@ manifest in the package names `dev.frus.FrusActivity` with `launchMode="singleTo
   activity: `the running activity was handed a link (com.frus.data:/callback)`, then `auth:
   Signed in: access token …, refresh token kept, ID token checked`. Same pid; the server counted
   one authorization and one token exchange, no PKCE failure.
+- **Again after moving the reading into Java** (`FrusIntents`, see Size): the share, both links
+  and the custom-scheme sign-in repeated on the phone with the new package — one process
+  (pid 6393) throughout, `location /signin`, `location /notes`, the shared text in the note
+  field, Chrome's `flg=0x14000000` link delivered to the running activity and `auth: Signed
+  in … ID token checked`; one authorization and one token exchange on the server.
 - **A notification's tap**: **Notify** posted one, the application went to the background
   (Home), and a tap in the shade started the launcher's intent with
   `NEW_TASK | SINGLE_TOP` — `result: 2`, delivered to the running activity, no new process (pid
