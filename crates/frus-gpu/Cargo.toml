@@ -22,6 +22,13 @@ bundled-italic = ["frus-text/bundled-italic"]
 bundled-mono = ["frus-text/bundled-mono"]
 bundled-arabic = ["frus-text/bundled-arabic"]
 dictionary-line-breaks = ["frus-text/dictionary-line-breaks"]
+# Android (milestone 800): video and camera frames imported into Vulkan as hardware buffers,
+# without a copy. Off by default, so that an application with no video pays no byte for it.
+hardware-buffers = ["dep:ash"]
+# A custom shader's GPU pipeline compiled on a thread of the renderer's as soon as the shader
+# is loaded, so the first frame that shows it does not wait for the driver (milestone 800). Off
+# by default, so that an application with no shader pays no byte for it.
+warm-shaders = ["frus-core/warm-shaders"]
 
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.5" }
@@ -43,6 +50,11 @@ pollster.workspace = true
 # for. The same naga wgpu builds for those backends; Apple's systems draw through Metal only.
 [target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+
+# Android (milestone 800): hardware buffers imported into Vulkan without a copy. The `ash`
+# wgpu's Vulkan backend is built on, already in every Android build.
+[target.'cfg(target_os = "android")'.dependencies]
+ash = { version = "0.38", optional = true }
 
 # The Web (milestone 745): WebGL 2 behind WebGPU, for the browsers that offer no WebGPU —
 # Chrome on Android before Android 12, a GPU the browser blocks. For wasm32 only: native

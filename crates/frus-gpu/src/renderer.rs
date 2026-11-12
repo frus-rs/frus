@@ -317,6 +317,10 @@ impl Renderer {
         let pipelines = pipelines_started.elapsed();
         // Warms every pipeline before the first real frame, to avoid jank.
         let warm_up_started = web_time::Instant::now();
+        // The application's shaders loaded so far start compiling on a thread of their own
+        // while the built-in pipelines are warmed here, and every shader loaded later as it
+        // is loaded (milestone 800).
+        painters.warm_shaders();
         painters.warm_up(&device, &queue, render_format);
         // Kept once the warm-up has built what drivers build lazily, so the next launch finds
         // every pipeline of a frame.
@@ -487,18 +491,29 @@ pub(crate) async fn request_device(
         wgpu::Limits::downlevel_webgl2_defaults()
     };
     let required_limits = downlevel.using_resolution(adapter.limits());
-    Ok(adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("frus.device"),
-            // The GPU's own clock where it has one, for the frame statistics
-            // (milestone 612). Nothing is asked of a device that has not.
-            required_features: adapter.features()
-                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
-            required_limits,
-            memory_hints: wgpu::MemoryHints::Performance,
-            ..Default::default()
-        })
-        .await?)
+    let descriptor = wgpu::DeviceDescriptor {
+        label: Some("frus.device"),
+        // The GPU's own clock where it has one, for the frame statistics
+        // (milestone 612). Nothing is asked of a device that has not.
+        required_features: adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
+        required_limits,
+        memory_hints: wgpu::MemoryHints::Performance,
+        ..Default::default()
+    };
+    // On Android, a Vulkan device that can import hardware buffers where the GPU offers it:
+    // video and camera frames are then shown without a copy (milestone 800). Any other
+    // device copies them, which needs nothing. Behind the `hardware-buffers` feature.
+    #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+    if adapter.get_info().backend == wgpu::Backend::Vulkan {
+        if let Some(opened) = crate::hardware::open_device(adapter, &descriptor) {
+            frus_core::textures().set_hardware_buffers(true);
+            return Ok(opened);
+        }
+    }
+    let opened = adapter.request_device(&descriptor).await?;
+    frus_core::textures().set_hardware_buffers(false);
+    Ok(opened)
 }
 
 /// Whether the Vulkan this device offers is unusable: only the Android emulator's (gfxstream, the

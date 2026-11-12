@@ -12,7 +12,12 @@
 //! - an RGBA frame is written straight into the sampled texture;
 //! - a BGRA, NV12 or I420 frame is written into plane textures of its own layout, then
 //!   turned into RGBA by one pass of `external.wgsl` (the YUV to RGB conversion runs on
-//!   the GPU, with the frame's colour space).
+//!   the GPU, with the frame's colour space);
+//! - a frame in a hardware buffer (Android) is not copied at all: the buffer is imported
+//!   into Vulkan and drawn into the RGBA texture by the pass of `hardware.rs`
+//!   (milestone 800).
+
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use frus_core::{PixelFormat, TextureFrame, YuvColorSpace};
@@ -113,6 +118,8 @@ struct Shape {
     width: u32,
     height: u32,
     format: PixelFormat,
+    /// The frame lies in a hardware buffer, imported rather than copied.
+    hardware: bool,
 }
 
 impl Shape {
@@ -121,6 +128,7 @@ impl Shape {
             width: frame.width(),
             height: frame.height(),
             format: frame.format(),
+            hardware: frame.hardware_buffer().is_some(),
         }
     }
 }
@@ -132,6 +140,9 @@ pub(crate) struct ExternalSlot {
     texture: wgpu::Texture,
     planes: Vec<wgpu::Texture>,
     convert: Option<(wgpu::Buffer, wgpu::BindGroup, Params)>,
+    /// For a frame in a hardware buffer: what imports it and draws it into `texture`.
+    #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+    hardware: Option<crate::hardware::Target>,
     /// The generation of the frame the texture holds.
     pub(crate) generation: u64,
 }
@@ -147,6 +158,10 @@ impl ExternalSlot {
 /// The conversion pipeline, made the first time a frame needs it.
 pub(crate) struct ExternalUploader {
     convert: Option<Converter>,
+    /// What imports hardware buffers on this device, looked for at the first such frame:
+    /// `Some(None)` when the device cannot.
+    #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+    importer: Option<Option<Arc<crate::hardware::Importer>>>,
 }
 
 struct Converter {
@@ -158,19 +173,30 @@ struct Converter {
 
 impl ExternalUploader {
     pub(crate) fn new() -> Self {
-        Self { convert: None }
+        Self {
+            convert: None,
+            #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+            importer: None,
+        }
     }
 
     /// Brings `slot` up to `frame`: writes it into the textures there when they fit,
     /// makes new ones when they do not. Answers whether the sampled texture is a new one —
-    /// its bind groups must then be made again.
+    /// its bind groups must then be made again — or `None` when the frame cannot be shown
+    /// here (a hardware buffer this device cannot import), the slot then left as it was.
     pub(crate) fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         slot: &mut Option<ExternalSlot>,
-        frame: &TextureFrame,
-    ) -> bool {
+        frame: &Arc<TextureFrame>,
+    ) -> Option<bool> {
+        if frame.hardware_buffer().is_some() {
+            #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+            return self.update_hardware(device, queue, slot, frame);
+            #[cfg(not(all(target_os = "android", feature = "hardware-buffers")))]
+            return None;
+        }
         let shape = Shape::of(frame);
         let fresh = slot.as_ref().is_none_or(|s| s.shape != shape);
         if fresh {
@@ -195,7 +221,116 @@ impl ExternalUploader {
             converter.run(device, queue, bind_group, &slot.texture);
         }
         slot.generation = frame.generation();
-        fresh
+        Some(fresh)
+    }
+
+    /// [`ExternalUploader::update`] for a frame in a hardware buffer: imported and drawn into
+    /// the slot's texture, no pixel copied by the CPU.
+    #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+    fn update_hardware(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot: &mut Option<ExternalSlot>,
+        frame: &Arc<TextureFrame>,
+    ) -> Option<bool> {
+        let importer = self
+            .importer
+            .get_or_insert_with(|| crate::hardware::Importer::new(device, queue))
+            .clone();
+        let Some(importer) = importer else {
+            log::warn!("a hardware buffer frame reached a renderer that cannot import it");
+            return None;
+        };
+        let shape = Shape::of(frame);
+        let fresh = slot.as_ref().is_none_or(|s| s.shape != shape);
+        if fresh {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frus.external.hardware"),
+                size: wgpu::Extent3d {
+                    width: shape.width,
+                    height: shape.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: mipmap::FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // The import pass writes the sRGB bytes as they are, through a plain view.
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            });
+            // Made, cleared and made ready for sampling by wgpu itself, once: from then on
+            // the import pass leaves it the way wgpu believes it is.
+            self.prime(device, queue, &texture);
+            let target =
+                crate::hardware::Target::new(&importer, &texture, shape.width, shape.height)?;
+            *slot = Some(ExternalSlot {
+                shape,
+                texture,
+                planes: Vec::new(),
+                convert: None,
+                hardware: Some(target),
+                generation: 0,
+            });
+        }
+        let slot = slot.as_mut()?;
+        slot.hardware.as_mut()?.draw(device, frame);
+        // A frame that could not be drawn is not tried again: it said why, once.
+        slot.generation = frame.generation();
+        Some(fresh)
+    }
+
+    /// Samples `texture` once through wgpu, into a 1×1 picture nobody looks at: wgpu then
+    /// holds it initialised and ready for sampling.
+    #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+    fn prime(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) {
+        let converter = self.convert.get_or_insert_with(|| Converter::new(device));
+        let params = Params {
+            mode: u32::MAX,
+            ..Params::zeroed()
+        };
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("frus.external.prime"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let blank = converter
+            .blank
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("frus.external.prime"),
+            layout: &converter.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&blank),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&blank),
+                },
+            ],
+        });
+        let target = new_texture(
+            device,
+            "frus.external.prime_target",
+            1,
+            1,
+            mipmap::FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        converter.run(device, queue, &bind_group, &target);
     }
 
     fn make(&mut self, device: &wgpu::Device, shape: Shape) -> ExternalSlot {
@@ -283,6 +418,8 @@ impl ExternalUploader {
             texture,
             planes,
             convert,
+            #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+            hardware: None,
             generation: 0,
         }
     }

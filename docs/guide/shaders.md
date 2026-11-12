@@ -201,7 +201,16 @@ list) tell themselves apart with `.key(n)`, each with its own picture and state.
 ## Costs
 
 A shader filling a box is one draw, with no texture in between. A mask, a shaded path or a
-text renders its content into a layer first, as any group does. The pipeline is compiled the
-first time a shader is drawn (a few milliseconds, once) and kept, in the device's pipeline
-cache where there is one, so the next launch finds it ready. A full-screen shader is
-measured in `docs/milestone-792.md`.
+text renders its content into a layer first, as any group does.
+
+With the `warm-shaders` feature of `frus` (off by default, so that an application with no
+shader pays no byte for it), the GPU pipeline is **compiled ahead**: the moment
+`Shader::from_wgsl` loads a new text, the renderer starts compiling it on a thread of its own, and the first frame that shows the shader
+finds it ready (or waits only for what is left). Load your shaders early, before the screen
+that shows them (in `main`, or in the `init_state` of a page that comes before), and the
+first frame pays nothing; a shader first loaded in the `build` of the frame that shows it
+still overlaps its compilation with the rest of that frame. Without the feature the pipeline
+is compiled at the first frame that draws the shader. The pipeline is kept, in the
+device's pipeline cache where there is one, so the next launch finds it ready. On the Web,
+where there is no such thread, it is compiled at its first frame. A full-screen shader is
+measured in `docs/milestone-792.md`, the warm-up in `docs/milestone-800.md`.

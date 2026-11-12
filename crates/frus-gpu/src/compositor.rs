@@ -1525,6 +1525,18 @@ impl Painters {
         self.composite.custom.take_new_pipelines()
     }
 
+    /// Sends newly loaded shaders to be compiled ahead of their first frame (milestone 800).
+    /// From then on, each shader starts compiling as it is loaded.
+    pub(crate) fn warm_shaders(&mut self) {
+        let _ = self.composite.custom.warm_shaders();
+    }
+
+    /// The custom shader painter, for its tests.
+    #[cfg(test)]
+    pub(crate) fn custom_mut(&mut self) -> &mut crate::custom::CustomPainter {
+        &mut self.composite.custom
+    }
+
     /// The staging texture a frame with backdrops is built in, created on demand and
     /// recreated on resize. It exists because a backdrop has to *read* the frame so
     /// far, and a surface texture cannot be read.

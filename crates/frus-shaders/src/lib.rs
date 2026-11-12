@@ -215,7 +215,13 @@ impl State for GalleryState {
     }
 }
 
-frus::main!(FrusApp::stateful(Gallery).title("frus — shaders"));
+frus::main!({
+    // Loaded before the window opens: their pipelines compile on a thread of the renderer's
+    // while it starts, and the first frame finds them ready (milestone 800).
+    let _ = Shader::from_wgsl(PLASMA);
+    let _ = Shader::from_wgsl(SHIMMER);
+    FrusApp::stateful(Gallery).title("frus — shaders")
+});
 
 #[cfg(test)]
 mod tests {

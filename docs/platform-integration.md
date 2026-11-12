@@ -79,7 +79,8 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   thread pushes RGBA, BGRA, NV12 or I420 frames into, and `frus::Texture::new(id)` shows it
   (every platform). On Android, `frus::TextureSurface` is a `Surface` for `MediaCodec`,
   Camera2 or a media player, from the NDK or from Java, with no JNI of the application's own
-  beyond handing it over. See [the guide](guide/textures.md).
+  beyond handing it over; with the `hardware-buffers` feature, on a Vulkan phone its frames
+  are shown where the decoder wrote them, without a copy. See [the guide](guide/textures.md).
 - **Frames spent on decoration**: a spinner, a placeholder's pulse or any animation marked
   decorative (`Widget::decorative`, `AnimationHandle::decorative()`) is drawn at 30 frames a
   second when nothing else moves, not at the display's rate.

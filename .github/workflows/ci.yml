@@ -266,6 +266,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           cargo test -p frus-gpu
+          cargo test -p frus-gpu --features warm-shaders --lib custom::
           cargo test -p frus-test --lib
           cargo test -p frus-test --test clip --test multiline_scroll --test transforms
 

@@ -28,6 +28,9 @@ mod custom;
 mod external;
 mod filter;
 mod gpu_timer;
+// Hardware buffer frames imported without a copy (milestone 800).
+#[cfg(all(target_os = "android", feature = "hardware-buffers"))]
+mod hardware;
 mod image;
 mod mesh;
 mod mipmap;

@@ -36,7 +36,14 @@
 //! Four layouts are accepted: RGBA and BGRA (8 bits a channel, sRGB) and the two YUV 4:2:0
 //! layouts decoders and cameras produce, NV12 and I420. YUV is converted to RGB on the
 //! GPU, with the [colour space](YuvColorSpace) the producer names.
+//!
+//! A fifth kind of frame is **not copied at all**: a [`HardwareBuffer`] (Android's
+//! `AHardwareBuffer`) that a decoder or a camera wrote, which the renderer samples where it
+//! lies (milestone 800). Only a renderer that can import such buffers accepts them: see
+//! [`TextureRegistry::hardware_buffers`].
 
+use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -271,6 +278,130 @@ impl std::error::Error for TextureError {}
 /// The largest side a frame may have: what every GPU frus runs on can sample.
 pub const MAX_TEXTURE_SIDE: u32 = 8192;
 
+/// **A frame in a platform GPU buffer**, shown without copying its pixels (milestone 800):
+/// on Android an `AHardwareBuffer` a video decoder, a camera or a canvas wrote, which the
+/// renderer imports and samples where it lies.
+///
+/// It holds the buffer until it is dropped, and then runs the `release` it was made with:
+/// the producer's way to take the buffer back (an image reader's `AImage_delete`). The
+/// renderer keeps it until the GPU has finished reading it, so the producer never writes
+/// into a buffer still being drawn.
+///
+/// ```
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// use std::sync::Arc;
+/// use frus_core::HardwareBuffer;
+///
+/// let released = Arc::new(AtomicBool::new(false));
+/// let flag = released.clone();
+/// let mut fake = 0u8; // stands for an `AHardwareBuffer*`
+/// let buffer = unsafe {
+///     HardwareBuffer::new((&mut fake as *mut u8).cast(), 640, 480, move || {
+///         flag.store(true, Ordering::SeqCst)
+///     })
+/// }
+/// .unwrap()
+/// .with_crop(0, 0, 640, 360);
+/// assert_eq!(buffer.visible_size(), (640, 360));
+/// drop(buffer);
+/// assert!(released.load(Ordering::SeqCst));
+/// ```
+pub struct HardwareBuffer {
+    buffer: NonNull<c_void>,
+    width: u32,
+    height: u32,
+    crop: [u32; 4],
+    release: Option<Box<dyn FnOnce() + Send>>,
+}
+
+// The pointer is only handed to the renderer, which reads the buffer through it; the release
+// runs once, from `Drop`, which has the buffer to itself.
+unsafe impl Send for HardwareBuffer {}
+unsafe impl Sync for HardwareBuffer {}
+
+impl std::fmt::Debug for HardwareBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HardwareBuffer")
+            .field("buffer", &self.buffer)
+            .field("size", &(self.width, self.height))
+            .field("crop", &self.crop)
+            .finish()
+    }
+}
+
+impl HardwareBuffer {
+    /// A buffer of `width × height` pixels; `None` for a null pointer. `release` runs when
+    /// the frame is no longer needed, on whichever thread drops it last.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be a valid `AHardwareBuffer*` of that size, and the producer must
+    /// neither free it nor write into it until `release` has run.
+    pub unsafe fn new(
+        buffer: *mut c_void,
+        width: u32,
+        height: u32,
+        release: impl FnOnce() + Send + 'static,
+    ) -> Option<Self> {
+        Some(Self {
+            buffer: NonNull::new(buffer)?,
+            width,
+            height,
+            crop: [0, 0, width, height],
+            release: Some(Box::new(release)),
+        })
+    }
+
+    /// Shows only the rectangle from `(left, top)` to `(right, bottom)`, in the buffer's
+    /// pixels: decoders often hand out buffers larger than the picture. Clamped to the
+    /// buffer; an empty rectangle keeps the whole buffer.
+    ///
+    /// ```
+    /// # let mut fake = 0u8;
+    /// let buffer = unsafe {
+    ///     frus_core::HardwareBuffer::new((&mut fake as *mut u8).cast(), 32, 32, || {})
+    /// }
+    /// .unwrap()
+    /// .with_crop(4, 4, 100, 20);
+    /// assert_eq!(buffer.crop(), [4, 4, 32, 20]);
+    /// ```
+    pub fn with_crop(mut self, left: u32, top: u32, right: u32, bottom: u32) -> Self {
+        let (right, bottom) = (right.min(self.width), bottom.min(self.height));
+        if left < right && top < bottom {
+            self.crop = [left, top, right, bottom];
+        }
+        self
+    }
+
+    /// The `AHardwareBuffer*`.
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.buffer.as_ptr()
+    }
+
+    /// The whole buffer's size, in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The rectangle shown: left, top, right, bottom, in the buffer's pixels.
+    pub fn crop(&self) -> [u32; 4] {
+        self.crop
+    }
+
+    /// The size of the picture shown: the crop's.
+    pub fn visible_size(&self) -> (u32, u32) {
+        (self.crop[2] - self.crop[0], self.crop[3] - self.crop[1])
+    }
+}
+
+impl Drop for HardwareBuffer {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
+    }
+}
+
 /// A frame, as the registry keeps it and the GPU layer reads it.
 #[derive(Debug)]
 pub struct TextureFrame {
@@ -280,6 +411,8 @@ pub struct TextureFrame {
     color_space: YuvColorSpace,
     generation: u64,
     data: Vec<u8>,
+    /// A frame that lies in a platform buffer: no bytes, no planes.
+    hardware: Option<HardwareBuffer>,
 }
 
 /// One plane of a [`TextureFrame`], packed.
@@ -305,6 +438,7 @@ impl TextureFrame {
             color_space: YuvColorSpace::default(),
             generation: 0,
             data: Vec::new(),
+            hardware: None,
         }
     }
 
@@ -334,15 +468,26 @@ impl TextureFrame {
         self.generation
     }
 
-    /// How many planes the layout has: one, two or three.
+    /// The platform buffer the frame lies in, for a frame pushed with
+    /// [`ExternalTexture::push_hardware_buffer`]; `None` for pixels in memory.
+    pub fn hardware_buffer(&self) -> Option<&HardwareBuffer> {
+        self.hardware.as_ref()
+    }
+
+    /// How many planes the layout has: one, two or three; none for a frame in a
+    /// [hardware buffer](Self::hardware_buffer).
     pub fn plane_count(&self) -> usize {
+        if self.hardware.is_some() {
+            return 0;
+        }
         self.format.planes(self.width, self.height).1
     }
 
-    /// Plane `index`, or `None` past the last.
+    /// Plane `index`, or `None` past the last (and always for a frame in a hardware
+    /// buffer, whose pixels are not in memory the CPU reads).
     pub fn plane(&self, index: usize) -> Option<FramePlane<'_>> {
         let (planes, count, _) = self.format.planes(self.width, self.height);
-        if index >= count {
+        if index >= count || self.hardware.is_some() {
             return None;
         }
         let p = planes[index];
@@ -404,6 +549,8 @@ pub struct TextureRegistry {
     /// A frame has been asked for since the shell last started one: further pushes ask
     /// for nothing more.
     pending: AtomicBool,
+    /// A renderer able to import hardware buffers is running.
+    hardware: AtomicBool,
 }
 
 static REGISTRY: TextureRegistry = TextureRegistry::new();
@@ -428,7 +575,34 @@ impl TextureRegistry {
             entries: Mutex::new(Vec::new()),
             wake: Mutex::new(None),
             pending: AtomicBool::new(false),
+            hardware: AtomicBool::new(false),
         }
+    }
+
+    /// Whether frames in [hardware buffers](HardwareBuffer) are shown: the renderer says so
+    /// when its GPU can import them (on Android, a Vulkan device with
+    /// `VK_ANDROID_external_memory_android_hardware_buffer`). A producer that can hand out
+    /// either kind asks this first, and copies planes when the answer is no.
+    ///
+    /// ```
+    /// // No renderer in a doctest: frames are copied.
+    /// assert!(!frus_core::textures().hardware_buffers());
+    /// ```
+    pub fn hardware_buffers(&self) -> bool {
+        self.hardware.load(Ordering::Acquire)
+    }
+
+    /// Says whether the running renderer imports hardware buffers: see
+    /// [`TextureRegistry::hardware_buffers`]. Called by the renderer.
+    ///
+    /// ```
+    /// let registry = frus_core::textures();
+    /// let before = registry.hardware_buffers();
+    /// registry.set_hardware_buffers(before);
+    /// assert_eq!(registry.hardware_buffers(), before);
+    /// ```
+    pub fn set_hardware_buffers(&self, accepted: bool) {
+        self.hardware.store(accepted, Ordering::Release);
     }
 
     /// Creates a texture, empty until its first push. It lives until the returned handle
@@ -776,6 +950,46 @@ impl ExternalTexture {
         })
     }
 
+    /// Pushes a frame that lies in a platform GPU buffer: shown **without copying** its
+    /// pixels (milestone 800). The buffer is released (its `release` run) once the frame is
+    /// replaced and the GPU has finished reading it. `color_space` says how a YUV buffer
+    /// becomes RGB; an RGBA buffer ignores it.
+    ///
+    /// Answers [`TextureError::Unsupported`], and releases the buffer, when no renderer
+    /// imports hardware buffers ([`TextureRegistry::hardware_buffers`]): copy planes then.
+    ///
+    /// ```
+    /// use frus_core::{HardwareBuffer, TextureError, YuvColorSpace};
+    ///
+    /// let texture = frus_core::textures().create();
+    /// let mut fake = 0u8;
+    /// let buffer = unsafe { HardwareBuffer::new((&mut fake as *mut u8).cast(), 64, 64, || {}) };
+    /// let pushed = texture.push_hardware_buffer(buffer.unwrap(), YuvColorSpace::Bt709Limited);
+    /// // No renderer imports them in a doctest.
+    /// assert!(matches!(pushed, Err(TextureError::Unsupported(_))));
+    /// ```
+    pub fn push_hardware_buffer(
+        &self,
+        buffer: HardwareBuffer,
+        color_space: YuvColorSpace,
+    ) -> Result<(), TextureError> {
+        if !self.registry.hardware_buffers() {
+            return Err(TextureError::Unsupported(
+                "this renderer cannot import hardware buffers: push planes",
+            ));
+        }
+        let (width, height) = buffer.visible_size();
+        if width == 0 || height == 0 || width > MAX_TEXTURE_SIDE || height > MAX_TEXTURE_SIDE {
+            return Err(TextureError::BadSize { width, height });
+        }
+        let mut frame = TextureFrame::empty();
+        frame.width = width;
+        frame.height = height;
+        frame.color_space = color_space;
+        frame.hardware = Some(buffer);
+        self.publish(Arc::new(frame))
+    }
+
     fn push_packed(
         &self,
         width: u32,
@@ -836,18 +1050,34 @@ impl ExternalTexture {
         buffer.height = height;
         buffer.format = format;
         buffer.color_space = color_space;
-        {
+        self.publish(frame)
+    }
+
+    /// Makes `frame` the latest, numbered; the frame it replaces goes back to the spares
+    /// (or, for a hardware buffer, is released once nobody holds it any more).
+    fn publish(&self, mut frame: Arc<TextureFrame>) -> Result<(), TextureError> {
+        let replaced = {
             let mut slot = self.entry.slot.lock().map_err(poisoned)?;
-            buffer.generation = self.entry.next_generation.fetch_add(1, Ordering::AcqRel);
-            if let Some(old) = slot.latest.replace(frame) {
+            if let Some(f) = Arc::get_mut(&mut frame) {
+                f.generation = self.entry.next_generation.fetch_add(1, Ordering::AcqRel);
+            }
+            let old = slot.latest.replace(frame);
+            if let Some(old) = &old {
                 if old.generation > self.entry.shown_generation.load(Ordering::Acquire) {
                     self.entry.dropped.fetch_add(1, Ordering::Relaxed);
                 }
-                if slot.spare.len() < SPARE_FRAMES {
-                    slot.spare.push(old);
-                }
             }
-        }
+            match old {
+                Some(old) if slot.spare.len() < SPARE_FRAMES && old.hardware.is_none() => {
+                    slot.spare.push(old);
+                    None
+                }
+                other => other,
+            }
+        };
+        // A hardware buffer is released outside the lock: its producer's release may take
+        // locks of its own.
+        drop(replaced);
         self.entry.pushed.fetch_add(1, Ordering::Relaxed);
         self.registry.request_frame();
         Ok(())
@@ -1135,5 +1365,105 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a, crate::ImageData::external(texture.id(), 1, 4, 4));
         assert_eq!(a.id(), texture.id().as_u64());
+    }
+
+    /// A fake hardware buffer whose release counts into `released`.
+    fn fake_buffer(released: &Arc<AtomicUsize>, w: u32, h: u32) -> HardwareBuffer {
+        let released = released.clone();
+        // Never read: the registry only carries the pointer.
+        let ptr = std::ptr::NonNull::<u8>::dangling().as_ptr().cast();
+        unsafe {
+            HardwareBuffer::new(ptr, w, h, move || {
+                released.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+        .unwrap()
+    }
+
+    #[test]
+    fn hardware_buffers_are_refused_and_released_without_a_renderer_that_imports_them() {
+        let reg = registry();
+        let texture = reg.create();
+        let released = Arc::new(AtomicUsize::new(0));
+        let pushed =
+            texture.push_hardware_buffer(fake_buffer(&released, 8, 8), YuvColorSpace::default());
+        assert!(matches!(pushed, Err(TextureError::Unsupported(_))));
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        assert_eq!(reg.frame_info(texture.id()), None);
+    }
+
+    #[test]
+    fn a_hardware_frame_is_released_when_replaced_unless_a_window_still_holds_it() {
+        let reg = registry();
+        reg.set_hardware_buffers(true);
+        let texture = reg.create();
+        let id = texture.id();
+        let released = Arc::new(AtomicUsize::new(0));
+        let first = fake_buffer(&released, 64, 48).with_crop(0, 0, 60, 40);
+        texture
+            .push_hardware_buffer(first, YuvColorSpace::Bt709Limited)
+            .unwrap();
+        let info = reg.frame_info(id).unwrap();
+        assert_eq!((info.width, info.height, info.generation), (60, 40, 1));
+        // The renderer takes it and holds it while the GPU reads it.
+        let held = reg.latest(id).unwrap();
+        assert!(held.hardware_buffer().is_some());
+        assert_eq!(held.plane_count(), 0);
+        assert!(held.plane(0).is_none());
+        assert_eq!(held.color_space(), YuvColorSpace::Bt709Limited);
+        // Replaced: not released while held, released once the holder lets go.
+        texture
+            .push_hardware_buffer(fake_buffer(&released, 64, 48), YuvColorSpace::default())
+            .unwrap();
+        assert_eq!(released.load(Ordering::SeqCst), 0);
+        drop(held);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        // Replaced before any window took it: released at once, and counted as dropped.
+        texture
+            .push_hardware_buffer(fake_buffer(&released, 64, 48), YuvColorSpace::default())
+            .unwrap();
+        assert_eq!(released.load(Ordering::SeqCst), 2);
+        assert_eq!(texture.stats().dropped, 1);
+        // A copied frame after hardware ones works, and releases the last buffer.
+        texture.push_rgba(1, 1, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(released.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            reg.latest(id).unwrap().plane(0).unwrap().data,
+            &[1, 2, 3, 4]
+        );
+        drop(texture);
+        assert_eq!(released.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_hardware_frame_never_becomes_a_spare() {
+        let reg = registry();
+        reg.set_hardware_buffers(true);
+        let texture = reg.create();
+        let released = Arc::new(AtomicUsize::new(0));
+        for _ in 0..5 {
+            texture
+                .push_hardware_buffer(fake_buffer(&released, 4, 4), YuvColorSpace::default())
+                .unwrap();
+        }
+        // Four replaced, none kept: a spare would hold the producer's buffer forever.
+        assert_eq!(released.load(Ordering::SeqCst), 4);
+        assert!(texture.entry.slot.lock().unwrap().spare.is_empty());
+        drop(texture);
+        assert_eq!(released.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn an_empty_or_huge_hardware_frame_is_refused() {
+        let reg = registry();
+        reg.set_hardware_buffers(true);
+        let texture = reg.create();
+        let released = Arc::new(AtomicUsize::new(0));
+        let huge = fake_buffer(&released, MAX_TEXTURE_SIDE + 1, 4);
+        assert!(matches!(
+            texture.push_hardware_buffer(huge, YuvColorSpace::default()),
+            Err(TextureError::BadSize { .. })
+        ));
+        assert_eq!(released.load(Ordering::SeqCst), 1);
     }
 }

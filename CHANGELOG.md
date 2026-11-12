@@ -8,11 +8,24 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 800 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Video and camera frames without a copy on Android, shaders compiled ahead** (J800). Where
+  the GPU can import Android's hardware buffers (Vulkan with
+  `VK_ANDROID_external_memory_android_hardware_buffer` and the sampler Y'CbCr conversion), the
+  renderer opens its device with them, a `TextureSurface` hands out GPU buffers in the
+  decoder's or the camera's own format, and each frame is read by the GPU where the producer
+  wrote it, YUV converted as it is read: no plane is copied by the CPU (feature
+  `hardware-buffers` of `frus`, off by default). The copying path stays
+  for OpenGL ES, Android 7 and GPUs without the extensions, chosen at run time. A frame's buffer
+  goes back to the producer only once the GPU has read it. `ExternalTexture::push_hardware_buffer`
+  and `HardwareBuffer` let a producer of its own hand buffers over; `textures().hardware_buffers()`
+  says whether the renderer imports them. With the `warm-shaders` feature, `Shader::from_wgsl`
+  starts compiling the shader's GPU pipeline at once, on a thread of the renderer's: the first
+  frame that shows a shader finds its pipeline ready instead of waiting for the driver.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown
