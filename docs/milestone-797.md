@@ -170,9 +170,43 @@ See the sections below; numbers are from the runs described.
 - `widgets.rs`: the time format; the track's played and downloaded fractions.
 - The guide (`docs/guide/video.md`) compiles as doctests (`cargo test -p frus --features video
   --doc`).
+- `widgets.rs`, through the shell's windowless driver (`Driver`): the play button takes its tap
+  and pauses (a tap area under it took it before), the bar has the room between the two times
+  and seeks where it is pressed (it had none, the times touching, and seeked to 0), and once the
+  controls have hidden, a tap brings them back and a second tap on the button pauses.
 
-RESULTS_PLACEHOLDER
+### Windows
+
+An ignored test opens a real clip through Media Foundation: 120 pictures of 320 x 240 reach the
+texture, and the clip ends.
+
+### On the test phone (Mali-G51), release APK
+
+- The built-in clip plays at 34 fps, the app taking 52% of one core; paused, idle on the home
+  screen, and after leaving the player: 0.0%.
+- PSS 134 MB on the home screen, 291 MB playing (200 MB of it graphics), 285 MB after.
+- An HLS stream at 1080p plays (77-88% of a core). In the background the clip pauses; it plays
+  again on return.
+- Two bugs were found there and not by the tests, fixed and each covered by a driver test since:
+  the centre button did not pause (a tap area took its tap), and the progress bar had zero
+  width inside the controls' row.
+- A third report, the second tap of "show the controls, then pause" seemingly lost, was the
+  script: each `adb shell input` takes about 1.4 s to start on this phone, so the second tap
+  landed after the controls had hidden again and showed them instead. Both taps sent in one
+  shell pause the clip; the driver test keeps the sequence.
+
+### Size
+
+An application without the `video` feature pays nothing: `frus-hello`'s release library for
+Android is 14,456,328 bytes on this branch and on master. The Java side is a dex of its own
+(`assets/frus_video.dex`, 7,224 bytes), loaded only by the feature, so `frus_input.dex` is
+unchanged.
 
 ## Not done
 
-NOTDONE_PLACEHOLDER
+- macOS, Linux and iOS (`VideoError::Unsupported`), see above.
+- Pictures are copied through the CPU on Windows and the web; a GPU-to-GPU path (shared
+  textures, `importExternalTexture`) would cut that copy.
+- Subtitles, audio tracks, DRM and picture-in-picture.
+- A large network MP4 (158 MB, no fast start) did not open within 25 s on the phone: `MediaPlayer`
+  reads up to the index at the file's end first. The demo uses a small clip.
