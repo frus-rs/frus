@@ -101,7 +101,7 @@ fn path_bounds(path: &Path) -> Rect {
 }
 
 /// What a primitive covers, and which pipeline draws it.
-fn footprint(primitive: &Primitive) -> Option<(Kind, Rect)> {
+pub(crate) fn footprint(primitive: &Primitive) -> Option<(Kind, Rect)> {
     match primitive {
         // Exactly its rectangle. A shadow's `blur` softens the edge *inside* the quad
         // — the shader ramps the alpha across it and nothing is rasterised beyond —

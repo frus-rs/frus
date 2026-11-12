@@ -668,6 +668,7 @@ impl HomeState {
                         link("External texture →", "/video"),
                         link("Video player →", "/player"),
                         link("Native views →", "/native"),
+                        link("Web browser →", "/browser"),
                     ]
                     .gap(12.0),
                 ),

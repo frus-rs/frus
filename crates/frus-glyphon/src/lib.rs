@@ -11,7 +11,8 @@
 //!
 //! frus's copy of glyphon 0.12.0: the fragment shader has an input struct of its own, so the
 //! vertex output's `@invariant` does not reach OpenGL ES, which refuses it once translated.
-//! Everything else is glyphon's, unchanged — see the crate's README.
+//! `TextAtlas::sizes` is frus's too, for the renderer's memory count. Everything else is
+//! glyphon's, unchanged — see the crate's README.
 
 mod cache;
 mod custom_glyph;

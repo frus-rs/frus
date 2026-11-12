@@ -61,3 +61,27 @@ pub use frus_core::{Color, Rect, Scene};
 pub use offscreen::{render_offscreen, OffscreenFrame};
 pub use pipeline_cache::set_pipeline_cache_dir;
 pub use renderer::{backdrop, RenderOutcome, RenderTimings, Renderer, StartupTimes};
+
+/// **The GPU memory a renderer holds** (milestone 796): what a page leaves behind it, made
+/// visible so that it cannot grow unseen. See [`Renderer::gpu_memory`].
+///
+/// ```
+/// let memory = frus_gpu::GpuMemory::default();
+/// assert_eq!(memory.megabytes(), 0.0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuMemory {
+    /// The textures the renderer keeps from one frame to the next: layers kept as they
+    /// were drawn, multisampled targets, images, glyph atlases, GPU passes' pictures.
+    pub textures: u32,
+    /// What those textures take, in bytes. A multisampled target the GPU keeps in its tile
+    /// memory (a phone's) takes nothing and counts for nothing.
+    pub bytes: u64,
+}
+
+impl GpuMemory {
+    /// [`bytes`](Self::bytes) in mebibytes.
+    pub fn megabytes(&self) -> f32 {
+        self.bytes as f32 / (1024.0 * 1024.0)
+    }
+}

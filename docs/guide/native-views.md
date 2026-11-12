@@ -70,9 +70,11 @@ fn help_page() -> Box<dyn Widget> {
 - **Size.** The view takes the whole width it is given and 300 pixels of height, unless
   `.width()` and `.height()` say otherwise. It is sized like any other box, so it can sit in a
   `Row`, an `Expanded` or a scrolling list.
-- **Lifetime.** The view is made the first time the widget is laid out. It is moved or resized
-  only on the frames where its box changes, and dropped when the widget leaves the tree. A
-  view scrolled out of sight is kept. A list that builds only the rows on screen drops the
+- **Lifetime.** The view is made the first time the widget is laid out. It is resized on the
+  frame its size changes and moved with its box — on Android once the box has stopped moving,
+  since frus draws its image where the frame has it and a view moved every frame of a scroll
+  would be drawn again every frame — and dropped when the widget leaves the tree. A view
+  scrolled out of sight is kept. A list that builds only the rows on screen drops the
   view with its row, as it drops any other row.
 - **Calls and events.** `PlatformViewController::invoke(method, arguments)` calls the view.
   Calls made before the view exists wait for it, in order. The view answers through events:
@@ -98,6 +100,10 @@ and its history to itself (`evaluateJavascript` then answers `null`, and `goBack
 nothing). HTML given to the view, and pages of the application's own site, have none of these
 limits.
 
+For a web page, `WebViewController` and `WebViewWidget` do all of this and more: history,
+navigation decisions, JavaScript channels, cookies, and Back going back in the page. See
+[Web pages inside the page](webview.md).
+
 ## How the view behaves among frus widgets
 
 ### On Android
@@ -106,13 +112,17 @@ limits.
   draws over it covers it: a dialog, a menu, a snack bar, a floating button. A page scrolling
   under it moves it in the same frame, with no lag.
 - **Touches.** A press that lands on the view goes to the view, unless something frus drew over
-  it takes presses there (a dialog's barrier, a button laid over the view). The whole gesture
-  is then the view's, from the press to the last finger lifted: a drag that starts on a web
-  view scrolls the web page, not the frus list around it. A gesture that starts in frus stays in
+  it takes presses there (a dialog's barrier, a button laid over the view). The gesture is
+  then the view's. With the `webview` feature, a web view inside a frus scrolling list keeps
+  a one-finger drag only while its page can follow it: a page at its top pulled down, or a
+  page that does not scroll at all, gives the drag to the list, and so does a page that
+  reaches its edge mid-drag. A pinch stays the view's. A gesture that starts in frus stays in
   frus, even when it moves over the view.
 - **Keyboard.** A native text field, or a field in a web page, opens the keyboard as it would
-  in any Android application. A press anywhere in frus takes the focus away from it, and a
-  frus text field taking the focus takes the keyboard back.
+  in any Android application (with the `webview` feature, the view is scrolled above the
+  keyboard as a frus field is).
+  A press anywhere in frus takes the focus away from it, and a frus text field taking the
+  focus takes the keyboard back.
 - **Screen readers.** TalkBack reads the view's own content where the view is drawn, in the
   order of the page. `.semantic_label()` names the view first.
 

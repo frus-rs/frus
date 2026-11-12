@@ -126,6 +126,23 @@ impl TextPainter {
         }
     }
 
+    /// Starts a frame: the glyphs no draw of the last frame used may be evicted from the
+    /// atlas again (milestone 796). Without it every glyph ever drawn stayed marked in use,
+    /// so the atlas could never reuse a place and doubled instead, and kept its largest
+    /// size: each new page with new sizes of text grew the GPU memory for good. Called once
+    /// a frame, before its first `prepare_frame` (a group's included), never between two:
+    /// a later batch must not evict what an earlier one of the same frame drew with.
+    pub(crate) fn begin_frame(&mut self) {
+        self.atlas.trim();
+    }
+
+    /// The atlas textures' size in bytes: the mask atlas (one byte a texel) and the colour
+    /// atlas (four), each square.
+    pub(crate) fn atlas_bytes(&self) -> u64 {
+        let (mask, color) = self.atlas.sizes();
+        mask as u64 * mask as u64 + color as u64 * color as u64 * 4
+    }
+
     /// Makes sure there are at least `count` renderers to prepare into.
     fn ensure_renderers(&mut self, device: &wgpu::Device, count: usize) {
         while self.renderers.len() < count {

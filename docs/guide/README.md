@@ -26,6 +26,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [Video, camera and other external pictures](textures.md) | Showing frames a decoder, a camera or a native view makes; pushing RGBA and YUV; Android's surface for `MediaCodec` and Java plugins |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
 | [Native views inside the page](native-views.md) | A web view, a map or any Android view inside a frus page; writing a factory for a plugin |
+| [Web pages inside the page](webview.md) | `WebViewController` and `WebViewWidget`: load pages, history, JavaScript and its channels, navigation decisions, cookies |
 | [Structuring an application](../app-structure.md) | Where each part of a growing application goes |
 
 Beyond the guide:

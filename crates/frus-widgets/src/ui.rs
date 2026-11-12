@@ -984,6 +984,27 @@ impl<Msg: Clone> Ui<Msg> {
         (!covered).then_some(view)
     }
 
+    /// The native view the system's Back goes to (milestone 799): the topmost one in sight
+    /// whose controller [takes it](crate::PlatformViewController::handles_back) — a web page
+    /// with a page to go back to — unless something frus drew over it covers its middle (a
+    /// dialog, a menu).
+    #[cfg(feature = "webview")]
+    pub fn platform_view_taking_back(&self) -> Option<&crate::PlatformViewPlacement> {
+        let view = self.platform_views.iter().rev().find(|view| {
+            view.visible.width > 0.0
+                && view.visible.height > 0.0
+                && view
+                    .controller
+                    .as_ref()
+                    .is_some_and(|controller| controller.handles_back())
+        })?;
+        let middle = Point::new(
+            view.visible.x + view.visible.width / 2.0,
+            view.visible.y + view.visible.height / 2.0,
+        );
+        (self.platform_view_at(middle).map(|v| v.id) == Some(view.id)).then_some(view)
+    }
+
     /// What frus painted **over** native view `view` (milestone 802): the boxes of the
     /// overlays opened after it (the whole window under a dialog's scrim) and of the press
     /// targets laid over it — a button in a `Stack` over the view. A view hosted above frus's
@@ -1534,6 +1555,35 @@ impl<Msg: Clone> Ui<Msg> {
         let mut moves = Vec::new();
         // Regions nest a handful deep at most. The bound is a backstop against a chain
         // that loops, which cannot happen and would hang the frame if it did.
+        for _ in 0..16 {
+            let Some(hid) = host else { break };
+            let Some(area) = self.scrollables.iter().find(|area| area.id == hid) else {
+                break;
+            };
+            let current = runtime.scroll.get(&hid).copied().unwrap_or((0.0, 0.0));
+            let (offset, shift) = area.reveal(target, current);
+            if shift.0 != 0.0 || shift.1 != 0.0 {
+                target = target.translate(shift.0, shift.1);
+                moves.push((hid, offset));
+            }
+            host = area.host;
+        }
+        moves
+    }
+
+    /// The scrolls that bring `target` (a box of the frame, in logical pixels) into sight
+    /// inside `host`, the innermost scrolling area it is in, and the areas around that one,
+    /// as [`reveal`](Self::reveal) does for a focusable: what brings a native view holding
+    /// the keyboard above it (milestone 799).
+    pub fn reveal_rect(
+        &self,
+        target: Rect,
+        host: Option<WidgetId>,
+        runtime: &crate::Runtime,
+    ) -> Vec<(WidgetId, (f32, f32))> {
+        let mut target = target;
+        let mut host = host;
+        let mut moves = Vec::new();
         for _ in 0..16 {
             let Some(hid) = host else { break };
             let Some(area) = self.scrollables.iter().find(|area| area.id == hid) else {
@@ -4343,6 +4393,8 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 rect: draw_rect,
                 visible: shown,
                 controller: spec.controller().cloned(),
+                #[cfg(feature = "webview")]
+                scroll_host: self.scroll_host,
                 above: crate::platformview::TargetCounts {
                     hits: self.hits.len(),
                     long_presses: self.long_presses.len(),
