@@ -17,6 +17,14 @@
 //! scroll 34, glow 22, anims 3, ink 1)
 //! ```
 //!
+//! A line closes with the GPU memory the renderer holds (milestone 796): its textures and
+//! what they take, so that a page that leaves memory behind it shows from one line to the
+//! next:
+//!
+//! ```text
+//! …; GPU memory 31.6 MB in 9 textures
+//! ```
+//!
 //! The intervals say how smooth it was; the stages say where a slow frame went. Rendering
 //! is split once more, because the wait for a surface image and the drawing are the CPU's,
 //! and what is left of the render is the CPU held back by a GPU still on earlier frames.
@@ -178,7 +186,19 @@ impl FrameStats {
 
     /// A frame that began at `start` and cost `costs`. Returns the line logged, if this
     /// frame closed a run's window.
+    #[cfg(test)]
     pub(crate) fn frame(&mut self, start: Instant, costs: FrameCosts) -> Option<String> {
+        self.frame_with(start, costs, || None)
+    }
+
+    /// [`frame`](Self::frame), with the renderer's GPU memory, asked only when a line is
+    /// written.
+    pub(crate) fn frame_with(
+        &mut self,
+        start: Instant,
+        costs: FrameCosts,
+        memory: impl FnOnce() -> Option<frus_gpu::GpuMemory>,
+    ) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -204,7 +224,10 @@ impl FrameStats {
         {
             report = self.flush(start).or(report);
         }
-        if let Some(line) = &report {
+        if let Some(line) = report.as_mut() {
+            if let Some(memory) = memory() {
+                line.push_str(&memory_note(&memory));
+            }
             log::info!(target: "frus::frames", "{line}");
         }
         report
@@ -282,6 +305,15 @@ impl FrameStats {
             intervals.len() as f32 / seconds,
         ))
     }
+}
+
+/// The GPU memory, as a frame statistics line ends with it.
+fn memory_note(memory: &frus_gpu::GpuMemory) -> String {
+    format!(
+        "; GPU memory {:.1} MB in {} textures",
+        memory.megabytes(),
+        memory.textures
+    )
 }
 
 /// The median, the 95th percentile and the largest of `values`.
@@ -436,5 +468,34 @@ mod tests {
                 .is_none());
         }
         assert!(stats.costs.is_empty());
+    }
+
+    /// **A line ends with the GPU memory** (milestone 796), asked only when a line is
+    /// written: the textures and their size.
+    #[test]
+    fn a_line_ends_with_the_gpu_memory() {
+        let mut stats = FrameStats::with(true);
+        let mut at = Instant::now();
+        let mut asked = 0;
+        let mut line = None;
+        for _ in 0..130 {
+            at += Duration::from_secs_f32(1.0 / 60.0);
+            let report = stats.frame_with(at, costs(), || {
+                asked += 1;
+                Some(frus_gpu::GpuMemory {
+                    textures: 9,
+                    bytes: 3 * 1024 * 1024,
+                })
+            });
+            if report.is_some() {
+                line = report;
+            }
+        }
+        let line = line.expect("two seconds make a line");
+        assert!(
+            line.ends_with("; GPU memory 3.0 MB in 9 textures"),
+            "{line}"
+        );
+        assert_eq!(asked, 1, "asked once, for the one line");
     }
 }

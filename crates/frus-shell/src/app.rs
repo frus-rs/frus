@@ -1940,6 +1940,11 @@ impl<A: Application> App<A> {
             }
         }
         crate::android_platform_view::run(&commands);
+        // A view that moved this frame is placed on the first frame it stays put: one frame
+        // more after a scroll, or it would wait for whatever drew next.
+        if self.platform_views.placing() {
+            self.request_redraw();
+        }
     }
 
     /// Takes in what the native views sent since the last turn (milestone 794): each new image
@@ -4461,7 +4466,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         .into_iter()
                         .filter(|(on, _)| *on)
                         .fold(Why::NONE, |all, (_, why)| all | why);
-                    self.frame_stats.frame(start, self.frame_costs);
+                    let renderer = self.renderer.as_ref();
+                    self.frame_stats.frame_with(start, self.frame_costs, || {
+                        renderer.map(Renderer::gpu_memory)
+                    });
                     #[cfg(debug_assertions)]
                     crate::devtools::record_frame(
                         start,

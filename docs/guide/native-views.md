@@ -53,8 +53,9 @@ fn help_page() -> Box<dyn Widget> {
 - **Size.** The view takes the whole width it is given and 300 pixels of height, unless
   `.width()` and `.height()` say otherwise. It is sized like any other box, so it can sit in a
   `Row`, an `Expanded` or a scrolling list.
-- **Lifetime.** The view is made the first time the widget is laid out. It is moved or resized
-  only on the frames where its box changes, and dropped when the widget leaves the tree. A
+- **Lifetime.** The view is made the first time the widget is laid out. It is resized on the
+  frame its size changes, moved once its box has stopped moving (a scroll does not draw it
+  again on every frame: frus draws its image where the frame has it), and dropped when the widget leaves the tree. A
   view scrolled out of sight is kept. A list that builds only the rows on screen drops the
   view with its row, as it drops any other row.
 - **Calls and events.** `PlatformViewController::invoke(method, arguments)` calls the view.

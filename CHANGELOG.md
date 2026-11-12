@@ -8,11 +8,24 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 796 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Lighter and faster on a phone's GPU** (J796). A page visited no longer leaves GPU memory
+  behind it: the glyph atlas reuses its room instead of only ever doubling, the multisampled
+  targets and the backdrop's staging copy a frame no longer draws with are let go, and on Android
+  and iOS the device's allocator takes blocks of 8 to 64 MB instead of 128 to 256 MB. Where the
+  GPU keeps them in its tile memory (a phone's), the multisampled targets are transient and take
+  no memory at all, and every pass discards its samples instead of writing four times the screen
+  back to memory. A rounded, oval or rectangular clip around an animated shader or a GPU pass is
+  folded into its compositing draw, a layer's texture is no larger than what it holds (a shader
+  mask over a title was a full-screen pass), and a layer drawn again reuses its texture. A native
+  view is moved once it stops instead of on every scroll frame. On the test phone: 130 MB of GPU
+  memory no longer kept after the first page visited (PSS 279 → 101 MB after a visit), the shader
+  gallery at 32–33 fps instead of 18 on a warm phone. The frame statistics line ends with the GPU memory held
+  (`Renderer::gpu_memory`, `GpuMemory`).
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown
