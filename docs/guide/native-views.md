@@ -93,7 +93,8 @@ fn help_page() -> Box<dyn Widget> {
 | `frus/video` (web) | The video's address | `play`, `pause`, `setSource`, `seekTo` (seconds), `setMuted`, `setLooping` (`"true"` or `"false"`) | `loaded` (the duration), `playing`, `paused`, `ended` (the time), `error` |
 
 The web view runs JavaScript. Loading an address from the internet needs the
-`android.permission.INTERNET` permission in the application's manifest.
+`android.permission.INTERNET` permission in the application's manifest, which `frus build` and
+`frus run` declare for every application.
 
 On the web, `frus/webview` is an `<iframe>`, so the browser's rules for frames apply: many sites
 refuse to be shown in a frame of another site, and a page from another site keeps its scripts

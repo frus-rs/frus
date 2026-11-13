@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 804 so far, each documenting the objective, the alternatives
+> record — one per step, 808 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -28,6 +28,33 @@ any release may break.
   `enable_zoom`, `clear_cache`, `clear_local_storage` and `set_cookie` return a `Result`, and
   `clear_cookies` answers `Result<bool, WebViewError>`. The `webview` feature turns on
   `webview2`. macOS, Linux and iOS keep the stand-in.
+- **The camera preview turns with the display on Android** (J806). The display's rotation was
+  read through an activity method the process's context (the application) does not have: it
+  threw at every open, and every preview was turned as if the phone stood upright, sideways
+  once the display turned. It is read through the `DisplayManager` now. Each camera session
+  also logs how long its first frame took, which tells a dark scene (frames, black) from no
+  frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
+  too, and the torch lit the same preview.
+- **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
+  `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
+  `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
+  feature was on, so an application making HTTP requests worked under `frus run` (whose
+  hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
+  offline. INTERNET is a normal permission: granted at install, with no question asked.
+
+- **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
+  `query_products(ids)` (title, description, formatted price, price in micros, currency,
+  kind: consumable, non-consumable or subscription, and the ids the store does not sell),
+  `buy(product)` / `buy_for(product, account_id)`, `restore()`, `complete(update)` (consumes a
+  consumable, acknowledges the rest), and `add_listener` for `PurchaseUpdate`s (pending,
+  purchased, restored, error, canceled), handed over on the interface's thread. Android sells
+  through Google Play Billing Library 8.3.0: an 18 KB bridge dex compiled in with the feature,
+  and `frus build` / `frus run` find the feature's marker in the application's library, fetch
+  the library once, shrink it with R8 to about 330 KB of dex, and declare its permission and
+  activity in the manifest. iOS, macOS, Windows, Linux and the web answer
+  `PurchaseError::Unsupported`. `Purchases::fake(FakeStore)` is an in-memory store on every
+  platform for tests and for trying a shop: paid, pending, canceled or failing purchases. Guide:
+  `docs/guide/purchases.md`; the demo has a shop screen.
 
 - **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
   `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes

@@ -109,8 +109,9 @@ let stream = VideoPlayerController::network_url("https://example.com/live/master
 ```
 
 On Android, network clips need the `INTERNET` permission in the application's manifest
-(`[[package.metadata.android.uses_permission]] name = "android.permission.INTERNET"`), and a
-plain `http://` address needs `uses_cleartext_traffic`. On the Web, a clip from another origin
+(`frus build` and `frus run` declare it for every application; an APK built by hand with
+cargo-apk needs `[[package.metadata.android.uses_permission]] name = "android.permission.INTERNET"`),
+and a plain `http://` address needs `uses_cleartext_traffic`. On the Web, a clip from another origin
 is read only if its server allows the page (CORS headers).
 
 ## Driving the playback
