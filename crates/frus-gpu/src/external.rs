@@ -19,6 +19,29 @@
 //! - a frame in a hardware buffer (Android) is not copied at all: the buffer is imported
 //!   into Vulkan and drawn into the RGBA texture by the pass of `hardware.rs`
 //!   (milestone 800).
+//!
+//! # The conversion pass (`external.wgsl`)
+//!
+//! The shader's comments live here: the text of a shader ships in every application.
+//!
+//! - Mode 0, BGRA: the plane is an sRGB texture holding blue, green, red, alpha; the load
+//!   decodes it to linear and the channels are put back in order.
+//! - Mode 1, NV12: luma in plane 0, interleaved U and V in plane 1, half size each way.
+//! - Mode 2, I420: luma in plane 0, U in plane 1, V in plane 2.
+//! - Mode 3, RGBA: the plane as it is; only a turned RGBA frame comes through here.
+//!
+//! A frame may be turned by quarter turns, mirrored first (milestone 798): the target is the
+//! frame as drawn, and each of its pixels reads the frame's pixel that lands there.
+//!
+//! YUV becomes non-linear RGB through the matrix and offsets the frame's colour space
+//! gives (computed on the CPU here, where they are tested), then linear light
+//! for the sRGB target, whose write encodes it back. Chroma is filtered bilinearly by hand,
+//! from loads: `textureLoad` on unfilterable formats works on every backend, WebGL2 too.
+//!
+//! One triangle covers the whole target. Chroma is read bilinearly from the half-size plane
+//! at the full-size pixel's centre, sited at the centre of the 2×2 block it covers. A turned
+//! frame's pixel reads the point of the frame, as pushed, that lands on it: the turn undone,
+//! then the mirror.
 
 use std::sync::Arc;
 

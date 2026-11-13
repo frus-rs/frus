@@ -610,11 +610,16 @@ impl CameraController {
     }
 
     /// Zooms in to `level`, between [`min_zoom_level`](Self::min_zoom_level) and
-    /// [`max_zoom_level`](Self::max_zoom_level) (clamped to them).
+    /// [`max_zoom_level`](Self::max_zoom_level) (clamped to them). A camera without a zoom
+    /// (a webcam, a browser's camera) answers [`CameraError::Unsupported`] for any level but
+    /// `1.0`.
     pub fn set_zoom_level(&self, level: f32) -> Result<(), CameraError> {
         let (min, max) = self.inner.with_session(|s| Ok(s.zoom_range()))?;
         if !level.is_finite() {
             return Err(CameraError::Platform(format!("zoom level {level}")));
+        }
+        if max <= min && level != min {
+            return Err(CameraError::Unsupported("this camera has no zoom"));
         }
         self.inner.change(|s| s.zoom = level.clamp(min, max))
     }

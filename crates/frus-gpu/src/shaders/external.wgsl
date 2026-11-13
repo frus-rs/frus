@@ -1,19 +1,4 @@
-// External texture frames (milestone 793): a frame in a layout the image pipeline cannot
-// sample directly becomes RGBA here, one pass over the whole target.
-//
-// Mode 0, BGRA: the plane is an sRGB texture holding blue, green, red, alpha; the load
-// decodes it to linear and the channels are put back in order.
-// Mode 1, NV12: luma in plane 0, interleaved U and V in plane 1, half size each way.
-// Mode 2, I420: luma in plane 0, U in plane 1, V in plane 2.
-// Mode 3, RGBA: the plane as it is; only a turned RGBA frame comes through here.
-//
-// A frame may be turned by quarter turns, mirrored first (milestone 798): the target is the
-// frame as drawn, and each of its pixels reads the frame's pixel that lands there.
-//
-// YUV becomes non-linear RGB through the matrix and offsets the frame's colour space
-// gives (computed on the CPU by `external.rs`, where they are tested), then linear light
-// for the sRGB target, whose write encodes it back. Chroma is filtered bilinearly by hand,
-// from loads: `textureLoad` on unfilterable formats works on every backend, WebGL2 too.
+// The conversion pass of external textures: documented in `external.rs`.
 
 struct Params {
     mode: u32,
@@ -35,7 +20,6 @@ var plane1: texture_2d<f32>;
 @group(0) @binding(3)
 var plane2: texture_2d<f32>;
 
-// One triangle that covers the whole target.
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     let x = f32((index << 1u) & 2u);
@@ -43,8 +27,6 @@ fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
 }
 
-// A bilinear read of a half-size plane at full-size pixel `p` (its centre), chroma sited
-// at the centre of the 2×2 block it covers.
 fn chroma(plane: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(plane));
     let c = p * 0.5 - vec2<f32>(0.5);
@@ -65,8 +47,6 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, c <= vec3<f32>(0.04045));
 }
 
-// The point of the frame, as pushed, that lands on `at_target` once it is turned: the turn
-// undone, then the mirror.
 fn source(at_target: vec2<f32>) -> vec2<f32> {
     let size = vec2<f32>(textureDimensions(plane0));
     var p = at_target;
