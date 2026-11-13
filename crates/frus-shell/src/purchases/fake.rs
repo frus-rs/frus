@@ -46,7 +46,7 @@ struct State {
 /// updates reach the listeners at the next frame, as a real store's do.
 ///
 /// ```
-/// use frus::{FakeOutcome, FakeStore, Product, ProductKind, Purchases};
+/// use frus_shell::{FakeOutcome, FakeStore, Product, ProductKind, Purchases};
 ///
 /// let fake = FakeStore::new()
 ///     .product(Product::new("coins_100", ProductKind::Consumable, "100 coins", "$0.99", 990_000, "USD"))

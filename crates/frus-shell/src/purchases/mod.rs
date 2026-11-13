@@ -444,7 +444,7 @@ impl Drop for Inner {
 /// (one per thread), [`Purchases::fake`] an in-memory one for tests.
 ///
 /// ```no_run
-/// use frus::{Purchases, PurchaseStatus};
+/// use frus_shell::{Purchases, PurchaseStatus};
 ///
 /// let store = Purchases::instance();
 /// store.set_consumables(["coins_100"]);
@@ -455,13 +455,13 @@ impl Drop for Inner {
 ///         if matches!(update.status, PurchaseStatus::Purchased | PurchaseStatus::Restored) {
 ///             // Deliver the product, then:
 ///             let (s, update) = (s.clone(), update.clone());
-///             frus::spawn_local(async move { let _ = s.complete(&update).await; });
+///             frus_widgets::spawn_local(async move { let _ = s.complete(&update).await; });
 ///         }
 ///     }
 /// })
 /// .forget();
 /// let s = store.clone();
-/// frus::spawn_local(async move {
+/// frus_widgets::spawn_local(async move {
 ///     if let Ok(found) = s.query_products(["coins_100", "pro"]).await {
 ///         if let Some(coins) = found.products.first() {
 ///             let _ = s.buy(coins).await;
