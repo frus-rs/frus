@@ -1159,6 +1159,12 @@ mod tests {
         let root = Path::new("my-app");
         let app = crate::project::Project::from_manifest(root, manifest).unwrap();
         assert_eq!(app.permissions().unwrap(), []);
+        // What frus itself uses is declared as written, so `frus build` adds nothing to a new
+        // application: INTERNET included (milestone 808).
+        assert_eq!(
+            crate::permissions::android_additions(manifest, &crate::permissions::ALWAYS),
+            Ok(None)
+        );
 
         let uncommented = manifest
             .lines()

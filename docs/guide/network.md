@@ -10,6 +10,16 @@ frus = { version = "0.5", features = ["net", "json"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
+On Android a socket needs the `android.permission.INTERNET` permission, which `frus build` and
+`frus run` declare for every application (granted at install, with no question asked). An APK
+built by hand with cargo-apk needs it in `Cargo.toml`; without it every request fails as if the
+phone were offline:
+
+```toml
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+```
+
 A request is awaited. The interface goes on drawing while it waits; see
 [Work that waits](../getting-started.md#work-that-waits) for how `async` code runs in frus.
 
