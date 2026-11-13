@@ -68,6 +68,9 @@ jobs:
           cargo test -p frus-shell --features "net sqlite auth" --lib
           cargo test -p frus --features "net sqlite auth" --doc
           cargo test -p frus-shell --features testing --test animation_speed
+          # The camera and the code reader (milestone 798), and their guide.
+          cargo test -p frus-shell --features "camera scanner" --lib
+          cargo test -p frus --features "camera scanner" --doc
           # Video playback (milestone 797): the controller and the widgets, and their guide.
           cargo test -p frus-shell --features video --lib video::
           cargo test -p frus --features video --doc

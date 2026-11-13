@@ -19,7 +19,26 @@
 //! Elsewhere there is no such surface, and [`TextureSurface::new`] answers
 //! [`TextureError::Unsupported`]: push frames into an [`ExternalTexture`] directly.
 
-use frus_widgets::{ExternalTexture, TextureError, TextureId, YuvColorSpace};
+use frus_widgets::{ExternalTexture, TextureError, TextureId, YuvColorSpace, YuvPlane};
+
+/// A frame a [`TextureSurface`] received, as its producer queued it: handed to a
+/// [frame observer](TextureSurface::set_frame_observer) on the surface's own thread, after it
+/// has become the texture's.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceFrame<'a> {
+    /// Width, in pixels (the crop applied).
+    pub width: u32,
+    /// Height, in pixels.
+    pub height: u32,
+    /// The layout: three planes (Y, U, V) for [`SurfaceFormat::Yuv420`], one for
+    /// [`SurfaceFormat::Rgba`].
+    pub format: SurfaceFormat,
+    /// The planes, each from its first sample in the crop, with its strides.
+    pub planes: &'a [YuvPlane<'a>],
+}
+
+/// What a [`TextureSurface`] hands each frame to besides its texture.
+pub type FrameObserver = Box<dyn FnMut(&SurfaceFrame<'_>) + Send>;
 
 /// The pixels a [`TextureSurface`] asks its producer for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -74,13 +93,37 @@ impl TextureSurface {
         height: u32,
         format: SurfaceFormat,
     ) -> Result<Self, TextureError> {
+        Self::make(texture, width, height, format, false)
+    }
+
+    /// The same, its frames always **read from their planes by the CPU**, never handed to
+    /// the GPU as hardware buffers: what a [frame observer](Self::set_frame_observer) needs
+    /// to see the pixels (milestone 798; a camera's image stream, a code reader). It costs
+    /// the copy that hardware buffers save.
+    pub fn readable_with_texture(
+        texture: ExternalTexture,
+        width: u32,
+        height: u32,
+        format: SurfaceFormat,
+    ) -> Result<Self, TextureError> {
+        Self::make(texture, width, height, format, true)
+    }
+
+    fn make(
+        texture: ExternalTexture,
+        width: u32,
+        height: u32,
+        format: SurfaceFormat,
+        readable: bool,
+    ) -> Result<Self, TextureError> {
         #[cfg(target_os = "android")]
         {
-            android::Reader::new(texture, width, height, format).map(|inner| Self { inner })
+            android::Reader::new(texture, width, height, format, readable)
+                .map(|inner| Self { inner })
         }
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (texture, width, height, format);
+            let _ = (texture, width, height, format, readable);
             Err(TextureError::Unsupported(
                 "a texture surface exists on Android only; push frames into an ExternalTexture",
             ))
@@ -127,6 +170,33 @@ impl TextureSurface {
         }
     }
 
+    /// Hands every frame, once it is the texture's, to `observer`, on the surface's own
+    /// thread (milestone 798): what a camera's image stream or a code reader reads the
+    /// pixels through, with no copy of its own. The frame is borrowed for the time of the
+    /// call; keep it short, the next frame waits. `None` stops it. Only frames read from
+    /// their planes are observed: a surface handing its frames to the GPU as hardware
+    /// buffers has no pixels to show, so make it with
+    /// [`readable_with_texture`](Self::readable_with_texture).
+    pub fn set_frame_observer(&self, observer: Option<FrameObserver>) {
+        #[cfg(target_os = "android")]
+        self.inner.set_observer(observer);
+        #[cfg(not(target_os = "android"))]
+        let _ = observer;
+    }
+
+    /// Closes the surface and hands back the texture it fed, with the frame it shows: a camera
+    /// switching to a size the surface was not made for keeps its texture's id.
+    pub fn into_texture(self) -> ExternalTexture {
+        #[cfg(target_os = "android")]
+        {
+            self.inner.into_texture()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.texture
+        }
+    }
+
     /// The surface as a **JNI global reference to an `android.view.Surface`**, for Java or
     /// Kotlin code: `MediaCodec.configure(format, surface, null, 0)`,
     /// `player.setVideoSurface(surface)`, a capture session's target, `lockHardwareCanvas`.
@@ -145,7 +215,7 @@ impl TextureSurface {
 }
 
 #[cfg(target_os = "android")]
-mod android {
+pub(crate) mod android {
     //! The NDK image reader, reached through `dlsym`: frus applications start at Android 7
     //! (API 24), and linking a symbol a later version added would stop the library loading
     //! on the earlier one. Nothing is looked up before a surface is made.
@@ -156,7 +226,7 @@ mod android {
 
     use frus_widgets::{ExternalTexture, HardwareBuffer, TextureError, YuvColorSpace, YuvPlane};
 
-    use super::SurfaceFormat;
+    use super::{FrameObserver, SurfaceFormat, SurfaceFrame};
 
     const RTLD_NOW: c_int = 2;
     const AIMAGE_FORMAT_RGBA_8888: i32 = 1;
@@ -181,9 +251,9 @@ mod android {
     }
 
     #[repr(C)]
-    struct ImageListener {
-        context: *mut c_void,
-        on_image_available: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+    pub(crate) struct ImageListener {
+        pub(crate) context: *mut c_void,
+        pub(crate) on_image_available: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
     }
 
     /// `AHardwareBuffer_Desc`.
@@ -211,21 +281,23 @@ mod android {
 
     type Status = i32;
 
-    /// The functions used, from `libmediandk.so` and `libandroid.so`.
-    struct Ndk {
-        reader_new: unsafe extern "C" fn(i32, i32, i32, i32, *mut *mut c_void) -> Status,
-        reader_delete: unsafe extern "C" fn(*mut c_void),
-        reader_window: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> Status,
-        reader_listener: unsafe extern "C" fn(*mut c_void, *mut ImageListener) -> Status,
-        reader_latest: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> Status,
-        image_delete: unsafe extern "C" fn(*mut c_void),
+    /// The functions used, from `libmediandk.so` and `libandroid.so`. The camera's JPEG
+    /// reader uses them too (milestone 798).
+    pub(crate) struct Ndk {
+        pub(crate) reader_new: unsafe extern "C" fn(i32, i32, i32, i32, *mut *mut c_void) -> Status,
+        pub(crate) reader_delete: unsafe extern "C" fn(*mut c_void),
+        pub(crate) reader_window: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> Status,
+        pub(crate) reader_listener: unsafe extern "C" fn(*mut c_void, *mut ImageListener) -> Status,
+        pub(crate) reader_latest: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> Status,
+        pub(crate) image_delete: unsafe extern "C" fn(*mut c_void),
         image_width: unsafe extern "C" fn(*const c_void, *mut i32) -> Status,
         image_height: unsafe extern "C" fn(*const c_void, *mut i32) -> Status,
         image_format: unsafe extern "C" fn(*const c_void, *mut i32) -> Status,
         image_crop: unsafe extern "C" fn(*const c_void, *mut CropRect) -> Status,
         plane_pixel_stride: unsafe extern "C" fn(*const c_void, c_int, *mut i32) -> Status,
         plane_row_stride: unsafe extern "C" fn(*const c_void, c_int, *mut i32) -> Status,
-        plane_data: unsafe extern "C" fn(*const c_void, c_int, *mut *mut u8, *mut c_int) -> Status,
+        pub(crate) plane_data:
+            unsafe extern "C" fn(*const c_void, c_int, *mut *mut u8, *mut c_int) -> Status,
         /// API 26.
         to_surface: Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void>,
         /// API 26: what handing out hardware buffers needs.
@@ -239,7 +311,7 @@ mod android {
         describe: unsafe extern "C" fn(*const c_void, *mut BufferDesc),
     }
 
-    fn ndk() -> Result<&'static Ndk, TextureError> {
+    pub(crate) fn ndk() -> Result<&'static Ndk, TextureError> {
         static NDK: OnceLock<Option<Ndk>> = OnceLock::new();
         NDK.get_or_init(|| unsafe { load() })
             .as_ref()
@@ -318,12 +390,14 @@ mod android {
 
     /// What the reader's thread reaches through the listener's context.
     struct Shared {
-        texture: ExternalTexture,
+        /// Taken out only by `into_texture`, once no callback can run.
+        texture: Option<ExternalTexture>,
         color_space: AtomicU8,
         reader: *mut c_void,
         /// Frames are handed out as hardware buffers, not copied.
         hardware: bool,
         handle: Arc<ReaderHandle>,
+        observer: Mutex<Option<FrameObserver>>,
     }
 
     // The reader pointer is only used by the reader's own callback, which the NDK runs on
@@ -366,6 +440,7 @@ mod android {
             width: u32,
             height: u32,
             format: SurfaceFormat,
+            readable: bool,
         ) -> Result<Self, TextureError> {
             let ndk = ndk()?;
             if width == 0 || height == 0 {
@@ -373,7 +448,8 @@ mod android {
             }
             // Hardware buffers where the renderer imports them, planes copied elsewhere.
             // Only with the `hardware-buffers` feature: without it no renderer imports them.
-            let hardware = if cfg!(feature = "hardware-buffers") {
+            // Never for a surface whose frames must stay readable.
+            let hardware = if cfg!(feature = "hardware-buffers") && !readable {
                 ndk.hardware
                     .as_ref()
                     .filter(|_| frus_widgets::textures().hardware_buffers())
@@ -422,11 +498,12 @@ mod android {
                 )));
             }
             let mut shared = Box::new(Shared {
-                texture,
+                texture: Some(texture),
                 color_space: AtomicU8::new(0),
                 reader,
                 hardware: hardware.is_some(),
                 handle,
+                observer: Mutex::new(None),
             });
             let mut listener = ImageListener {
                 context: (&mut *shared as *mut Shared).cast(),
@@ -458,7 +535,37 @@ mod android {
         }
 
         pub(super) fn texture(&self) -> &ExternalTexture {
-            &self.shared.texture
+            self.shared
+                .texture
+                .as_ref()
+                .expect("only taken by into_texture, which consumes the reader")
+        }
+
+        pub(super) fn set_observer(&self, observer: Option<FrameObserver>) {
+            *self
+                .shared
+                .observer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = observer;
+        }
+
+        pub(super) fn into_texture(mut self) -> ExternalTexture {
+            self.shut_down();
+            self.shared.texture.take().expect("only taken here, once")
+        }
+
+        /// No callback runs past this. The reader itself goes when the last image it handed
+        /// out is back (`ReaderHandle`).
+        fn shut_down(&mut self) {
+            if self.reader.is_null() {
+                return;
+            }
+            if let Ok(ndk) = ndk() {
+                unsafe {
+                    (ndk.reader_listener)(self.reader, std::ptr::null_mut());
+                }
+            }
+            self.reader = std::ptr::null_mut();
         }
 
         pub(super) fn window(&self) -> *mut c_void {
@@ -512,13 +619,7 @@ mod android {
 
     impl Drop for Reader {
         fn drop(&mut self) {
-            if let Ok(ndk) = ndk() {
-                unsafe {
-                    // No callback runs past this. The reader itself goes when the last image
-                    // it handed out is back (`ReaderHandle`).
-                    (ndk.reader_listener)(self.reader, std::ptr::null_mut());
-                }
-            }
+            self.shut_down();
             // The Java surface is released from a thread the VM knows: the surface may well
             // be dropped on the producer's own, which never touched Java.
             if let Some(global) = self.java.get_mut().ok().and_then(|java| java.take()) {
@@ -602,9 +703,10 @@ mod android {
         } else {
             frame
         };
-        shared
-            .texture
-            .push_hardware_buffer(frame, color_space(shared))
+        match shared.texture.as_ref() {
+            Some(texture) => texture.push_hardware_buffer(frame, color_space(shared)),
+            None => Ok(()),
+        }
     }
 
     unsafe fn push(ndk: &Ndk, shared: &Shared, image: *mut c_void) -> Result<(), TextureError> {
@@ -621,6 +723,9 @@ mod android {
                 bottom: h,
             };
         }
+        let Some(texture) = shared.texture.as_ref() else {
+            return Ok(());
+        };
         let (left, top) = (crop.left.max(0) as usize, crop.top.max(0) as usize);
         let width = (crop.right.min(w) - crop.left.max(0)).max(0) as u32;
         let height = (crop.bottom.min(h) - crop.top.max(0)).max(0) as u32;
@@ -640,20 +745,42 @@ mod android {
         };
         match format {
             AIMAGE_FORMAT_YUV_420_888 => {
-                let (y, u, v) = (plane(0, 0)?, plane(1, 1)?, plane(2, 1)?);
-                shared
-                    .texture
-                    .push_yuv420(width, height, y, u, v, color_space(shared))
+                let planes = [plane(0, 0)?, plane(1, 1)?, plane(2, 1)?];
+                let [y, u, v] = planes;
+                texture.push_yuv420(width, height, y, u, v, color_space(shared))?;
+                observe(shared, width, height, SurfaceFormat::Yuv420, &planes);
+                Ok(())
             }
             AIMAGE_FORMAT_RGBA_8888 => {
                 let p = plane(0, 0)?;
-                shared
-                    .texture
-                    .push_rgba_strided(width, height, p.data, p.row_stride)
+                texture.push_rgba_strided(width, height, p.data, p.row_stride)?;
+                observe(shared, width, height, SurfaceFormat::Rgba, &[p]);
+                Ok(())
             }
             other => Err(TextureError::Platform(format!(
                 "image format {other:#x} is not read"
             ))),
+        }
+    }
+
+    /// Hands the frame to the observer, if there is one.
+    fn observe(
+        shared: &Shared,
+        width: u32,
+        height: u32,
+        format: SurfaceFormat,
+        planes: &[YuvPlane<'_>],
+    ) {
+        let Ok(mut observer) = shared.observer.lock() else {
+            return;
+        };
+        if let Some(observer) = observer.as_mut() {
+            observer(&SurfaceFrame {
+                width,
+                height,
+                format,
+                planes,
+            });
         }
     }
 }

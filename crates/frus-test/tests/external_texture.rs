@@ -6,8 +6,8 @@
 //! a new frame of the same size replaces the old one on the next render.
 
 use frus_core::{
-    textures, Color, ExternalTexture, FilterQuality, ImageData, Rect, Scene, YuvColorSpace,
-    YuvPlane,
+    textures, Color, ExternalTexture, FilterQuality, FrameOrientation, ImageData, Rect, Scene,
+    YuvColorSpace, YuvPlane,
 };
 use frus_test::{render_scene, Snapshot};
 
@@ -134,6 +134,72 @@ fn every_layout_shows_the_colours_it_was_pushed_with() {
             "{layout}: right {right:?}"
         );
     }
+}
+
+/// Milestone 798: a frame turned by quarter turns, mirrored or not, has its left (red) half
+/// where the turn takes it, in every layout.
+#[test]
+fn turned_frames_land_where_their_orientation_puts_them() {
+    // An RGBA frame (turned through the pass it otherwise skips) and a YUV one.
+    for layout in ["rgba", "i420"] {
+        for turns in 0..4 {
+            for mirrored in [false, true] {
+                let orientation = FrameOrientation::new(turns, mirrored);
+                let texture = textures().create();
+                texture.set_orientation(orientation);
+                halves(&texture, layout);
+                let mut scene = Scene::new();
+                draw(&mut scene, &texture, Rect::new(0.0, 0.0, 64.0, 64.0));
+                let Some(frame) = render(&scene) else {
+                    return;
+                };
+                let tolerance = if matches!(layout, "nv12" | "i420") {
+                    6
+                } else {
+                    1
+                };
+                // A point well inside each half of the 4×4 frame, as pushed, and where it
+                // is drawn: the 4×4 frame (turned, still 4×4) is drawn 16 times larger.
+                for (x, want) in [(0.5, [255, 0, 0]), (3.5, [0, 0, 255])] {
+                    let (dx, dy) = orientation.map_point(x, 1.5, 4.0, 4.0);
+                    let got = frame.pixel((dx * 16.0) as u32, (dy * 16.0) as u32);
+                    assert!(
+                        close(got, want, tolerance),
+                        "{layout}, {turns} turns, mirrored {mirrored}: {got:?} at ({dx}, {dy})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A turned frame that is not square is drawn at its turned size.
+#[test]
+fn a_turned_frame_is_drawn_at_its_turned_size() {
+    let texture = textures().create();
+    texture.set_orientation(FrameOrientation::new(1, false));
+    // 4×2: the top row red, the bottom row blue. A quarter turn clockwise puts the top row
+    // on the right: 2×4, blue on the left, red on the right.
+    let mut px = [255u8, 0, 0, 255].repeat(4);
+    px.extend([0u8, 0, 255, 255].repeat(4));
+    texture.push_rgba(4, 2, &px).unwrap();
+    let info = textures().frame_info(texture.id()).unwrap();
+    assert_eq!((info.width, info.height), (2, 4));
+    let mut scene = Scene::new();
+    draw(&mut scene, &texture, Rect::new(0.0, 0.0, 64.0, 64.0));
+    let Some(frame) = render(&scene) else {
+        return;
+    };
+    assert!(
+        close(frame.pixel(8, 32), [0, 0, 255], 1),
+        "{:?}",
+        frame.pixel(8, 32)
+    );
+    assert!(
+        close(frame.pixel(56, 32), [255, 0, 0], 1),
+        "{:?}",
+        frame.pixel(56, 32)
+    );
 }
 
 #[test]

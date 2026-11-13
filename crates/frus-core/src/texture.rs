@@ -41,10 +41,17 @@
 //! `AHardwareBuffer`) that a decoder or a camera wrote, which the renderer samples where it
 //! lies (milestone 800). Only a renderer that can import such buffers accepts them: see
 //! [`TextureRegistry::hardware_buffers`].
+//!
+//! # Orientation
+//!
+//! A camera's sensor is mounted at an angle to the screen, and a video may say it was filmed
+//! sideways. [`ExternalTexture::set_orientation`] turns the frames pushed after it by quarter
+//! turns, mirrored or not ([`FrameOrientation`]); the GPU turns them in the same pass that
+//! converts them, so it costs the producer nothing. [`FrameInfo`] gives the size as drawn.
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// How many frame buffers a texture keeps for reuse besides the one on show: one being
@@ -275,6 +282,98 @@ impl std::fmt::Display for TextureError {
 
 impl std::error::Error for TextureError {}
 
+/// How a texture's frames are turned when they are drawn (milestone 798): a number of
+/// clockwise quarter turns, after a left-right mirror. A camera's frames come from a sensor
+/// mounted at an angle to the screen (and the front camera's are mirrored, as a mirror
+/// would show the person); a phone's video may have been filmed sideways.
+///
+/// ```
+/// use frus_core::FrameOrientation;
+///
+/// let sideways = FrameOrientation::new(1, false);
+/// assert_eq!(sideways.size(640, 480), (480, 640));
+/// assert_eq!(FrameOrientation::new(-1, false).quarter_turns(), 3);
+/// assert!(FrameOrientation::UPRIGHT.is_upright());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct FrameOrientation {
+    quarter_turns: u8,
+    mirrored: bool,
+}
+
+impl FrameOrientation {
+    /// As pushed: no turn, no mirror.
+    pub const UPRIGHT: Self = Self {
+        quarter_turns: 0,
+        mirrored: false,
+    };
+
+    /// `quarter_turns` clockwise quarter turns (any integer; only the remainder modulo 4
+    /// counts, a negative number turns the other way), after a left-right mirror when
+    /// `mirrored`.
+    pub fn new(quarter_turns: i32, mirrored: bool) -> Self {
+        Self {
+            quarter_turns: quarter_turns.rem_euclid(4) as u8,
+            mirrored,
+        }
+    }
+
+    /// The clockwise quarter turns, `0..4`.
+    pub fn quarter_turns(self) -> u32 {
+        self.quarter_turns as u32
+    }
+
+    /// Whether the frame is mirrored left to right (before it is turned).
+    pub fn mirrored(self) -> bool {
+        self.mirrored
+    }
+
+    /// Whether frames are drawn as pushed.
+    pub fn is_upright(self) -> bool {
+        self == Self::UPRIGHT
+    }
+
+    /// The size a `width × height` frame is drawn at: its sides swapped by an odd number of
+    /// quarter turns.
+    pub fn size(self, width: u32, height: u32) -> (u32, u32) {
+        if self.quarter_turns % 2 == 1 {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+
+    /// Where the point `(x, y)` of a `width × height` frame, as pushed, lands once the frame
+    /// is turned: what a scanner's corners, found in the pushed pixels, become on screen.
+    ///
+    /// ```
+    /// use frus_core::FrameOrientation;
+    /// // A quarter turn clockwise: the top-left corner goes to the top right.
+    /// let turned = FrameOrientation::new(1, false);
+    /// assert_eq!(turned.map_point(0.0, 0.0, 640.0, 480.0), (480.0, 0.0));
+    /// ```
+    pub fn map_point(self, x: f32, y: f32, width: f32, height: f32) -> (f32, f32) {
+        let x = if self.mirrored { width - x } else { x };
+        match self.quarter_turns {
+            1 => (height - y, x),
+            2 => (width - x, height - y),
+            3 => (y, width - x),
+            _ => (x, y),
+        }
+    }
+
+    fn pack(self) -> u8 {
+        self.quarter_turns | ((self.mirrored as u8) << 2)
+    }
+
+    fn unpack(bits: u8) -> Self {
+        Self {
+            quarter_turns: bits & 3,
+            mirrored: bits & 4 != 0,
+        }
+    }
+}
+
 /// The largest side a frame may have: what every GPU frus runs on can sample.
 pub const MAX_TEXTURE_SIDE: u32 = 8192;
 
@@ -409,6 +508,7 @@ pub struct TextureFrame {
     height: u32,
     format: PixelFormat,
     color_space: YuvColorSpace,
+    orientation: FrameOrientation,
     generation: u64,
     data: Vec<u8>,
     /// A frame that lies in a platform buffer: no bytes, no planes.
@@ -436,6 +536,7 @@ impl TextureFrame {
             height: 0,
             format: PixelFormat::Rgba8,
             color_space: YuvColorSpace::default(),
+            orientation: FrameOrientation::UPRIGHT,
             generation: 0,
             data: Vec::new(),
             hardware: None,
@@ -460,6 +561,17 @@ impl TextureFrame {
     /// How a YUV frame becomes RGB; meaningless for RGBA and BGRA.
     pub fn color_space(&self) -> YuvColorSpace {
         self.color_space
+    }
+
+    /// How the frame is turned when drawn (see [`ExternalTexture::set_orientation`]).
+    pub fn orientation(&self) -> FrameOrientation {
+        self.orientation
+    }
+
+    /// The size the frame is drawn at: [`width`](Self::width) and
+    /// [`height`](Self::height), swapped by an odd number of quarter turns.
+    pub fn display_size(&self) -> (u32, u32) {
+        self.orientation.size(self.width, self.height)
     }
 
     /// The frame's number within its texture: `1` for the first pushed, rising by one for
@@ -515,9 +627,9 @@ pub struct TextureStats {
 /// by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameInfo {
-    /// Width, in pixels.
+    /// Width, in pixels, as drawn: after the frame's [orientation](FrameOrientation).
     pub width: u32,
-    /// Height, in pixels.
+    /// Height, in pixels, as drawn.
     pub height: u32,
     /// The frame's [generation](TextureFrame::generation).
     pub generation: u64,
@@ -538,6 +650,8 @@ struct Entry {
     pushed: AtomicU64,
     dropped: AtomicU64,
     shown: AtomicU64,
+    /// The [`FrameOrientation`] the next frames are stamped with, packed.
+    orientation: AtomicU8,
 }
 
 type WakeFn = Arc<dyn Fn() + Send + Sync>;
@@ -621,6 +735,7 @@ impl TextureRegistry {
             pushed: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             shown: AtomicU64::new(0),
+            orientation: AtomicU8::new(0),
         });
         if let Ok(mut entries) = self.entries.lock() {
             entries.push(entry.clone());
@@ -663,10 +778,13 @@ impl TextureRegistry {
     pub fn frame_info(&self, id: TextureId) -> Option<FrameInfo> {
         let entry = self.entry(id)?;
         let slot = entry.slot.lock().ok()?;
-        slot.latest.as_ref().map(|f| FrameInfo {
-            width: f.width,
-            height: f.height,
-            generation: f.generation,
+        slot.latest.as_ref().map(|f| {
+            let (width, height) = f.display_size();
+            FrameInfo {
+                width,
+                height,
+                generation: f.generation,
+            }
         })
     }
 
@@ -770,7 +888,33 @@ impl ExternalTexture {
         self.entry.stats()
     }
 
-    /// The size of the latest frame, if one was pushed.
+    /// Turns the frames pushed from now on by `orientation` when they are drawn: what a
+    /// camera whose sensor is mounted sideways, or a video filmed sideways, asks for. The GPU
+    /// turns them while it converts them, so it costs the producer nothing. Frames already
+    /// pushed keep the orientation they had. A frame in a [hardware buffer](HardwareBuffer)
+    /// is drawn as it lies: the orientation is for frames pushed as pixels.
+    ///
+    /// ```
+    /// use frus_core::FrameOrientation;
+    ///
+    /// let texture = frus_core::textures().create();
+    /// texture.set_orientation(FrameOrientation::new(1, false));
+    /// texture.push_rgba(4, 2, &[0; 32]).unwrap();
+    /// let info = frus_core::textures().frame_info(texture.id()).unwrap();
+    /// assert_eq!((info.width, info.height), (2, 4));
+    /// ```
+    pub fn set_orientation(&self, orientation: FrameOrientation) {
+        self.entry
+            .orientation
+            .store(orientation.pack(), Ordering::Relaxed);
+    }
+
+    /// The orientation the next frames are pushed with.
+    pub fn orientation(&self) -> FrameOrientation {
+        FrameOrientation::unpack(self.entry.orientation.load(Ordering::Relaxed))
+    }
+
+    /// The size of the latest frame, as pushed (before its orientation), if one was pushed.
     pub fn size(&self) -> Option<(u32, u32)> {
         let slot = self.entry.slot.lock().ok()?;
         slot.latest.as_ref().map(|f| (f.width, f.height))
@@ -1050,6 +1194,8 @@ impl ExternalTexture {
         buffer.height = height;
         buffer.format = format;
         buffer.color_space = color_space;
+        buffer.orientation =
+            FrameOrientation::unpack(self.entry.orientation.load(Ordering::Relaxed));
         self.publish(frame)
     }
 
@@ -1354,6 +1500,50 @@ mod tests {
             t.join().unwrap();
         }
         assert_eq!(texture.stats().pushed, 800);
+    }
+
+    #[test]
+    fn an_orientation_turns_the_frames_pushed_after_it() {
+        let registry = registry();
+        let texture = registry.create();
+        texture.push_rgba(4, 2, &[0; 32]).unwrap();
+        texture.set_orientation(FrameOrientation::new(3, true));
+        // Already pushed: as it was.
+        let info = registry.frame_info(texture.id()).unwrap();
+        assert_eq!((info.width, info.height), (4, 2));
+        texture.push_rgba(4, 2, &[0; 32]).unwrap();
+        let info = registry.frame_info(texture.id()).unwrap();
+        assert_eq!((info.width, info.height), (2, 4));
+        let frame = registry.latest(texture.id()).unwrap();
+        assert_eq!(frame.orientation(), FrameOrientation::new(-1, true));
+        assert_eq!(
+            (frame.width(), frame.height()),
+            (4, 2),
+            "the planes stay as pushed"
+        );
+        assert_eq!(texture.size(), Some((4, 2)));
+    }
+
+    #[test]
+    fn points_follow_the_turn() {
+        let (w, h) = (640.0, 480.0);
+        let o = FrameOrientation::new;
+        // The pushed frame's top-left and bottom-right corners.
+        assert_eq!(o(0, false).map_point(0.0, 0.0, w, h), (0.0, 0.0));
+        assert_eq!(o(1, false).map_point(0.0, 0.0, w, h), (480.0, 0.0));
+        assert_eq!(o(1, false).map_point(w, h, w, h), (0.0, 640.0));
+        assert_eq!(o(2, false).map_point(0.0, 0.0, w, h), (640.0, 480.0));
+        assert_eq!(o(3, false).map_point(0.0, 0.0, w, h), (0.0, 640.0));
+        // Mirrored first: the top-left comes from the top-right.
+        assert_eq!(o(0, true).map_point(0.0, 0.0, w, h), (640.0, 0.0));
+        assert_eq!(o(1, true).map_point(0.0, 0.0, w, h), (480.0, 640.0));
+        for turns in 0..4 {
+            for mirrored in [false, true] {
+                let (dw, dh) = o(turns, mirrored).size(640, 480);
+                let (x, y) = o(turns, mirrored).map_point(10.0, 20.0, w, h);
+                assert!(x >= 0.0 && x <= dw as f32 && y >= 0.0 && y <= dh as f32);
+            }
+        }
     }
 
     #[test]

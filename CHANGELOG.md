@@ -29,6 +29,23 @@ any release may break.
   `clear_cookies` answers `Result<bool, WebViewError>`. The `webview` feature turns on
   `webview2`. macOS, Linux and iOS keep the stand-in.
 
+- **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
+  `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
+  and a file; `start_image_stream` with the frame's planes, borrowed on the camera's thread;
+  flash modes and torch, zoom, focus point, switching cameras, pausing) and the
+  `CameraPreview` widget. Android through Camera2 in the NDK (nothing linked; looked up when a
+  camera is first listed) into a texture surface, the frames turned upright on the GPU; the
+  camera closes in the background and opens again on return. Windows through Media Foundation
+  (webcams), the web through `getUserMedia`; macOS, Linux and iOS answer `Unsupported`.
+  Feature `scanner`: the `Scanner` widget with `on_detect(|capture| ..)` (format, text, bytes,
+  corners), `ScannerController` (formats, detection speed and timeout, torch, other camera) and
+  `decode_luma`, read by rxing in pure Rust on a thread of the scanner's own, at most one frame
+  per timeout; QR codes, every other format with `scanner-all-formats`. External textures gain
+  an orientation (`ExternalTexture::set_orientation`, `FrameOrientation`: quarter turns and a
+  mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer,
+  `readable_with_texture` (frames always copied to planes the CPU reads, never imported as
+  hardware buffers: what the camera uses) and `into_texture`.
+
 - **690 KB off every Android application** (J803). The logcat logger is built without its
   regular-expression engine, which only a `crate=level/pattern` filter needs and which the
   filter frus gives it never has. The smallest application's library goes from 14,499,592 to
