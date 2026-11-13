@@ -168,55 +168,16 @@ pub(crate) fn usage_strings(declared: &[Declared]) -> Vec<(&'static str, &str)> 
 }
 
 /// The Android permissions frus itself uses, declared for every application: the vibrator that
-/// stands in for the system's touch feedback (`frus::haptics`), and reading which network the
-/// device is on (`frus::connectivity`). Both are granted when the application is installed,
-/// without a question to the person (milestone 777).
-pub(crate) const ALWAYS: [&str; 2] = [
+/// stands in for the system's touch feedback (`frus::haptics`), reading which network the
+/// device is on (`frus::connectivity`, milestone 777), and opening sockets: HTTP requests, web
+/// views and network video all need INTERNET, and without it every connection fails as if the
+/// device were offline (milestone 808). All three are granted when the application is
+/// installed, without a question to the person.
+pub(crate) const ALWAYS: [&str; 3] = [
     "android.permission.VIBRATE",
     "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.INTERNET",
 ];
-
-/// What a web page loaded from the network needs.
-const INTERNET: &str = "android.permission.INTERNET";
-
-/// Whether the application's manifest turns on frus's `webview` feature (milestone 799): its
-/// web views load pages from the network, which Android refuses without the INTERNET
-/// permission. Read line by line, as the rest of this file reads the manifest: a `frus = {..}`
-/// line under a dependencies table, or the `features` of a `[dependencies.frus]` table.
-pub(crate) fn uses_web_views(manifest: &str) -> bool {
-    let mut section = String::new();
-    let mut in_features = false;
-    for raw in manifest.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
-        if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            section = header.trim_matches(['[', ']']).trim().to_string();
-            in_features = false;
-            continue;
-        }
-        let dependencies = section == "dependencies"
-            || (section.starts_with("target.") && section.ends_with(".dependencies"));
-        let frus_table = section == "dependencies.frus"
-            || (section.starts_with("target.") && section.ends_with(".dependencies.frus"));
-        let names_frus = line
-            .strip_prefix("frus")
-            .is_some_and(|rest| rest.trim_start().starts_with('='));
-        if dependencies && names_frus && line.contains("\"webview\"") {
-            return true;
-        }
-        if frus_table {
-            if line.starts_with("features") {
-                in_features = true;
-            }
-            if in_features && line.contains("\"webview\"") {
-                return true;
-            }
-            if in_features && line.contains(']') {
-                in_features = false;
-            }
-        }
-    }
-    false
-}
 
 /// The Android permissions the declarations need, each once.
 pub(crate) fn android_permissions(declared: &[Declared]) -> Vec<&'static str> {
@@ -308,9 +269,6 @@ pub(crate) fn write_android(root: &Path, declared: &[Declared]) -> Result<(), St
     let path = root.join("Cargo.toml");
     let manifest = std::fs::read_to_string(&path)
         .map_err(|e| format!("could not read {}: {e}", path.display()))?;
-    if uses_web_views(&manifest) && !wanted.contains(&INTERNET) {
-        wanted.push(INTERNET);
-    }
     let Some(addition) = android_additions(&manifest, &wanted)? else {
         return Ok(());
     };
@@ -541,52 +499,6 @@ mod tests {
         [package.metadata.android]\npackage = \"com.acme.app\"\n\n\
         [[package.metadata.android.uses_permission]]\nname = \"android.permission.CAMERA\"\n";
 
-    /// **Web views need the network** (milestone 799): an application that turns on frus's
-    /// `webview` feature, in any of the ways a manifest can, is given INTERNET; one that does
-    /// not, or names the feature for another crate, is not.
-    #[test]
-    fn the_webview_feature_brings_the_internet_permission() {
-        for manifest in [
-            "[dependencies]
-frus = { version = \"0.5\", features = [\"webview\"] }
-",
-            "[target.'cfg(target_os = \"android\")'.dependencies]
-frus = { path = \"../frus\", features = [\"svg\", \"webview\"] }
-",
-            "[dependencies.frus]
-version = \"0.5\"
-features = [
-    \"svg\",
-    \"webview\",
-]
-",
-        ] {
-            assert!(uses_web_views(manifest), "{manifest}");
-        }
-        for manifest in [
-            "[dependencies]
-frus = \"0.5\"
-",
-            "[dependencies]
-frus = { version = \"0.5\" } # \"webview\" later
-",
-            "[dependencies]
-frus-webkit = { version = \"1\", features = [\"webview\"] }
-",
-            "[dev-dependencies]
-frus = { version = \"0.5\", features = [\"webview\"] }
-",
-            "[dependencies.frus]
-version = \"0.5\"
-features = [\"svg\"]
-[dependencies.other]
-features = [\"webview\"]
-",
-        ] {
-            assert!(!uses_web_views(manifest), "{manifest}");
-        }
-    }
-
     /// **Android's manifest is completed, not rewritten**: what it names stays, what is missing
     /// is added as cargo-apk's tables, once.
     #[test]
@@ -625,8 +537,8 @@ features = [\"webview\"]
         assert!(error.contains("RECORD_AUDIO"), "{error}");
     }
 
-    /// **An application that declares nothing still gets what frus uses**: the vibrator and
-    /// the network state (milestone 777).
+    /// **An application that declares nothing still gets what frus uses**: the vibrator, the
+    /// network state (milestone 777) and the internet (milestone 808).
     #[test]
     fn write_android_declares_what_frus_uses_without_being_asked() {
         let root = std::env::temp_dir().join(format!("frus-perm-always-{}", std::process::id()));
@@ -655,6 +567,7 @@ features = [\"webview\"]
             once.contains("android.permission.ACCESS_NETWORK_STATE"),
             "{once}"
         );
+        assert!(once.contains("android.permission.INTERNET"), "{once}");
         assert_eq!(once.matches("android.permission.CAMERA").count(), 1);
         write_android(&root, &declared).unwrap();
         assert_eq!(

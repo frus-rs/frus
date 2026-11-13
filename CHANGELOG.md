@@ -8,10 +8,17 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 805 so far, each documenting the objective, the alternatives
+> record — one per step, 808 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
+  `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
+  `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
+  feature was on, so an application making HTTP requests worked under `frus run` (whose
+  hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
+  offline. INTERNET is a normal permission: granted at install, with no question asked.
 
 - **clippy for Android and the Web in CI** (J805). A new CI job lints the whole workspace
   for `aarch64-linux-android` and `wasm32-unknown-unknown`, where only the Linux build was
