@@ -495,6 +495,7 @@ thread_local! {
 impl Purchases {
     /// The platform's store: Google Play on Android; elsewhere a store that answers
     /// [`PurchaseError::Unsupported`]. The same one every time on a thread.
+    #[inline(never)]
     pub fn instance() -> Purchases {
         INSTANCE.with(|instance| {
             instance
