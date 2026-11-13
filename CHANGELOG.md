@@ -8,10 +8,17 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 807 so far, each documenting the objective, the alternatives
+> record — one per step, 808 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
+  `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
+  `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
+  feature was on, so an application making HTTP requests worked under `frus run` (whose
+  hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
+  offline. INTERNET is a normal permission: granted at install, with no question asked.
 
 - **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
   `query_products(ids)` (title, description, formatted price, price in micros, currency,
@@ -26,6 +33,7 @@ any release may break.
   `PurchaseError::Unsupported`. `Purchases::fake(FakeStore)` is an in-memory store on every
   platform for tests and for trying a shop: paid, pending, canceled or failing purchases. Guide:
   `docs/guide/purchases.md`; the demo has a shop screen.
+
 - **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
   `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
   and a file; `start_image_stream` with the frame's planes, borrowed on the camera's thread;
