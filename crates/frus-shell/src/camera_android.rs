@@ -359,35 +359,53 @@ pub(super) fn cameras() -> Result<Vec<CameraDescription>, CameraError> {
 }
 
 /// The display's rotation in degrees, as `Display.getRotation` gives it.
+///
+/// Read through the `DisplayManager`, which any context reaches: the context the process
+/// keeps is the application, not an activity, so an activity's `getWindowManager` is not
+/// there to call (it threw, and every preview was turned as if the phone stood upright).
 fn display_rotation() -> u32 {
     fn read() -> Result<i32, jni::errors::Error> {
         let context = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(context.vm().cast()) }?;
         let mut env = vm.attach_current_thread_permanently()?;
-        let activity = unsafe { jni::objects::JObject::from_raw(context.context().cast()) };
-        let result = (|| {
-            let manager = env
-                .call_method(
-                    &activity,
-                    "getWindowManager",
-                    "()Landroid/view/WindowManager;",
-                    &[],
-                )?
-                .l()?;
-            let display = env
-                .call_method(
-                    &manager,
-                    "getDefaultDisplay",
-                    "()Landroid/view/Display;",
-                    &[],
-                )?
-                .l()?;
-            env.call_method(&display, "getRotation", "()I", &[])?.i()
-        })();
-        if result.is_err() && env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
+        let context = unsafe { jni::objects::JObject::from_raw(context.context().cast()) };
+        // In a frame of their own: this thread stays attached, so its local references
+        // would otherwise pile up a call at a time.
+        env.with_local_frame(8, |env| {
+            let result = rotation(env, &context);
+            if result.is_err() && env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+            result
+        })
+    }
+    fn rotation(
+        env: &mut jni::JNIEnv,
+        context: &jni::objects::JObject,
+    ) -> Result<i32, jni::errors::Error> {
+        let name = env.new_string("display")?;
+        let manager = env
+            .call_method(
+                context,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[jni::objects::JValue::Object(&name)],
+            )?
+            .l()?;
+        // `Display.DEFAULT_DISPLAY`: the phone's own screen.
+        let display = env
+            .call_method(
+                &manager,
+                "getDisplay",
+                "(I)Landroid/view/Display;",
+                &[jni::objects::JValue::Int(0)],
+            )?
+            .l()?;
+        if display.is_null() {
+            return Err(jni::errors::Error::NullPtr("the default display"));
         }
-        result
+        env.call_method(&display, "getRotation", "()I", &[])?.i()
     }
     match read() {
         Ok(r) => (r.rem_euclid(4) as u32) * 90,
@@ -535,7 +553,12 @@ impl Session {
         let display = display_rotation();
         let orientation = preview_orientation(chars.lens(), chars.sensor_orientation, display);
         surface.texture().set_orientation(orientation);
-        surface.set_frame_observer(Some(observer(sink.clone(), chars.clone(), display)));
+        surface.set_frame_observer(Some(observer(
+            sink.clone(),
+            chars.clone(),
+            display,
+            Some((description.name.clone(), std::time::Instant::now())),
+        )));
 
         let mut session = Self {
             ndk,
@@ -884,6 +907,7 @@ impl Session {
                 self.sink.clone(),
                 self.chars.clone(),
                 display,
+                None,
             )));
         }
     }
@@ -894,9 +918,17 @@ fn observer(
     sink: Arc<Sink>,
     chars: Characteristics,
     display: u32,
+    mut opened: Option<(String, std::time::Instant)>,
 ) -> crate::texture_surface::FrameObserver {
     let orientation = preview_orientation(chars.lens(), chars.sensor_orientation, display);
     Box::new(move |frame| {
+        // How long the camera took to give its first frame, said once a session.
+        if let Some((name, at)) = opened.take() {
+            log::info!(
+                "camera {name}: first frame {} ms after opening",
+                at.elapsed().as_millis()
+            );
+        }
         if !sink.wants_frames() || frame.planes.len() < 3 {
             return;
         }

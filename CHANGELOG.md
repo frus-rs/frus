@@ -13,6 +13,13 @@ any release may break.
 
 ## [Unreleased]
 
+- **The camera preview turns with the display on Android** (J806). The display's rotation was
+  read through an activity method the process's context (the application) does not have: it
+  threw at every open, and every preview was turned as if the phone stood upright, sideways
+  once the display turned. It is read through the `DisplayManager` now. Each camera session
+  also logs how long its first frame took, which tells a dark scene (frames, black) from no
+  frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
+  too, and the torch lit the same preview.
 - **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
   `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
   `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
