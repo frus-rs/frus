@@ -19,8 +19,8 @@ none of it:
 frus = { version = "0.5", features = ["webview"] }
 ```
 
-`frus build` and `frus run` then declare the `android.permission.INTERNET` permission a page
-from the network needs. An APK built by hand with cargo-apk needs it in `Cargo.toml`:
+`frus build` and `frus run` declare the `android.permission.INTERNET` permission a page from
+the network needs, as they do for every application. An APK built by hand with cargo-apk needs it in `Cargo.toml`:
 
 ```toml
 [[package.metadata.android.uses_permission]]
