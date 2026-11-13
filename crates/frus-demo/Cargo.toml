@@ -35,7 +35,8 @@ shots = ["dep:frus-test", "dep:gif"]
 [dependencies]
 # The system's file dialogs, for attaching files to a task (desktop only), and its
 # notifications, for a task's reminder (desktop and Android). Web views for the browser screen.
-frus-shell = { path = "../frus-shell", features = ["camera", "file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "scanner", "taskbar", "video", "webview"] }
+# In-app purchases for the shop screen (milestone 807).
+frus-shell = { path = "../frus-shell", features = ["camera", "file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "purchases", "scanner", "taskbar", "video", "webview"] }
 frus-widgets = { path = "../frus-widgets", features = ["webview"] }
 frus-l10n = { path = "../frus-l10n" }
 frus-image = { path = "../frus-image" }

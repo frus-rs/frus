@@ -83,6 +83,10 @@ scanner-all-formats = ["frus-shell/scanner-all-formats"]
 # `VideoControls` (milestone 797). Off by default. Android, Windows and the Web; elsewhere
 # `initialize` answers `VideoError::Unsupported`.
 video = ["frus-shell/video"]
+# In-app purchases: `Purchases`, `Product`, `PurchaseUpdate`, and a test store, `FakeStore`
+# (milestone 807). Off by default. Google Play Billing on Android (`frus build` adds the Billing
+# Library to the package); elsewhere every call answers `PurchaseError::Unsupported`.
+purchases = ["frus-shell/purchases"]
 default = ["frus-shell/default", "frus-widgets/default", "frus-text/default"]
 # Decoding embedded PNG/JPEG: `Image::memory` and `asset!`. Part of `default`;
 # dropping it leaves both reporting a missing decoder rather than panicking.

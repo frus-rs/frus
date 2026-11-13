@@ -15,6 +15,7 @@
 
 mod analyze;
 mod android_activity;
+mod android_billing;
 mod android_pack;
 mod app_links;
 mod build;

@@ -20,12 +20,27 @@ any release may break.
   also logs how long its first frame took, which tells a dark scene (frames, black) from no
   frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
   too, and the torch lit the same preview.
+
 - **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
   `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
   `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
   feature was on, so an application making HTTP requests worked under `frus run` (whose
   hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
   offline. INTERNET is a normal permission: granted at install, with no question asked.
+
+- **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
+  `query_products(ids)` (title, description, formatted price, price in micros, currency,
+  kind: consumable, non-consumable or subscription, and the ids the store does not sell),
+  `buy(product)` / `buy_for(product, account_id)`, `restore()`, `complete(update)` (consumes a
+  consumable, acknowledges the rest), and `add_listener` for `PurchaseUpdate`s (pending,
+  purchased, restored, error, canceled), handed over on the interface's thread. Android sells
+  through Google Play Billing Library 8.3.0: an 18 KB bridge dex compiled in with the feature,
+  and `frus build` / `frus run` find the feature's marker in the application's library, fetch
+  the library once, shrink it with R8 to about 330 KB of dex, and declare its permission and
+  activity in the manifest. iOS, macOS, Windows, Linux and the web answer
+  `PurchaseError::Unsupported`. `Purchases::fake(FakeStore)` is an in-memory store on every
+  platform for tests and for trying a shop: paid, pending, canceled or failing purchases. Guide:
+  `docs/guide/purchases.md`; the demo has a shop screen.
 
 - **clippy for Android and the Web in CI** (J805). A new CI job lints the whole workspace
   for `aarch64-linux-android` and `wasm32-unknown-unknown`, where only the Linux build was

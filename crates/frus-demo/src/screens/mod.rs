@@ -23,6 +23,7 @@ mod native;
 mod player;
 mod settings;
 mod sheet;
+mod shop;
 mod task;
 mod todo;
 mod tour;
@@ -42,6 +43,7 @@ pub(crate) use native::*;
 pub(crate) use player::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
+pub(crate) use shop::*;
 pub(crate) use task::*;
 pub(crate) use todo::*;
 pub(crate) use tour::*;
@@ -89,6 +91,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("native", |_, _| NativePage.into_widget()),
         GoRoute::new("player", |_, _| PlayerPage.into_widget()),
         GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
+        GoRoute::new("shop", |_, _| ShopPage.into_widget()),
         task,
     ])])
 }
