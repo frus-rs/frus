@@ -790,14 +790,17 @@ pub(crate) fn lifecycle(foreground: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     thread_local! {
         static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static SINK: RefCell<Option<Arc<Sink>>> = const { RefCell::new(None) };
+        // Per test thread: the tests run in parallel and each counts only its own players.
+        static RELEASED: Cell<usize> = const { Cell::new(0) };
     }
 
-    static RELEASED: AtomicUsize = AtomicUsize::new(0);
+    fn released() -> usize {
+        RELEASED.with(Cell::get)
+    }
 
     struct Fake;
 
@@ -832,7 +835,7 @@ mod tests {
 
     impl Drop for Fake {
         fn drop(&mut self) {
-            RELEASED.fetch_add(1, Ordering::SeqCst);
+            RELEASED.with(|r| r.set(r.get() + 1));
         }
     }
 
@@ -1031,19 +1034,19 @@ mod tests {
 
     #[test]
     fn the_last_handle_or_dispose_releases_the_player() {
-        let before = RELEASED.load(Ordering::SeqCst);
+        let before = released();
         let c = controller();
         drop(c.initialize());
         let other = c.clone();
         drop(c);
-        assert_eq!(RELEASED.load(Ordering::SeqCst), before);
+        assert_eq!(released(), before);
         drop(other);
-        assert_eq!(RELEASED.load(Ordering::SeqCst), before + 1);
+        assert_eq!(released(), before + 1);
 
         let d = controller();
         let mut init = Box::pin(d.initialize());
         d.dispose();
-        assert_eq!(RELEASED.load(Ordering::SeqCst), before + 2);
+        assert_eq!(released(), before + 2);
         assert!(d.is_disposed());
         assert_eq!(poll_once(&mut init), Poll::Ready(Err(VideoError::Disposed)));
         // Nothing reaches a released player.
