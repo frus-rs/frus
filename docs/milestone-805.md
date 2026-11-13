@@ -31,7 +31,8 @@ cargo clippy --workspace --exclude frus-cli --target wasm32-unknown-unknown --no
     `#[wasm_bindgen(start)]` entry point, and the crate did not depend on `wasm-bindgen` for
     that target the way `frus-hello` does. The dependency is added.
   - `frus-shell`'s `async-channel` (features `sqlite` and `auth`) is used only natively. It
-    moves to the native-only dependency table.
+    moved to the native-only dependency table, then back to every target when the merge with
+    the camera (milestone 798) brought `scanner`, whose captures use it on the Web too.
 - `frus-cli` is left out of the wasm lint: it is the developer's command-line tool and uses
   `std::os::unix` and processes, which do not exist in a browser.
 

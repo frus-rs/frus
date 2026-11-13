@@ -69,6 +69,16 @@ auth = ["frus-shell/auth"]
 # Secrets kept by the system: `secure_store()`. Off by default; Linux builds talk to the
 # desktop's Secret Service over D-Bus (no system library needed).
 secure-store = ["frus-shell/secure-store"]
+# The camera: `available_cameras()`, `CameraController`, `CameraPreview` (milestone 798).
+# Android (Camera2 through the NDK, nothing linked), Windows (Media Foundation) and the Web
+# (getUserMedia). Off by default.
+camera = ["frus-shell/camera"]
+# Reading QR codes from the camera: `Scanner`, `ScannerController` (milestone 798). Implies
+# `camera`; the reader (rxing, pure Rust) adds about 0.5 MB to a release build.
+scanner = ["frus-shell/scanner"]
+# Every barcode format rxing reads (EAN, UPC, Code 128, Data Matrix, PDF417, Aztec...), not
+# only QR codes: about 1 MB more than `scanner`.
+scanner-all-formats = ["frus-shell/scanner-all-formats"]
 # Video playback: `VideoPlayerController`, `VideoPlayer`, `VideoProgressIndicator`,
 # `VideoControls` (milestone 797). Off by default. Android, Windows and the Web; elsewhere
 # `initialize` answers `VideoError::Unsupported`.

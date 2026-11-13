@@ -16,9 +16,26 @@ any release may break.
 - **clippy for Android and the Web in CI** (J805). A new CI job lints the whole workspace
   for `aarch64-linux-android` and `wasm32-unknown-unknown`, where only the Linux build was
   linted before. It found `frus-transforms` not compiling for the Web (no `wasm-bindgen`
-  dependency for `main!`'s entry point) and three dependencies built where nothing uses them:
-  `async-lock` is now part of `frus-shell`'s `net` feature, `async-channel` native only, and
-  `frus-gpu` a dev-dependency of `frus-bench`.
+  dependency for `main!`'s entry point) and two dependencies built where nothing uses them:
+  `async-lock` is now part of `frus-shell`'s `net` feature, and `frus-gpu` a dev-dependency
+  of `frus-bench`.
+
+- **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
+  `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
+  and a file; `start_image_stream` with the frame's planes, borrowed on the camera's thread;
+  flash modes and torch, zoom, focus point, switching cameras, pausing) and the
+  `CameraPreview` widget. Android through Camera2 in the NDK (nothing linked; looked up when a
+  camera is first listed) into a texture surface, the frames turned upright on the GPU; the
+  camera closes in the background and opens again on return. Windows through Media Foundation
+  (webcams), the web through `getUserMedia`; macOS, Linux and iOS answer `Unsupported`.
+  Feature `scanner`: the `Scanner` widget with `on_detect(|capture| ..)` (format, text, bytes,
+  corners), `ScannerController` (formats, detection speed and timeout, torch, other camera) and
+  `decode_luma`, read by rxing in pure Rust on a thread of the scanner's own, at most one frame
+  per timeout; QR codes, every other format with `scanner-all-formats`. External textures gain
+  an orientation (`ExternalTexture::set_orientation`, `FrameOrientation`: quarter turns and a
+  mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer,
+  `readable_with_texture` (frames always copied to planes the CPU reads, never imported as
+  hardware buffers: what the camera uses) and `into_texture`.
 
 - **690 KB off every Android application** (J803). The logcat logger is built without its
   regular-expression engine, which only a `crate=level/pattern` filter needs and which the
