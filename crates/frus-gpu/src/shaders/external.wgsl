@@ -5,6 +5,10 @@
 // decodes it to linear and the channels are put back in order.
 // Mode 1, NV12: luma in plane 0, interleaved U and V in plane 1, half size each way.
 // Mode 2, I420: luma in plane 0, U in plane 1, V in plane 2.
+// Mode 3, RGBA: the plane as it is; only a turned RGBA frame comes through here.
+//
+// A frame may be turned by quarter turns, mirrored first (milestone 798): the target is the
+// frame as drawn, and each of its pixels reads the frame's pixel that lands there.
 //
 // YUV becomes non-linear RGB through the matrix and offsets the frame's colour space
 // gives (computed on the CPU by `external.rs`, where they are tested), then linear light
@@ -13,9 +17,9 @@
 
 struct Params {
     mode: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    turns: u32,
+    mirrored: u32,
+    _pad: u32,
     row_r: vec4<f32>,
     row_g: vec4<f32>,
     row_b: vec4<f32>,
@@ -61,19 +65,41 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, c <= vec3<f32>(0.04045));
 }
 
+// The point of the frame, as pushed, that lands on `at_target` once it is turned: the turn
+// undone, then the mirror.
+fn source(at_target: vec2<f32>) -> vec2<f32> {
+    let size = vec2<f32>(textureDimensions(plane0));
+    var p = at_target;
+    if params.turns == 1u {
+        p = vec2<f32>(at_target.y, size.y - at_target.x);
+    } else if params.turns == 2u {
+        p = size - at_target;
+    } else if params.turns == 3u {
+        p = vec2<f32>(size.x - at_target.y, at_target.x);
+    }
+    if params.mirrored != 0u {
+        p.x = size.x - p.x;
+    }
+    return p;
+}
+
 @fragment
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let pixel = vec2<i32>(pos.xy);
+    let at = source(pos.xy);
+    let pixel = vec2<i32>(floor(at));
     if params.mode == 0u {
         let s = textureLoad(plane0, pixel, 0);
         return vec4<f32>(s.b, s.g, s.r, s.a);
     }
+    if params.mode == 3u {
+        return textureLoad(plane0, pixel, 0);
+    }
     let y = textureLoad(plane0, pixel, 0).r;
     var uv: vec2<f32>;
     if params.mode == 1u {
-        uv = chroma(plane1, pos.xy).rg;
+        uv = chroma(plane1, at).rg;
     } else {
-        uv = vec2<f32>(chroma(plane1, pos.xy).r, chroma(plane2, pos.xy).r);
+        uv = vec2<f32>(chroma(plane1, at).r, chroma(plane2, at).r);
     }
     let yuv = vec4<f32>(y, uv, 1.0) - params.offset;
     let rgb = clamp(

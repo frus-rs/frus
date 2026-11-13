@@ -73,6 +73,8 @@ mod autofill;
 mod bidi_caret_tests;
 mod build_info;
 mod cache_dir;
+#[cfg(feature = "camera")]
+mod camera;
 mod caret;
 mod command;
 // Watching the device's networks (milestone 777).
@@ -137,6 +139,8 @@ mod reduce_motion;
 mod reload;
 // Where each platform keeps the restoration data (milestone 753).
 mod restoration;
+#[cfg(feature = "scanner")]
+mod scanner;
 #[cfg(web)]
 mod web_device;
 #[cfg(web)]
@@ -208,6 +212,14 @@ pub use application::{Application, Lifecycle, LocationStrategy};
 #[doc(hidden)]
 pub use build_info::{__BuildInfo, __register_build};
 pub use build_info::{app_version, build_mode, flavor, AppVersion, BuildMode};
+/// The camera (feature `camera`, milestone 798): [`available_cameras`], [`CameraController`] and
+/// the [`CameraPreview`] widget.
+#[cfg(feature = "camera")]
+pub use camera::{
+    available_cameras, CameraController, CameraDescription, CameraError, CameraImage,
+    CameraImageFormat, CameraLensDirection, CameraPlane, CameraPreview, FlashMode, Picture,
+    ResolutionPreset,
+};
 pub use command::Command;
 pub use data_dir::app_data_dir;
 #[cfg(all(desktop, feature = "file-dialogs"))]
@@ -229,6 +241,12 @@ pub use pacing::DECORATIVE_FRAME_RATE;
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use platform_view::{register_android_view_factory, PlatformViewError};
 pub use remote::RemoteData;
+/// Reading QR codes and barcodes (feature `scanner`, milestone 798): the [`Scanner`] widget.
+#[cfg(feature = "scanner")]
+pub use scanner::{
+    decode_luma, Barcode, BarcodeCapture, BarcodeFormat, DetectionSpeed, Scanner,
+    ScannerController, ScannerState,
+};
 #[cfg(feature = "secure-store")]
 pub use secure_store::{secure_store, SecureStore, SecureStoreError};
 pub use share::{share, Share, ShareError, ShareOutcome};
@@ -242,7 +260,7 @@ pub use subscription::Subscription;
 pub use taskbar::{Taskbar, TaskbarProgress};
 #[cfg(any(test, feature = "testing"))]
 pub use tester::Tester;
-pub use texture_surface::{SurfaceFormat, TextureSurface};
+pub use texture_surface::{FrameObserver, SurfaceFormat, SurfaceFrame, TextureSurface};
 pub use tray::Tray;
 pub use widget_app::FrusApp;
 

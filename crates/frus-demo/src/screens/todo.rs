@@ -666,6 +666,7 @@ impl HomeState {
                         link("Draggable sheet →", "/sheet"),
                         link("Kanban board →", "/board"),
                         link("External texture →", "/video"),
+                        link("Camera and scanner →", "/camera"),
                         link("Native views →", "/native"),
                     ]
                     .gap(12.0),

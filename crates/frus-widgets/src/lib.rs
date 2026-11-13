@@ -745,8 +745,9 @@ pub use frus_core::{
 };
 /// External textures (milestone 793): what a producer feeds and a [`Texture`] shows.
 pub use frus_core::{
-    textures, ExternalTexture, FrameInfo, FramePlane, PixelFormat, TextureError, TextureFrame,
-    TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane, MAX_TEXTURE_SIDE,
+    textures, ExternalTexture, FrameInfo, FrameOrientation, FramePlane, PixelFormat, TextureError,
+    TextureFrame, TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane,
+    MAX_TEXTURE_SIDE,
 };
 /// The rest of the animation layer: tweens chained and curved, the scroll simulations and
 /// their constants.

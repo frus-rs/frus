@@ -68,6 +68,9 @@ jobs:
           cargo test -p frus-shell --features "net sqlite auth" --lib
           cargo test -p frus --features "net sqlite auth" --doc
           cargo test -p frus-shell --features testing --test animation_speed
+          # The camera and the code reader (milestone 798), and their guide.
+          cargo test -p frus-shell --features "camera scanner" --lib
+          cargo test -p frus --features "camera scanner" --doc
 
       # The tray icon on Linux (milestone 706): its menus are made with GTK 3, which nothing
       # else here needs, so it is built on its own rather than through the demo, which leaves

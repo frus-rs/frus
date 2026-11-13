@@ -12,10 +12,13 @@
 //! - an RGBA frame is written straight into the sampled texture;
 //! - a BGRA, NV12 or I420 frame is written into plane textures of its own layout, then
 //!   turned into RGBA by one pass of `external.wgsl` (the YUV to RGB conversion runs on
-//!   the GPU, with the frame's colour space).
+//!   the GPU, with the frame's colour space);
+//! - a frame with an [orientation](frus_core::FrameOrientation) (milestone 798) is turned in
+//!   that same pass — an RGBA one goes through it too — into a texture of the size it is drawn
+//!   at, so a camera's sideways frames cost nothing more than upright ones.
 
 use bytemuck::{Pod, Zeroable};
-use frus_core::{PixelFormat, TextureFrame, YuvColorSpace};
+use frus_core::{FrameOrientation, PixelFormat, TextureFrame, YuvColorSpace};
 use wgpu::util::DeviceExt;
 
 use crate::mipmap;
@@ -25,7 +28,11 @@ use crate::mipmap;
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq)]
 struct Params {
     mode: u32,
-    _pad: [u32; 3],
+    /// Clockwise quarter turns, `0..4`.
+    turns: u32,
+    /// `1` when mirrored left to right before the turn.
+    mirrored: u32,
+    _pad: u32,
     row_r: [f32; 4],
     row_g: [f32; 4],
     row_b: [f32; 4],
@@ -81,14 +88,19 @@ fn yuv_to_rgb(y: u8, u: u8, v: u8, space: YuvColorSpace) -> [u8; 3] {
 
 fn params(frame: &TextureFrame) -> Params {
     let mode = match frame.format() {
-        PixelFormat::Rgba8 | PixelFormat::Bgra8 => 0,
+        PixelFormat::Bgra8 => 0,
         PixelFormat::Nv12 => 1,
         PixelFormat::I420 => 2,
+        // Only when turned: an upright RGBA frame is written straight into its texture.
+        PixelFormat::Rgba8 => 3,
     };
     let (rows, offset) = yuv_matrix(frame.color_space());
+    let orientation = frame.orientation();
     Params {
         mode,
-        _pad: [0; 3],
+        turns: orientation.quarter_turns(),
+        mirrored: orientation.mirrored() as u32,
+        _pad: 0,
         row_r: rows[0],
         row_g: rows[1],
         row_b: rows[2],
@@ -113,6 +125,7 @@ struct Shape {
     width: u32,
     height: u32,
     format: PixelFormat,
+    orientation: FrameOrientation,
 }
 
 impl Shape {
@@ -121,7 +134,14 @@ impl Shape {
             width: frame.width(),
             height: frame.height(),
             format: frame.format(),
+            orientation: frame.orientation(),
         }
+    }
+
+    /// Whether the frame goes through the conversion pass: every layout but an upright RGBA
+    /// one, which is written straight into the sampled texture.
+    fn converted(&self) -> bool {
+        self.format != PixelFormat::Rgba8 || !self.orientation.is_upright()
     }
 }
 
@@ -177,7 +197,7 @@ impl ExternalUploader {
             *slot = Some(self.make(device, shape));
         }
         let slot = slot.as_mut().expect("made above");
-        if shape.format == PixelFormat::Rgba8 {
+        if !shape.converted() {
             write_plane(queue, &slot.texture, frame, 0);
         } else {
             for (index, plane) in slot.planes.iter().enumerate() {
@@ -199,16 +219,18 @@ impl ExternalUploader {
     }
 
     fn make(&mut self, device: &wgpu::Device, shape: Shape) -> ExternalSlot {
-        let converted = shape.format != PixelFormat::Rgba8;
+        let converted = shape.converted();
         let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         if converted {
             usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
         }
+        // The size the frame is drawn at: its sides swapped by an odd number of quarter turns.
+        let (width, height) = shape.orientation.size(shape.width, shape.height);
         let texture = new_texture(
             device,
             "frus.external.texture",
-            shape.width,
-            shape.height,
+            width,
+            height,
             mipmap::FORMAT,
             usage,
         );
@@ -496,6 +518,24 @@ mod tests {
         // BT.709 limited red.
         let red = yuv_to_rgb(63, 102, 240, YuvColorSpace::Bt709Limited);
         assert!(close(red, [255, 0, 0]), "{red:?}");
+    }
+
+    #[test]
+    fn turned_frames_are_converted_into_a_texture_of_their_drawn_size() {
+        let shape = |format, turns| Shape {
+            width: 640,
+            height: 480,
+            format,
+            orientation: FrameOrientation::new(turns, false),
+        };
+        assert!(!shape(PixelFormat::Rgba8, 0).converted());
+        assert!(shape(PixelFormat::Rgba8, 1).converted());
+        assert!(shape(PixelFormat::Nv12, 0).converted());
+        let turned = shape(PixelFormat::I420, 1);
+        assert_eq!(
+            turned.orientation.size(turned.width, turned.height),
+            (480, 640)
+        );
     }
 
     #[test]

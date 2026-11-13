@@ -71,6 +71,9 @@ pub struct GuideTesting;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/textures.md")]
 pub struct GuideTextures;
+#[cfg(all(doctest, feature = "camera", feature = "scanner"))]
+#[doc = include_str!("../../../docs/guide/camera.md")]
+pub struct GuideCamera;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -141,7 +144,7 @@ pub mod fonts {
 
 // External textures (milestone 793): `textures()`, `Texture` and `ExternalTexture` come with
 // the widgets; the platform surface a decoder or camera draws into is the shell's.
-pub use frus_shell::{SurfaceFormat, TextureSurface};
+pub use frus_shell::{FrameObserver, SurfaceFormat, SurfaceFrame, TextureSurface};
 
 // The system's file dialogs (feature `file-dialogs`, desktop only): `FileDialog`.
 #[cfg(all(
@@ -178,6 +181,22 @@ pub use frus_shell::haptics;
 pub use frus_shell::HapticsError;
 #[cfg(feature = "secure-store")]
 pub use frus_shell::{secure_store, SecureStore, SecureStoreError};
+
+/// **The camera** (feature `camera`, milestone 798): the cameras of the device, a controller
+/// for the preview, pictures, frames, flash, zoom and focus, and the [`CameraPreview`] widget.
+#[cfg(feature = "camera")]
+pub use frus_shell::{
+    available_cameras, CameraController, CameraDescription, CameraError, CameraImage,
+    CameraImageFormat, CameraLensDirection, CameraPlane, CameraPreview, FlashMode, Picture,
+    ResolutionPreset,
+};
+/// **Reading QR codes and barcodes** (feature `scanner`, milestone 798): the [`Scanner`] widget
+/// and its [`ScannerController`].
+#[cfg(feature = "scanner")]
+pub use frus_shell::{
+    decode_luma, Barcode, BarcodeCapture, BarcodeFormat, DetectionSpeed, Scanner,
+    ScannerController, ScannerState,
+};
 
 /// Asking the person for the camera, the microphone, the location, notifications
 /// (milestone 730).

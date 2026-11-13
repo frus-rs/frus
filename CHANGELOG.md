@@ -8,11 +8,26 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 795 so far, each documenting the objective, the alternatives
+> record — one per step, 798 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
+  `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
+  and a file; `start_image_stream` with the frame's planes, borrowed on the camera's thread;
+  flash modes and torch, zoom, focus point, switching cameras, pausing) and the
+  `CameraPreview` widget. Android through Camera2 in the NDK (nothing linked; looked up when a
+  camera is first listed) into a texture surface, the frames turned upright on the GPU; the
+  camera closes in the background and opens again on return. Windows through Media Foundation
+  (webcams), the web through `getUserMedia`; macOS, Linux and iOS answer `Unsupported`.
+  Feature `scanner`: the `Scanner` widget with `on_detect(|capture| ..)` (format, text, bytes,
+  corners), `ScannerController` (formats, detection speed and timeout, torch, other camera) and
+  `decode_luma`, read by rxing in pure Rust on a thread of the scanner's own, at most one frame
+  per timeout; QR codes, every other format with `scanner-all-formats`. External textures gain
+  an orientation (`ExternalTexture::set_orientation`, `FrameOrientation`: quarter turns and a
+  mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer and
+  `into_texture`.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

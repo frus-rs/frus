@@ -11,6 +11,7 @@
 //! router's; nothing here keeps them.
 
 mod board;
+mod camera;
 mod charts;
 mod data;
 mod grid;
@@ -27,6 +28,7 @@ mod video;
 mod wizard;
 
 pub(crate) use board::*;
+pub(crate) use camera::*;
 pub(crate) use charts::*;
 pub(crate) use data::*;
 pub(crate) use grid::*;
@@ -79,6 +81,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("sheet", |_, _| SheetPage.into_widget()),
         GoRoute::new("licenses", |_, _| LicensesPage.into_widget()),
         GoRoute::new("video", |_, _| VideoPage.into_widget()),
+        GoRoute::new("camera", |_, _| CameraPage.into_widget()),
         GoRoute::new("native", |_, _| NativePage.into_widget()),
         task,
     ])])
