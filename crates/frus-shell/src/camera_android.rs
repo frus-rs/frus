@@ -5,7 +5,10 @@
 //!
 //! - The preview is a repeating request into a [`TextureSurface`] (an image reader whose
 //!   frames become the texture the `CameraPreview` shows), turned upright on the GPU by the
-//!   texture's orientation. Its frames go to the image stream from the reader's thread.
+//!   texture's orientation. Its frames go to the image stream from the reader's thread, so
+//!   the surface is always made readable (`TextureSurface::readable_with_texture`): with the
+//!   `hardware-buffers` feature its frames are still copied, never imported as GPU buffers
+//!   the image stream and the scanner could not read.
 //! - A picture is a single request into a second image reader, of JPEG images, which tells
 //!   the JPEG how to stand upright (its EXIF orientation).
 //! - The flash, the zoom (a crop of the sensor, which every Camera2 device has) and the focus
@@ -442,8 +445,9 @@ impl Preview {
                 .take()
                 .ok_or_else(|| CameraError::Platform("the preview texture is gone".into()))?,
         };
-        let surface = TextureSurface::readable_with_texture(texture, size.0, size.1, SurfaceFormat::Yuv420)
-            .map_err(|e| CameraError::Platform(e.to_string()))?;
+        let surface =
+            TextureSurface::readable_with_texture(texture, size.0, size.1, SurfaceFormat::Yuv420)
+                .map_err(|e| CameraError::Platform(e.to_string()))?;
         let surface = Arc::new(surface);
         *slot = Some((surface.clone(), size));
         Ok(surface)

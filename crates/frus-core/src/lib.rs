@@ -97,8 +97,7 @@ pub use text_style::{
     TextSpan, TextStyle, DEFAULT_LINE_HEIGHT, DEFAULT_TEXT_SIZE,
 };
 pub use texture::{
-    textures, ExternalTexture, FrameInfo, FrameOrientation, FramePlane, HardwareBuffer, PixelFormat,
-    TextureError,
-    TextureFrame, TextureId, TextureRegistry, TextureStats, YuvColorSpace, YuvPlane,
-    MAX_TEXTURE_SIDE,
+    textures, ExternalTexture, FrameInfo, FrameOrientation, FramePlane, HardwareBuffer,
+    PixelFormat, TextureError, TextureFrame, TextureId, TextureRegistry, TextureStats,
+    YuvColorSpace, YuvPlane, MAX_TEXTURE_SIDE,
 };

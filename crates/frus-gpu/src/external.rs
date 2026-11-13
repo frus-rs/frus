@@ -664,6 +664,7 @@ mod tests {
             height: 480,
             format,
             orientation: FrameOrientation::new(turns, false),
+            hardware: false,
         };
         assert!(!shape(PixelFormat::Rgba8, 0).converted());
         assert!(shape(PixelFormat::Rgba8, 1).converted());

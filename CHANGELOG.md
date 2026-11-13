@@ -26,8 +26,9 @@ any release may break.
   `decode_luma`, read by rxing in pure Rust on a thread of the scanner's own, at most one frame
   per timeout; QR codes, every other format with `scanner-all-formats`. External textures gain
   an orientation (`ExternalTexture::set_orientation`, `FrameOrientation`: quarter turns and a
-  mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer and
-  `into_texture`.
+  mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer,
+  `readable_with_texture` (frames always copied to planes the CPU reads, never imported as
+  hardware buffers: what the camera uses) and `into_texture`.
 
 - **690 KB off every Android application** (J803). The logcat logger is built without its
   regular-expression engine, which only a `crate=level/pattern` filter needs and which the
