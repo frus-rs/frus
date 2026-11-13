@@ -202,6 +202,18 @@ mod web_keys;
 mod web_page;
 #[cfg(web)]
 mod web_platform_view;
+// A web view controller's page in an `<iframe>` (milestone 804).
+#[cfg(all(web, feature = "webview"))]
+mod web_frame;
+// The web views' protocol as the Windows and the web hosts speak it (milestone 804).
+#[cfg(any(
+    all(windows, feature = "webview2"),
+    all(web, feature = "webview"),
+    all(test, feature = "webview")
+))]
+// Windows uses all of it; the web and the tests elsewhere a part.
+#[cfg_attr(not(all(windows, feature = "webview2")), allow(dead_code))]
+mod web_view_protocol;
 mod widget_app;
 // The desktop window's size, place and maximized state, kept between runs (milestone 783).
 #[cfg(any(desktop, test))]

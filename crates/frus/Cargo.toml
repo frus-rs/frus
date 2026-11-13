@@ -91,8 +91,10 @@ bundled-arabic = ["frus-shell/bundled-arabic", "frus-widgets/bundled-arabic", "f
 # `default`; see frus-text's manifest for its size.
 dictionary-line-breaks = ["frus-shell/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks", "frus-text/dictionary-line-breaks"]
 # Web pages inside the page: `WebViewController`, `WebViewWidget`, `NavigationDelegate`,
-# `WebViewCookieManager` (milestone 799). Android for now. Off by default: an application
-# without a web view pays nothing for it. `frus build` declares the INTERNET permission.
+# `WebViewCookieManager` (milestones 799 and 804). Android's web view, WebView2 on Windows
+# (implies `webview2`), a frame on the web; a stand-in on macOS, Linux and iOS. Off by
+# default: an application without a web view pays nothing for it. `frus build` declares the
+# INTERNET permission.
 webview = ["frus-shell/webview", "frus-widgets/webview"]
 icons-outlined = ["frus-widgets/icons-outlined"]
 icons-rounded = ["frus-widgets/icons-rounded"]

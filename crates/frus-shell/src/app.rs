@@ -2177,6 +2177,32 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Sends the calls for every web view the application made since the last frame (a page
+    /// let go, the cookies: milestone 804) to the host. No call, no work: one thread-local
+    /// borrow.
+    #[cfg(all(any(windows, web), feature = "webview"))]
+    fn send_web_view_calls(&mut self) {
+        let calls = frus_widgets::take_web_view_calls();
+        if calls.is_empty() {
+            return;
+        }
+        if self.view_host.is_none() {
+            // A page let go with no host never had a view; a cookie call needs the host.
+            if calls
+                .iter()
+                .all(|(method, _)| method == frus_widgets::web_view_wire::RELEASE)
+            {
+                return;
+            }
+            self.view_host = self.make_view_host();
+        }
+        if let Some(host) = self.view_host.as_mut() {
+            for (method, arguments) in &calls {
+                host.web_global(method, arguments);
+            }
+        }
+    }
+
     /// The host of the native views, made with the first of them.
     #[cfg(any(windows, web))]
     fn make_view_host(&self) -> Option<NativeHost> {
@@ -2204,9 +2230,24 @@ impl<A: Application> App<A> {
     #[cfg(any(windows, web))]
     fn drain_hosted_views(&mut self) {
         if self.hosted_views.is_empty() {
+            // What no view in particular answered, a web views' cookie call (milestone 804),
+            // can come with no view left.
+            #[cfg(feature = "webview")]
+            for (view, name, data) in crate::view_host::take_events() {
+                if view == -1 && frus_widgets::handle_web_view_global_event(&name, &data) {
+                    self.request_redraw();
+                }
+            }
             return;
         }
         for (view, name, data) in crate::view_host::take_events() {
+            #[cfg(feature = "webview")]
+            if view == -1 {
+                if frus_widgets::handle_web_view_global_event(&name, &data) {
+                    self.request_redraw();
+                }
+                continue;
+            }
             let Some(widget) = self.hosted_views.widget_of(view) else {
                 continue;
             };
@@ -4821,6 +4862,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // clipped, hidden under a dialog (milestone 802).
                 #[cfg(any(windows, web))]
                 self.sync_hosted_views();
+                // Calls for every web view (a page let go, the cookies: milestone 804), after
+                // the frame's views, so that a page is let go only once its view is.
+                #[cfg(all(any(windows, web), feature = "webview"))]
+                self.send_web_view_calls();
 
                 // The system bars follow the frame: the regions under them, then the theme.
                 self.sync_system_bars(&theme);

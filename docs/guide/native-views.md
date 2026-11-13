@@ -25,7 +25,8 @@ Where a view type has no factory, the widget shows its fallback. By default that
 `AndroidView` is the same widget for Android alone: it shows its fallback everywhere else,
 even where a `PlatformView` of the same type is hosted.
 
-The web view on Windows is behind the `webview2` feature of `frus`, off by default:
+The web view on Windows is behind the `webview2` feature of `frus`, off by default (the
+`webview` feature of [web views](webview.md) turns it on too):
 
 ```toml
 frus = { version = "0.5", features = ["webview2"] }
@@ -100,8 +101,9 @@ and its history to itself (`evaluateJavascript` then answers `null`, and `goBack
 nothing). HTML given to the view, and pages of the application's own site, have none of these
 limits.
 
-For a web page, `WebViewController` and `WebViewWidget` do all of this and more: history,
-navigation decisions, JavaScript channels, cookies, and Back going back in the page. See
+For a web page, `WebViewController` and `WebViewWidget` do all of this and more, with one
+API on Android, Windows and the web: history, navigation decisions, JavaScript channels,
+cookies, and Back going back in the page on Android. See
 [Web pages inside the page](webview.md).
 
 ## How the view behaves among frus widgets

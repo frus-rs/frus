@@ -672,10 +672,10 @@ pub use wavy::{
 #[cfg(feature = "webview")]
 pub use webview::{
     handle_web_view_global_event, take_web_view_calls, web_view_cookies_cleared, web_view_wire,
-    CookiesCleared, HttpResponseError, JavaScriptMessage, JavaScriptMode, JavaScriptResult,
-    NavigationDecision, NavigationDelegate, NavigationRequest, UrlChange, WeakWebViewController,
-    WebMethod, WebRequest, WebResourceError, WebResourceErrorType, WebViewController,
-    WebViewCookie, WebViewCookieManager, WebViewError, WebViewWidget, WEB_VIEWS_SUPPORTED,
+    web_views_available, CookiesCleared, HttpResponseError, JavaScriptMessage, JavaScriptMode,
+    JavaScriptResult, NavigationDecision, NavigationDelegate, NavigationRequest, UrlChange,
+    WeakWebViewController, WebMethod, WebRequest, WebResourceError, WebResourceErrorType,
+    WebViewController, WebViewCookie, WebViewCookieManager, WebViewError, WebViewWidget,
     WEB_VIEW_DEFAULT_HEIGHT, WEB_VIEW_TYPE,
 };
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
