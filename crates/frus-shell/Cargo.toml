@@ -59,6 +59,20 @@ sqlite = ["dep:rusqlite", "dep:async-channel"]
 # `auth_session()` (milestone 795). Off by default. The hashing and the random bytes come
 # from `ring`, already in the tree through the `net` feature's TLS.
 auth = ["json", "dep:ring", "dep:async-channel", "web-sys/Crypto", "web-sys/SubtleCrypto"]
+# Video playback: `VideoPlayerController`, `VideoPlayer` (milestone 797). Off by default. The
+# platform's own player does the work (Android's MediaPlayer, Windows' Media Foundation, the
+# browser's <video>), so nothing is compiled in but the bindings.
+video = [
+    "windows/Win32_Media_MediaFoundation",
+    "windows/Win32_Graphics_Imaging",
+    "web-sys/HtmlVideoElement",
+    "web-sys/HtmlMediaElement",
+    "web-sys/MediaError",
+    "web-sys/TimeRanges",
+    "web-sys/CanvasRenderingContext2d",
+    "web-sys/ImageData",
+    "web-sys/Url",
+]
 # A web page inside the page on Windows: `PlatformView::new("frus/webview", ..)` hosted by the
 # system's WebView2 (milestone 802). Off by default: the bindings are a few hundred kilobytes,
 # and the Edge WebView2 runtime must be on the machine (it ships with Windows 11). Without it,
@@ -207,6 +221,9 @@ security-framework = { version = "3", optional = true, default-features = false 
 windows = { version = "0.62", features = ["ApplicationModel_DataTransfer", "Foundation", "Networking_Connectivity", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The share window's list of files, and waiting for a file to be found (milestone 775).
 windows-collections = "0.3"
+# The media engine's callback (feature `video`, milestone 797): `#[implement]` names this crate.
+# Already in the tree, through `windows`.
+windows-core = "0.62"
 # The web view on Windows (feature `webview2`, milestone 802): the WebView2 COM interfaces, over
 # the same `windows` crate as above.
 webview2-com = { version = "0.39", optional = true }

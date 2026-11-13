@@ -2712,6 +2712,13 @@ impl<A: Application> App<A> {
             if !self.platform_views.is_empty() {
                 crate::android_platform_view::lifecycle(state == Lifecycle::Resumed);
             }
+            // Clips pause in the background and play again on the way back (milestone 797).
+            #[cfg(feature = "video")]
+            match state {
+                Lifecycle::Resumed => crate::video::lifecycle(true),
+                Lifecycle::Paused => crate::video::lifecycle(false),
+                Lifecycle::Inactive | Lifecycle::Detached => {}
+            }
         }
     }
 

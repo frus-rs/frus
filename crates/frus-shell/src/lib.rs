@@ -152,6 +152,9 @@ mod taskbar;
 mod texture_surface;
 // The tray icon (milestone 706): its description everywhere, the system's own on the desktop.
 mod tray;
+// Video playback (feature `video`, milestone 797).
+#[cfg(feature = "video")]
+mod video;
 // The Web side of a reload under `frus run`: the states kept across the page's reload.
 #[cfg(web)]
 mod web_dev;
@@ -275,6 +278,12 @@ pub use auth::{auth_session, AuthError, AuthRequest, AuthTokens, DEFAULT_AUTH_TI
 /// A SQLite database (feature `sqlite`, milestone 795): [`database()`], [`Database`].
 #[cfg(feature = "sqlite")]
 pub use database::{database, Database, DatabaseBuilder, DatabaseError, Row};
+/// Video playback (feature `video`, milestone 797): [`VideoPlayerController`], [`VideoPlayer`].
+#[cfg(feature = "video")]
+pub use video::{
+    DataSource, DurationRange, VideoControls, VideoControlsStyle, VideoError, VideoPlayer,
+    VideoPlayerController, VideoPlayerValue, VideoProgressColors, VideoProgressIndicator,
+};
 
 /// The size the disk cache of network images is kept under by default.
 #[cfg(all(feature = "net", not(web)))]

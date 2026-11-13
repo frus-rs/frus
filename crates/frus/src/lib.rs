@@ -74,6 +74,9 @@ pub struct GuideTesting;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/textures.md")]
 pub struct GuideTextures;
+#[cfg(all(doctest, feature = "video"))]
+#[doc = include_str!("../../../docs/guide/video.md")]
+pub struct GuideVideo;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -235,6 +238,31 @@ pub use frus_shell::{image_cache, ImageCache};
 /// ```
 #[cfg(feature = "sqlite")]
 pub use frus_shell::{database, params, Database, DatabaseBuilder, DatabaseError};
+
+/// **Video playback** (feature `video`, milestone 797): a [`VideoPlayerController`] plays a
+/// clip from the application's bytes, a file or the network with the platform's player;
+/// [`VideoPlayer`] shows it, [`VideoProgressIndicator`] and [`VideoControls`] drive it.
+/// Android, Windows and the Web; elsewhere `initialize` answers [`VideoError::Unsupported`].
+///
+/// ```no_run
+/// use frus::{spawn_local, StatelessWidget, VideoControls, VideoPlayer, VideoPlayerController};
+///
+/// let controller = VideoPlayerController::network_url("https://example.com/clip.mp4");
+/// let c = controller.clone();
+/// spawn_local(async move {
+///     if c.initialize().await.is_ok() {
+///         c.play();
+///     }
+/// });
+/// let picture = VideoPlayer::new(&controller).into_widget();
+/// let controls = VideoControls::new(&controller).into_widget();
+/// # let _ = (picture, controls);
+/// ```
+#[cfg(feature = "video")]
+pub use frus_shell::{
+    DataSource, DurationRange, VideoControls, VideoControlsStyle, VideoError, VideoPlayer,
+    VideoPlayerController, VideoPlayerValue, VideoProgressColors, VideoProgressIndicator,
+};
 
 #[cfg(all(feature = "auth", feature = "secure-store"))]
 pub use frus_shell::stored_refresh_token;

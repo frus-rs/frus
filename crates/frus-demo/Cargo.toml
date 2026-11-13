@@ -35,7 +35,7 @@ shots = ["dep:frus-test", "dep:gif"]
 [dependencies]
 # The system's file dialogs, for attaching files to a task (desktop only), and its
 # notifications, for a task's reminder (desktop and Android). Web views for the browser screen.
-frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "taskbar", "webview"] }
+frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "taskbar", "video", "webview"] }
 frus-widgets = { path = "../frus-widgets", features = ["webview"] }
 frus-l10n = { path = "../frus-l10n" }
 frus-image = { path = "../frus-image" }
@@ -54,7 +54,7 @@ web-sys = { version = "0.3", features = ["Window", "Storage"] }
 # The tray icon on Windows and macOS (milestone 706). Not on Linux, where it needs GTK 3's
 # development files to build; CI builds it there on its own.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "taskbar", "tray", "webview"] }
+frus-shell = { path = "../frus-shell", features = ["file-dialogs", "global-shortcuts", "hardware-buffers", "notifications", "taskbar", "tray", "video", "webview"] }
 
 # The native views screen's web page on Windows: WebView2 (milestone 802).
 [target.'cfg(windows)'.dependencies]
@@ -117,7 +117,8 @@ name = "android.permission.VIBRATE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_NETWORK_STATE"
 
-# The browser screen (milestone 799) loads pages from the internet.
+# The browser screen (milestone 799) loads pages from the internet, and the video player screen
+# streams its network sources (milestone 797).
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
 

@@ -19,6 +19,17 @@ any release may break.
   13,793,112 bytes (rustc 1.100), back under the size budget with 690 KB of room, without
   raising it. Nothing an application sees changes: the same messages reach logcat.
 
+- **Video playback** (J797, feature `video`). `VideoPlayerController::asset(bytes)`, `::file(path)`
+  and `::network_url(url)` play a clip with the platform's player — `MediaPlayer` on Android
+  (into a texture surface; HTTP(S) and HLS), Media Foundation's media engine on Windows, a
+  `<video>` element on the web — with `initialize().await`, `play`, `pause`, `seek_to`,
+  `set_volume`, `set_looping`, `set_playback_speed`, a `value()` (duration, position, size,
+  aspect ratio, downloaded ranges, playing, buffering, completed, error) and listeners. Clips
+  pause in the background and play again on return. `VideoPlayer` shows the picture,
+  `VideoProgressIndicator` is a scrubbable progress bar, `VideoControls` a default overlay whose
+  look and parts are all replaceable. macOS, Linux and iOS answer `VideoError::Unsupported`.
+  Nothing runs while no clip is open.
+
 - **Lighter and faster on a phone's GPU** (J796). A page visited no longer leaves GPU memory
   behind it: the glyph atlas reuses its room instead of only ever doubling, the multisampled
   targets and the backdrop's staging copy a frame no longer draws with are let go, and on Android
