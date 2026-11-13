@@ -2707,6 +2707,13 @@ impl<A: Application> App<A> {
         if self.lifecycle != state {
             self.lifecycle = state;
             self.app.on_lifecycle(state);
+            // The camera closes in the background and opens again on return (milestone 798).
+            #[cfg(feature = "camera")]
+            match state {
+                Lifecycle::Paused => crate::camera::lifecycle(false),
+                Lifecycle::Resumed => crate::camera::lifecycle(true),
+                _ => {}
+            }
             // The native views pause and resume with the activity (milestone 794).
             #[cfg(android)]
             if !self.platform_views.is_empty() {
@@ -3649,6 +3656,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             }
 
             WindowEvent::Resized(size) => {
+                // A turn of the phone turns the camera's preview with it (milestone 798).
+                #[cfg(all(android, feature = "camera"))]
+                crate::camera::display_changed();
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.resize(size.width, size.height);
                 }

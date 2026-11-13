@@ -24,6 +24,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then:
 | [AI agents](mcp.md) | `frus mcp`: an MCP server through which a coding agent runs, inspects and drives the application |
 | [Playing video](video.md) | A clip from the application, a file or the network: the controller, the picture, the progress bar and the default controls; what each platform plays |
 | [Video, camera and other external pictures](textures.md) | Showing frames a decoder, a camera or a native view makes; pushing RGBA and YUV; Android's surface for `MediaCodec` and Java plugins |
+| [The camera and code scanning](camera.md) | The preview, pictures, flash, zoom and focus, the frames themselves; reading QR codes and barcodes |
 | [The system around the application](platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts, the icon |
 | [Native views inside the page](native-views.md) | A web view, a map or any Android view inside a frus page; writing a factory for a plugin |
 | [Web pages inside the page](webview.md) | `WebViewController` and `WebViewWidget`: load pages, history, JavaScript and its channels, navigation decisions, cookies |

@@ -59,6 +59,31 @@ sqlite = ["dep:rusqlite", "dep:async-channel"]
 # `auth_session()` (milestone 795). Off by default. The hashing and the random bytes come
 # from `ring`, already in the tree through the `net` feature's TLS.
 auth = ["json", "dep:ring", "dep:async-channel", "web-sys/Crypto", "web-sys/SubtleCrypto"]
+# The camera (milestone 798): `CameraController`, `CameraPreview`. Android needs nothing more
+# (Camera2 is reached through `dlsym`); Windows uses Media Foundation (the `windows` crate's
+# bindings, already in the tree) and encodes its pictures with `image` (already in the tree
+# through frus-image); the Web uses `getUserMedia`. Off by default.
+camera = [
+    "dep:image",
+    "windows/Win32_Media_MediaFoundation",
+    "windows/Win32_System_Com_StructuredStorage",
+    "windows/Win32_System_Variant",
+    "web-sys/CanvasRenderingContext2d",
+    "web-sys/HtmlVideoElement",
+    "web-sys/HtmlMediaElement",
+    "web-sys/ImageData",
+    "web-sys/MediaDeviceInfo",
+    "web-sys/MediaDeviceKind",
+    "web-sys/MediaDevices",
+    "web-sys/MediaStream",
+    "web-sys/MediaStreamConstraints",
+    "web-sys/MediaStreamTrack",
+]
+# Reading QR codes from the camera: `Scanner` (milestone 798). rxing, pure Rust; its QR reader
+# alone is about 0.5 MB of a release build.
+scanner = ["camera", "dep:rxing", "dep:async-channel"]
+# Every format rxing reads: EAN, UPC, Code 128, Data Matrix, PDF417, Aztec...
+scanner-all-formats = ["scanner", "rxing/full_barcode_format_support"]
 # Video playback: `VideoPlayerController`, `VideoPlayer` (milestone 797). Off by default. The
 # platform's own player does the work (Android's MediaPlayer, Windows' Media Foundation, the
 # browser's <video>), so nothing is compiled in but the bindings.
@@ -116,6 +141,10 @@ web-time = "1"
 # A one-shot answer from another thread (features `sqlite` and `auth`). Already in the tree,
 # through `blocking`.
 async-channel = { version = "2", optional = true }
+# The code reader (feature `scanner`, milestone 798): QR codes, and every other format with
+# `scanner-all-formats`. Pure Rust (Apache-2.0), no system library; its image decoders, its
+# writers and its date and address parsing are left out (frus hands it brightness).
+rxing = { version = "0.9", optional = true, default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }
 
 # Native (desktop + Android): a blocking wait on GPU init. The Web is asynchronous
 # instead — see `run_web`.
@@ -214,6 +243,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 security-framework = { version = "3", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# The camera's pictures on Windows (feature `camera`): the latest frame, encoded as JPEG.
+# Already in the tree through frus-image.
+image = { workspace = true, optional = true }
 # The taskbar (feature `taskbar`): its button's progress and overlay, a COM interface the raw
 # bindings below do not carry; the system's share window (milestone 775), a WinRT interface;
 # and the connectivity (milestone 777): the connection profile Windows uses for the internet,

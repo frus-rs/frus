@@ -32,8 +32,8 @@ iOS will bring `Info.plist` and a launch configuration. This is XML and plist, n
 a programming language, but it is not Rust either, and it must be understood rather
 than copied.
 
-**Coverage, not language, is the real limit.** A developer who needs the camera,
-biometrics or in-app purchases today writes the JNI themselves. That is possible and unpleasant. It is discussed under
+**Coverage, not language, is the real limit.** A developer who needs biometrics or
+in-app purchases today writes the JNI themselves. That is possible and unpleasant. It is discussed under
 [the real gap](#the-real-gap-coverage-not-language) below.
 
 ## What frus already wraps
@@ -91,6 +91,11 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   Camera2 or a media player, from the NDK or from Java, with no JNI of the application's own
   beyond handing it over; with the `hardware-buffers` feature, on a Vulkan phone its frames
   are shown where the decoder wrote them, without a copy. See [the guide](guide/textures.md).
+- **The camera and code scanning** (features `camera`, `scanner`): `frus::available_cameras()`,
+  `frus::CameraController` (preview, pictures, frames, flash, zoom, focus, the other camera)
+  and `frus::CameraPreview`; `frus::Scanner` reads QR codes and barcodes with
+  `on_detect(|capture| ..)`. Android (Camera2), Windows (webcams) and the web. See
+  [the guide](guide/camera.md).
 - **Frames spent on decoration**: a spinner, a placeholder's pulse or any animation marked
   decorative (`Widget::decorative`, `AnimationHandle::decorative()`) is drawn at 30 frames a
   second when nothing else moves, not at the display's rate.
