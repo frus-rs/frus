@@ -98,6 +98,11 @@ video = [
     "web-sys/ImageData",
     "web-sys/Url",
 ]
+# In-app purchases: `Purchases` (milestone 807). Off by default. Android sells through Google
+# Play Billing: the feature compiles in an 18 KB bridge dex, and `frus build` puts the Billing
+# Library into the package. Elsewhere the store answers `PurchaseError::Unsupported`; the test
+# store (`Purchases::fake`) works everywhere.
+purchases = []
 # A web page inside the page on Windows: `PlatformView::new("frus/webview", ..)` hosted by the
 # system's WebView2 (milestone 802). Off by default: the bindings are a few hundred kilobytes,
 # and the Edge WebView2 runtime must be on the machine (it ships with Windows 11). Without it,

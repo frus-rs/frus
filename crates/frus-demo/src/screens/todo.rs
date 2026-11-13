@@ -670,6 +670,7 @@ impl HomeState {
                         link("Camera and scanner →", "/camera"),
                         link("Native views →", "/native"),
                         link("Web browser →", "/browser"),
+                        link("In-app purchases →", "/shop"),
                     ]
                     .gap(12.0),
                 ),
