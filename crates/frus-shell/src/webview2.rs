@@ -254,8 +254,20 @@ pub(super) fn cookies<'a>(global: Global, webs: impl Iterator<Item = &'a Web>) {
     let webview = webs.filter_map(Web::webview).next();
     match webview {
         Some(webview) => cookie_call(&webview, global),
-        None => WAITING.with(|waiting| waiting.borrow_mut().push(global)),
+        None => wait(global),
     }
+}
+
+/// Keeps a cookie call for the first web view to be ready.
+#[inline(never)]
+fn wait(global: Global) {
+    WAITING.with(|waiting| waiting.borrow_mut().push(global));
+}
+
+/// The cookie calls kept for the first web view to be ready.
+#[inline(never)]
+fn take_waiting() -> Vec<Global> {
+    WAITING.with(|waiting| std::mem::take(&mut *waiting.borrow_mut()))
 }
 
 fn cookie_call(webview: &ICoreWebView2, global: Global) {
@@ -408,7 +420,7 @@ fn ready(
             web_call(view, &shared, &mut state, setting);
         }
         // Cookie calls made before any web view was ready.
-        for global in WAITING.with(|waiting| std::mem::take(&mut *waiting.borrow_mut())) {
+        for global in take_waiting() {
             cookie_call(&webview, global);
         }
     }
