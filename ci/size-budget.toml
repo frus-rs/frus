@@ -10,6 +10,7 @@
 #   milestone 292 (the first measurement)   10,012,520 bytes
 #   milestone 508 (this budget set)         10,427,568 bytes   -- +4% in 216 milestones
 #   milestone 784 (before raising)          14,163,432 bytes   -- budget raised to 14.5 MB
+#   milestone 803                           13,793,112 bytes   -- logcat's filter without regex
 #
 # The budget is about 25% over the measurement. It is there to catch a jump, not drift:
 # the release profile going missing (the debug library was 300 MB), LTO or stripping

@@ -331,7 +331,10 @@ web-sys = { version = "0.3", features = [
 # land in logcat.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
-android_logger = "0.14"
+# Without its default `regex` feature (milestone 803): the filter frus gives it is
+# `level,crate=level,…` and never a `/pattern`, and the regex engine that only a pattern
+# needs was about 450 KB of every application's library.
+android_logger = { version = "0.14", default-features = false }
 # The input bridge (InputConnection): loading the bundled dex plus its natives.
 jni = "0.21"
 # The Java VM a texture surface's `android.view.Surface` is made in (milestone 793); already
