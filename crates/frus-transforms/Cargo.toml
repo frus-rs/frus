@@ -24,6 +24,10 @@ log.workspace = true
 [dev-dependencies]
 frus-core = { path = "../frus-core" }
 
+# Web (wasm): the `main!` macro generates the `#[wasm_bindgen(start)]` entry point.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
 # --- Empaquetage Android (cargo-apk) ---
 [package.metadata.android]
 package = "com.frus.transforms"

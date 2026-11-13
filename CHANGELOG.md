@@ -8,10 +8,17 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 803 so far, each documenting the objective, the alternatives
+> record — one per step, 805 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **clippy for Android and the Web in CI** (J805). A new CI job lints the whole workspace
+  for `aarch64-linux-android` and `wasm32-unknown-unknown`, where only the Linux build was
+  linted before. It found `frus-transforms` not compiling for the Web (no `wasm-bindgen`
+  dependency for `main!`'s entry point) and three dependencies built where nothing uses them:
+  `async-lock` is now part of `frus-shell`'s `net` feature, `async-channel` native only, and
+  `frus-gpu` a dev-dependency of `frus-bench`.
 
 - **690 KB off every Android application** (J803). The logcat logger is built without its
   regular-expression engine, which only a `crate=level/pattern` filter needs and which the
