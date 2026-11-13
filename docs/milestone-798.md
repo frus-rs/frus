@@ -189,9 +189,27 @@ same webcam at 640×480 in 412 ms, read, and stopped with its camera closed.
 
 ### Android, the test phone
 
-Pending: the phone was unplugged when this was written. The device run (preview, picture,
-torch, zoom, scanner on a QR code shown on the PC's screen) is waiting for it and will be
-added here.
+A release APK of `frus-demo` on the test phone (Mali-G51, Android 10), opened at
+`frusdemo://camera`. A script drove it with `adb`. The USB link dropped twice during the
+run, so the background step was not measured.
+
+- **Preview:** the back camera opened at 720×1280 and the frames stood upright. The app used
+  about 25% of a core (`top`) while previewing, with 146 MB PSS.
+- **Scanner:** a QR code shown on the PC's screen was read as
+  `QrCode: https://frus.dev/scan-j798`, with the live picture behind it. CPU stayed at
+  about 25% while scanning.
+- **Picture:** "Take a picture" saved a 105 KB JPEG to the app's cache and showed its
+  thumbnail.
+- **Leaving the screen:** the log shows `scanner: stopped`, then `camera closed`, and the CPU
+  dropped to 0.0%.
+- **Open questions:** 1) The first preview screenshot (6 s after opening), the one taken
+  10 s into scanning, and the picture's thumbnail are all black. The live picture showed up
+  only after the app came back from the background. The phone was being moved during the
+  run (the USB link dropped), so this run can't say whether the lens was covered or the first
+  frames really are black. A rerun with the phone held still is owed. 2) After the camera
+  screen was closed, PSS was 293 MB (146 MB while previewing) and RSS 340 MB (196 MB). That
+  growth was not explained in this run.
+- Not exercised on the phone: the torch, zoom, focus point and switching cameras.
 
 ### Size
 
