@@ -144,10 +144,20 @@ pub(crate) fn finish_package(
     } else {
         None
     };
-    let with_code = activity.is_some();
-    let Some(patched) = activity.or(verified) else {
+    // Google Play Billing (milestone 807), when the application's library uses it.
+    let libraries = crate::android_pack::packaged_libraries(apk)?;
+    let billing = crate::android_billing::version_in(dir, &libraries);
+    let with_activity = activity.is_some();
+    let with_code = with_activity || billing.is_some();
+    let unchanged = billing.as_ref().map(|_| current.to_string());
+    let Some(mut patched) = activity.or(verified).or(unchanged) else {
         return Ok(false);
     };
+    if let Some(version) = &billing {
+        patched = crate::android_billing::add_to_manifest(&patched, version);
+        patched =
+            crate::android_pack::set_attribute(&patched, "<application", "android:hasCode", "true");
+    }
     if patched.contains("android:autoVerify") && !manifest.contains("android:autoVerify") {
         crate::report::say("Asking Android to verify the https links (android:autoVerify)…");
     }
@@ -195,7 +205,6 @@ pub(crate) fn finish_package(
     // compressed, which is quicker to make, as cargo-apk does.
     // Only those cargo-apk put in this package: the folder beside it also keeps the libraries
     // of every other application built into the same target directory.
-    let libraries = crate::android_pack::packaged_libraries(apk)?;
     let raw = patched_dir.join("raw");
     let _ = std::fs::remove_dir_all(&raw);
     for library in &libraries {
@@ -205,10 +214,14 @@ pub(crate) fn finish_package(
         }
         std::fs::copy(dir.join(library), &to).map_err(|e| format!("{library}: {e}"))?;
     }
-    // The activity's code, at the package's root.
+    // The activity's code, and the Billing Library's, at the package's root.
+    let code = match &billing {
+        Some(version) => crate::android_billing::dex(version, with_activity, &jar)
+            .map_err(|e| format!("Google Play Billing Library: {e}"))?,
+        None => crate::android_activity::DEX.to_vec(),
+    };
     if with_code {
-        std::fs::write(raw.join("classes.dex"), crate::android_activity::DEX)
-            .map_err(|e| format!("classes.dex: {e}"))?;
+        std::fs::write(raw.join("classes.dex"), &code).map_err(|e| format!("classes.dex: {e}"))?;
     }
     if mode == Mode::Debug {
         package.args(["-0", ""]);
@@ -232,8 +245,7 @@ pub(crate) fn finish_package(
     // What the package now holds, for the packages made again from it (`android_pack`).
     std::fs::write(&manifest_path, &patched).map_err(|e| e.to_string())?;
     if with_code {
-        std::fs::write(dir.join("classes.dex"), crate::android_activity::DEX)
-            .map_err(|e| format!("classes.dex: {e}"))?;
+        std::fs::write(dir.join("classes.dex"), &code).map_err(|e| format!("classes.dex: {e}"))?;
     }
     let _ = std::fs::remove_file(&unaligned);
     let _ = std::fs::remove_dir_all(&patched_dir);

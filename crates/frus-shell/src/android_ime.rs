@@ -147,6 +147,9 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     // And video playback (milestone 797), loaded with the first clip.
     #[cfg(feature = "video")]
     crate::video::remember(&mut env, &loader, &activity);
+    // And in-app purchases (milestone 807), loaded when the application first asks for them.
+    #[cfg(feature = "purchases")]
+    crate::purchases::remember(&mut env, &loader, &activity);
     // And what an intent that opens the application carries (milestone 801).
     crate::android_link::install(&mut env, &loader);
 

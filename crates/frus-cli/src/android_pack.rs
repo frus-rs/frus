@@ -349,6 +349,11 @@ impl<'a> Built<'a> {
     fn has_code(&self) -> Result<bool, String> {
         let written = self.dir.join("AndroidManifest.xml");
         let xml = std::fs::read_to_string(&written).map_err(|e| e.to_string())?;
+        // The Billing Library's code (milestone 807) is in the dex `finish_package` left: it
+        // stays as it is.
+        if crate::android_billing::in_manifest(&xml) && self.dir.join("classes.dex").is_file() {
+            return Ok(true);
+        }
         if !crate::android_activity::uses_frus_activity(&xml) {
             return Ok(false);
         }
@@ -551,9 +556,10 @@ pub(crate) fn app_bundle(project: &Project, mode: Mode, apk: &Path) -> Result<Pa
         }
     }
     if built.has_code()? {
+        let dex = built.dir.join("classes.dex");
         entries.push((
             "dex/classes.dex".to_string(),
-            crate::android_activity::DEX.to_vec(),
+            std::fs::read(&dex).map_err(|e| format!("{}: {e}", dex.display()))?,
         ));
     }
     if let Some(assets) = &project.android_assets {

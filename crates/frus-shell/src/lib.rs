@@ -159,6 +159,9 @@ mod tray;
 // Video playback (feature `video`, milestone 797).
 #[cfg(feature = "video")]
 mod video;
+// In-app purchases (feature `purchases`, milestone 807).
+#[cfg(feature = "purchases")]
+mod purchases;
 // The Web side of a reload under `frus run`: the states kept across the page's reload.
 #[cfg(web)]
 mod web_dev;
@@ -296,6 +299,12 @@ pub use auth::{auth_session, AuthError, AuthRequest, AuthTokens, DEFAULT_AUTH_TI
 /// A SQLite database (feature `sqlite`, milestone 795): [`database()`], [`Database`].
 #[cfg(feature = "sqlite")]
 pub use database::{database, Database, DatabaseBuilder, DatabaseError, Row};
+/// In-app purchases (feature `purchases`, milestone 807): [`Purchases`], [`FakeStore`].
+#[cfg(feature = "purchases")]
+pub use purchases::{
+    FakeOutcome, FakeStore, Product, ProductKind, ProductsResponse, PurchaseError, PurchaseStatus,
+    PurchaseSubscription, PurchaseUpdate, Purchases,
+};
 /// Video playback (feature `video`, milestone 797): [`VideoPlayerController`], [`VideoPlayer`].
 #[cfg(feature = "video")]
 pub use video::{

@@ -8,11 +8,24 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 803 so far, each documenting the objective, the alternatives
+> record — one per step, 807 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
+  `query_products(ids)` (title, description, formatted price, price in micros, currency,
+  kind: consumable, non-consumable or subscription, and the ids the store does not sell),
+  `buy(product)` / `buy_for(product, account_id)`, `restore()`, `complete(update)` (consumes a
+  consumable, acknowledges the rest), and `add_listener` for `PurchaseUpdate`s (pending,
+  purchased, restored, error, canceled), handed over on the interface's thread. Android sells
+  through Google Play Billing Library 8.3.0: an 18 KB bridge dex compiled in with the feature,
+  and `frus build` / `frus run` find the feature's marker in the application's library, fetch
+  the library once, shrink it with R8 to about 330 KB of dex, and declare its permission and
+  activity in the manifest. iOS, macOS, Windows, Linux and the web answer
+  `PurchaseError::Unsupported`. `Purchases::fake(FakeStore)` is an in-memory store on every
+  platform for tests and for trying a shop: paid, pending, canceled or failing purchases. Guide:
+  `docs/guide/purchases.md`; the demo has a shop screen.
 - **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
   `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
   and a file; `start_image_stream` with the frame's planes, borrowed on the camera's thread;

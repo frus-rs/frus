@@ -80,6 +80,9 @@ pub struct GuideCamera;
 #[cfg(all(doctest, feature = "video"))]
 #[doc = include_str!("../../../docs/guide/video.md")]
 pub struct GuideVideo;
+#[cfg(all(doctest, feature = "purchases"))]
+#[doc = include_str!("../../../docs/guide/purchases.md")]
+pub struct GuidePurchases;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -281,6 +284,17 @@ pub use frus_shell::{database, params, Database, DatabaseBuilder, DatabaseError}
 pub use frus_shell::{
     DataSource, DurationRange, VideoControls, VideoControlsStyle, VideoError, VideoPlayer,
     VideoPlayerController, VideoPlayerValue, VideoProgressColors, VideoProgressIndicator,
+};
+
+/// **In-app purchases** (feature `purchases`, milestone 807): [`Purchases`] queries the store's
+/// [`Product`]s, buys one, restores what the account owns, and reports each purchase as a
+/// [`PurchaseUpdate`] to complete once delivered. Google Play Billing on Android; elsewhere
+/// every call answers [`PurchaseError::Unsupported`]. [`FakeStore`] is an in-memory store for
+/// tests and for trying the flow without one.
+#[cfg(feature = "purchases")]
+pub use frus_shell::{
+    FakeOutcome, FakeStore, Product, ProductKind, ProductsResponse, PurchaseError, PurchaseStatus,
+    PurchaseSubscription, PurchaseUpdate, Purchases,
 };
 
 #[cfg(all(feature = "auth", feature = "secure-store"))]
