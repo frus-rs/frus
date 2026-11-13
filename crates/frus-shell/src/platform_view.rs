@@ -100,6 +100,155 @@ impl PixelRect {
             h: (rect.height * scale).round().max(0.0) as i32,
         }
     }
+
+    /// `rect`, in physical pixels already, with each edge rounded on its own: two boxes that
+    /// touch still touch.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn edges(rect: Rect) -> Self {
+        let (left, top) = (rect.x.round() as i32, rect.y.round() as i32);
+        let right = (rect.x + rect.width).round() as i32;
+        let bottom = (rect.y + rect.height).round() as i32;
+        Self {
+            x: left,
+            y: top,
+            w: (right - left).max(0),
+            h: (bottom - top).max(0),
+        }
+    }
+
+    #[cfg_attr(android, allow(dead_code))]
+    /// Whether it holds no pixel.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.w <= 0 || self.h <= 0
+    }
+
+    /// The pixels both hold.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn intersect(self, other: PixelRect) -> PixelRect {
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = (self.x + self.w).min(other.x + other.w);
+        let bottom = (self.y + self.h).min(other.y + other.h);
+        PixelRect {
+            x: left,
+            y: top,
+            w: (right - left).max(0),
+            h: (bottom - top).max(0),
+        }
+    }
+
+    /// What is left of it once `cut` is taken out: up to four boxes, none overlapping — the
+    /// band above the cut, the band below, and the two sides between.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn minus(self, cut: PixelRect) -> Vec<PixelRect> {
+        let common = self.intersect(cut);
+        if common.is_empty() {
+            return vec![self];
+        }
+        let (right, bottom) = (self.x + self.w, self.y + self.h);
+        let pieces = [
+            PixelRect {
+                x: self.x,
+                y: self.y,
+                w: self.w,
+                h: common.y - self.y,
+            },
+            PixelRect {
+                x: self.x,
+                y: common.y + common.h,
+                w: self.w,
+                h: bottom - (common.y + common.h),
+            },
+            PixelRect {
+                x: self.x,
+                y: common.y,
+                w: common.x - self.x,
+                h: common.h,
+            },
+            PixelRect {
+                x: common.x + common.w,
+                y: common.y,
+                w: right - (common.x + common.w),
+                h: common.h,
+            },
+        ];
+        pieces.into_iter().filter(|p| !p.is_empty()).collect()
+    }
+}
+
+/// How much of a native view hosted **over** frus's surface shows (milestone 802): a Windows
+/// child window or a page element is drawn above every pixel frus draws, so the parts frus
+/// draws over it — a menu, a button laid on it, a dialog's scrim — are cut out of it, and the
+/// parts a scrolling area clips away too.
+#[cfg_attr(android, allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// All of it shows.
+    Whole,
+    /// These parts of it show, in its own pixels (from its top-left corner), none overlapping.
+    Parts(Vec<PixelRect>),
+    /// None of it: it is scrolled or clipped out of sight.
+    Hidden,
+    /// None of it: frus draws over all of it — a dialog's scrim. A host that can take a
+    /// picture of the view hands it to frus to draw under the dialog.
+    Covered,
+}
+
+impl Shape {
+    /// The shape of the view whose box is `rect`, of which `visible` is inside every clip
+    /// around it and `covers` are what frus drew over it: all in the window's physical pixels.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn of(rect: Rect, visible: Rect, covers: &[Rect]) -> Self {
+        // Where the view is placed, rounded as it is placed; and the part of it in sight. A
+        // view in sight whole is its whole box, whatever the rounding of the clip's edges:
+        // a page scrolling by fractions of a pixel must not reshape it on every frame.
+        let at = PixelRect::from_logical(rect, 1.0);
+        let whole = visible.x <= rect.x + 0.5
+            && visible.y <= rect.y + 0.5
+            && visible.x + visible.width >= rect.x + rect.width - 0.5
+            && visible.y + visible.height >= rect.y + rect.height - 0.5;
+        let seen = if whole {
+            at
+        } else {
+            PixelRect::edges(visible).intersect(at)
+        };
+        if seen.is_empty() || at.is_empty() {
+            return Shape::Hidden;
+        }
+        let mut parts = vec![seen];
+        for cover in covers {
+            let cover = PixelRect::edges(*cover);
+            if cover.is_empty() {
+                continue;
+            }
+            parts = parts
+                .into_iter()
+                .flat_map(|part| part.minus(cover))
+                .collect();
+            if parts.is_empty() {
+                return Shape::Covered;
+            }
+        }
+        if parts == [at] {
+            return Shape::Whole;
+        }
+        Shape::Parts(
+            parts
+                .into_iter()
+                .map(|part| PixelRect {
+                    x: part.x - at.x,
+                    y: part.y - at.y,
+                    ..part
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether any of the view shows.
+    #[cfg_attr(android, allow(dead_code))]
+    pub(crate) fn shows(&self) -> bool {
+        matches!(self, Shape::Whole | Shape::Parts(_))
+    }
 }
 
 /// One native view the frame wants.
@@ -111,6 +260,10 @@ pub(crate) struct Wanted<'a> {
     /// The widget's whole box, in logical pixels.
     pub rect: Rect,
     pub controller: Option<&'a PlatformViewController>,
+    /// How much of it shows, for a view hosted over frus's surface; `None` for one frus draws
+    /// itself (Android's).
+    #[cfg(not(android))]
+    pub shape: Option<Shape>,
 }
 
 /// What the Java side must do.
@@ -127,6 +280,9 @@ pub(crate) enum Command {
     Place { view: i32, at: PixelRect },
     /// Drop view `view`.
     Dispose { view: i32 },
+    /// Show only `shape` of view `view` (a view hosted over frus's surface).
+    #[cfg(not(android))]
+    Clip { view: i32, shape: Shape },
     /// Call `method` on view `view`.
     Invoke {
         view: i32,
@@ -138,8 +294,13 @@ pub(crate) enum Command {
 struct Live {
     view: i32,
     view_type: String,
+    /// Where the frame drew it.
     at: PixelRect,
+    /// Where the native side was last told it is: behind `at` while it moves (milestone 796).
+    placed: PixelRect,
     controller: Option<PlatformViewController>,
+    #[cfg(not(android))]
+    shape: Option<Shape>,
 }
 
 /// The native views that exist, by widget.
@@ -147,6 +308,10 @@ struct Live {
 pub(crate) struct PlatformViews {
     live: HashMap<WidgetId, Live>,
     next: i32,
+    /// Whether a view that moves is placed only once it stops (milestone 796): where frus
+    /// draws the view's picture itself (Android), not where the system draws the view over
+    /// frus's surface and its container has to follow every frame (Windows, the web).
+    settle: bool,
 }
 
 impl PlatformViews {
@@ -164,12 +329,35 @@ impl PlatformViews {
             let at = PixelRect::from_logical(want.rect, scale);
             match self.live.get_mut(&want.id) {
                 Some(live) if live.view_type == want.view_type => {
-                    if live.at != at {
-                        live.at = at;
+                    // **On Android, moved once it stops** (milestone 796). frus draws the
+                    // view's image where the frame has it, so its native place only matters
+                    // to the screen reader and the keyboard's popups. Moved on every frame of
+                    // a scroll, the native view was drawn again every frame — Android redraws
+                    // a view that moves in its window — and its image copied and uploaded
+                    // again. A new size is placed at once: the image itself changes.
+                    let settle = self.settle || cfg!(android);
+                    let resized = (at.w, at.h) != (live.placed.w, live.placed.h);
+                    let moved = at != live.placed;
+                    let settled = moved && (!settle || at == live.at);
+                    live.at = at;
+                    if resized || settled {
+                        live.placed = at;
                         commands.push(Command::Place {
                             view: live.view,
                             at,
                         });
+                    }
+                    // Only a view hosted over the surface has a shape: none on Android, which
+                    // pays nothing for it.
+                    #[cfg(not(android))]
+                    if want.shape.is_some() && live.shape != want.shape {
+                        live.shape = want.shape.clone();
+                        if let Some(shape) = &want.shape {
+                            commands.push(Command::Clip {
+                                view: live.view,
+                                shape: shape.clone(),
+                            });
+                        }
                     }
                     if live.controller.as_ref() != want.controller {
                         if let Some(old) = live.controller.take() {
@@ -194,13 +382,23 @@ impl PlatformViews {
                         params: want.params.to_owned(),
                         at,
                     });
+                    #[cfg(not(android))]
+                    if let Some(shape) = &want.shape {
+                        commands.push(Command::Clip {
+                            view,
+                            shape: shape.clone(),
+                        });
+                    }
                     self.live.insert(
                         want.id,
                         Live {
                             view,
                             view_type: want.view_type.to_owned(),
                             at,
+                            placed: at,
                             controller: want.controller.cloned(),
+                            #[cfg(not(android))]
+                            shape: want.shape.clone(),
                         },
                     );
                 }
@@ -226,12 +424,23 @@ impl PlatformViews {
         for id in gone {
             if let Some(live) = self.live.remove(&id) {
                 if let Some(controller) = live.controller {
-                    controller.attach(None);
+                    // Unless another widget showing the same controller (a web page shown
+                    // somewhere else) has it already: only web views' controllers are shown by
+                    // two widgets (milestone 799).
+                    if cfg!(not(feature = "webview")) || controller.view_id() == Some(live.view) {
+                        controller.attach(None);
+                    }
                 }
                 commands.push(Command::Dispose { view: live.view });
             }
         }
         commands
+    }
+
+    /// Whether a view moved and has not been placed there yet: one more frame places it once
+    /// it has stopped (milestone 796).
+    pub(crate) fn placing(&self) -> bool {
+        self.live.values().any(|live| live.at != live.placed)
     }
 
     /// Whether no native view exists: then nothing of this is done at all.
@@ -306,6 +515,42 @@ pub(crate) enum Routed {
     Frus,
     /// A native view's.
     View(ViewTouch),
+    #[cfg(feature = "webview")]
+    /// A drag the view had and frus takes from here (milestone 799): the view is sent
+    /// `cancel`, and frus gets a press at `from` (the window's physical pixels), then this
+    /// touch. The rest of the gesture is frus's.
+    Handover { cancel: ViewTouch, from: (f32, f32) },
+}
+
+/// The ways frus can scroll under a press: what a drag on a native view may be handed to.
+#[cfg(feature = "webview")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Axes {
+    pub vertical: bool,
+    pub horizontal: bool,
+}
+
+/// A press on a native view: which, where it is, and what frus can scroll around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ViewHit {
+    pub view: i32,
+    pub rect: PixelRect,
+    /// What frus can scroll around it (milestone 799).
+    #[cfg(feature = "webview")]
+    pub frus: Axes,
+}
+
+/// The event a web view sends with the directions its content can still scroll ([`scroll`]).
+#[cfg(feature = "webview")]
+pub(crate) const SCROLL_EVENT: &str = "frus.scroll";
+
+/// The directions a view's content can still scroll, as a web view says them.
+#[cfg(feature = "webview")]
+pub(crate) mod scroll {
+    pub const UP: u8 = 1;
+    pub const DOWN: u8 = 2;
+    pub const LEFT: u8 = 4;
+    pub const RIGHT: u8 = 8;
 }
 
 struct Gesture {
@@ -315,44 +560,125 @@ struct Gesture {
     /// The pointers down, in the order they came: winit's id, the id Android knows it by
     /// (the lowest free one when it came, kept until it lifts) and the window position.
     pointers: Vec<(u64, i32, f32, f32)>,
+    /// Where the first finger went down.
+    #[cfg(feature = "webview")]
+    start: (f32, f32),
+    /// What frus can scroll around the view.
+    #[cfg(feature = "webview")]
+    frus: Axes,
+    /// The drag's axis once it moved past the slop (`Some(true)`: vertical); `None` before,
+    /// and for a gesture that stays the view's whatever it does (a pinch).
+    #[cfg(feature = "webview")]
+    axis: Option<bool>,
+    /// Whether the slop was passed, or a second finger came.
+    #[cfg(feature = "webview")]
+    decided: bool,
 }
 
 /// Decides, touch by touch, whether frus or a native view gets it.
-#[derive(Default)]
+#[cfg_attr(not(feature = "webview"), derive(Default))]
 pub(crate) struct TouchRouter {
     /// The pointers of a gesture frus has.
     frus: HashSet<u64>,
     gesture: Option<Gesture>,
+    /// How far a finger moves, in physical pixels, before it is a drag.
+    #[cfg(feature = "webview")]
+    pub slop: f32,
+    /// Which ways each view's content can still scroll ([`scroll`]).
+    #[cfg(feature = "webview")]
+    scrolls: HashMap<i32, u8>,
+}
+
+#[cfg(feature = "webview")]
+impl Default for TouchRouter {
+    fn default() -> Self {
+        Self {
+            frus: HashSet::new(),
+            gesture: None,
+            #[cfg(feature = "webview")]
+            slop: 18.0,
+            #[cfg(feature = "webview")]
+            scrolls: HashMap::new(),
+        }
+    }
 }
 
 impl TouchRouter {
+    /// Which ways view `view`'s content can still scroll now ([`scroll`]).
+    #[cfg(feature = "webview")]
+    pub(crate) fn set_scroll(&mut self, view: i32, flags: u8) {
+        self.scrolls.insert(view, flags);
+    }
+
+    #[cfg(feature = "webview")]
+    /// Whether a drag of `delta` along an axis is frus's: frus scrolls that way around the
+    /// view, and the view's content cannot move that way any further.
+    fn frus_takes(&self, gesture: &Gesture, vertical: bool, delta: f32) -> bool {
+        if delta == 0.0 {
+            return false;
+        }
+        let frus = if vertical {
+            gesture.frus.vertical
+        } else {
+            gesture.frus.horizontal
+        };
+        // A finger moving down shows what is above: the content must be able to scroll up.
+        let needs = match (vertical, delta > 0.0) {
+            (true, true) => scroll::UP,
+            (true, false) => scroll::DOWN,
+            (false, true) => scroll::LEFT,
+            (false, false) => scroll::RIGHT,
+        };
+        // A view that has not drawn yet has said nothing: it cannot scroll.
+        let flags = self.scrolls.get(&gesture.view).copied().unwrap_or(0);
+        frus && flags & needs == 0
+    }
+
     /// Routes touch `id` at `at` (the window's physical pixels). `hit` is asked only for a
     /// press that would start a gesture: the native view under it, if no frus target drawn
-    /// over the view takes it, and where that view is.
+    /// over the view takes it.
+    ///
+    /// A one-finger drag on a view inside a frus scrolling area is the view's while its
+    /// content can scroll that way. Past the slop in a direction the content cannot go, or
+    /// once the content reaches its edge, the drag is handed to frus ([`Routed::Handover`]).
     pub(crate) fn route(
         &mut self,
         id: u64,
         phase: Phase,
         at: (f32, f32),
-        hit: impl FnOnce() -> Option<(i32, PixelRect)>,
+        hit: impl FnOnce() -> Option<ViewHit>,
     ) -> Routed {
         match phase {
             Phase::Started => {
                 if let Some(gesture) = self.gesture.as_mut() {
-                    // Another finger on a gesture a view has: the view's too.
+                    // Another finger on a gesture a view has: the view's too, for good (a
+                    // pinch is never handed over).
                     let free = (0..)
                         .find(|n| !gesture.pointers.iter().any(|p| p.1 == *n))
                         .unwrap_or(0);
                     gesture.pointers.push((id, free, at.0, at.1));
+                    #[cfg(feature = "webview")]
+                    {
+                        gesture.decided = true;
+                        gesture.axis = None;
+                    }
                     let index = gesture.pointers.len() - 1;
                     return Routed::View(Self::touch(gesture, action::POINTER_DOWN, index));
                 }
                 if self.frus.is_empty() {
-                    if let Some((view, rect)) = hit() {
+                    if let Some(hit) = hit() {
                         let gesture = Gesture {
-                            view,
-                            origin: (rect.x as f32, rect.y as f32),
+                            view: hit.view,
+                            origin: (hit.rect.x as f32, hit.rect.y as f32),
                             pointers: vec![(id, 0, at.0, at.1)],
+                            #[cfg(feature = "webview")]
+                            start: at,
+                            #[cfg(feature = "webview")]
+                            frus: hit.frus,
+                            #[cfg(feature = "webview")]
+                            axis: None,
+                            #[cfg(feature = "webview")]
+                            decided: false,
                         };
                         let touch = Self::touch(&gesture, action::DOWN, 0);
                         self.gesture = Some(gesture);
@@ -362,16 +688,23 @@ impl TouchRouter {
                 self.frus.insert(id);
                 Routed::Frus
             }
-            Phase::Moved => match self.gesture.as_mut() {
-                Some(gesture) if gesture.pointers.iter().any(|p| p.0 == id) => {
-                    for pointer in gesture.pointers.iter_mut().filter(|p| p.0 == id) {
-                        pointer.2 = at.0;
-                        pointer.3 = at.1;
-                    }
-                    Routed::View(Self::touch(gesture, action::MOVE, 0))
+            Phase::Moved => {
+                // A drag the view cannot follow goes to frus (milestone 799).
+                #[cfg(feature = "webview")]
+                if let Some(routed) = self.hand_over(id, at) {
+                    return routed;
                 }
-                _ => Routed::Frus,
-            },
+                match self.gesture.as_mut() {
+                    Some(gesture) if gesture.pointers.iter().any(|p| p.0 == id) => {
+                        for pointer in gesture.pointers.iter_mut().filter(|p| p.0 == id) {
+                            pointer.2 = at.0;
+                            pointer.3 = at.1;
+                        }
+                        Routed::View(Self::touch(gesture, action::MOVE, 0))
+                    }
+                    _ => Routed::Frus,
+                }
+            }
             Phase::Ended | Phase::Cancelled => {
                 let Some(gesture) = self.gesture.as_mut() else {
                     self.frus.remove(&id);
@@ -400,6 +733,51 @@ impl TouchRouter {
         }
     }
 
+    /// Whether this movement of pointer `id` hands the view's drag to frus: past the slop in a
+    /// direction the view's content cannot go, or on, once it reached its edge. Records the
+    /// drag's axis on the way. `None`: the view keeps it.
+    #[cfg(feature = "webview")]
+    fn hand_over(&mut self, id: u64, at: (f32, f32)) -> Option<Routed> {
+        let gesture = self.gesture.as_ref()?;
+        let index = gesture.pointers.iter().position(|p| p.0 == id)?;
+        if gesture.pointers.len() != 1 {
+            return None;
+        }
+        let previous = (gesture.pointers[index].2, gesture.pointers[index].3);
+        let mut decided = gesture.decided;
+        let mut axis = gesture.axis;
+        let mut from = None;
+        if !decided {
+            let total = (at.0 - gesture.start.0, at.1 - gesture.start.1);
+            if total.0.abs().max(total.1.abs()) >= self.slop {
+                decided = true;
+                let vertical = total.1.abs() >= total.0.abs();
+                axis = Some(vertical);
+                let along = if vertical { total.1 } else { total.0 };
+                if self.frus_takes(gesture, vertical, along) {
+                    from = Some(gesture.start);
+                }
+            }
+        } else if let Some(vertical) = axis {
+            let step = if vertical {
+                at.1 - previous.1
+            } else {
+                at.0 - previous.0
+            };
+            if self.frus_takes(gesture, vertical, step) {
+                from = Some(previous);
+            }
+        }
+        let gesture = self.gesture.as_mut()?;
+        gesture.decided = decided;
+        gesture.axis = axis;
+        let from = from?;
+        let cancel = Self::touch(gesture, action::CANCEL, 0);
+        self.gesture = None;
+        self.frus.insert(id);
+        Some(Routed::Handover { cancel, from })
+    }
+
     /// The view a gesture is under way on, if any.
     #[cfg(test)]
     pub(crate) fn active_view(&self) -> Option<i32> {
@@ -411,6 +789,8 @@ impl TouchRouter {
         if self.gesture.as_ref().is_some_and(|g| g.view == view) {
             self.gesture = None;
         }
+        #[cfg(feature = "webview")]
+        self.scrolls.remove(&view);
     }
 
     fn touch(gesture: &Gesture, action: i32, index: usize) -> ViewTouch {
@@ -469,6 +849,7 @@ mod tests {
             params: "<p>hi</p>",
             rect,
             controller: None,
+            shape: None,
         }
     }
 
@@ -574,6 +955,38 @@ mod tests {
         );
     }
 
+    /// **On Android, a view that moves is placed once it stops** (milestone 796): a scroll
+    /// moves it every frame, and each move made Android draw it again and frus copy its image
+    /// again. While it moves nothing is sent, the views say one is still to be placed, and the
+    /// first frame it stays put places it; a new size is sent at once.
+    #[test]
+    fn a_moving_view_is_placed_once_it_stops() {
+        let mut views = PlatformViews {
+            settle: true,
+            ..PlatformViews::default()
+        };
+        views.sync(&[want(1, Rect::new(0.0, 100.0, 200.0, 100.0))], 2.0);
+        for y in [90.0, 80.0, 70.0, 60.0] {
+            let commands = views.sync(&[want(1, Rect::new(0.0, y, 200.0, 100.0))], 2.0);
+            assert!(commands.is_empty(), "nothing while it moves: {commands:?}");
+            assert!(views.placing());
+        }
+        let settled = views.sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 100.0))], 2.0);
+        assert!(
+            matches!(&settled[..], [Command::Place { at, .. }] if at.y == 120),
+            "{settled:?}"
+        );
+        assert!(!views.placing());
+        assert!(views
+            .sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 100.0))], 2.0)
+            .is_empty());
+        let resized = views.sync(&[want(1, Rect::new(0.0, 60.0, 200.0, 150.0))], 2.0);
+        assert!(matches!(&resized[..], [Command::Place { at, .. }] if at.h == 300));
+        // The view's own rectangle follows the frame all along: touches are mapped through it.
+        views.sync(&[want(1, Rect::new(0.0, 30.0, 200.0, 150.0))], 2.0);
+        assert_eq!(views.rect_of(1).map(|r| r.y), Some(60));
+    }
+
     const VIEW: PixelRect = PixelRect {
         x: 100,
         y: 200,
@@ -581,8 +994,118 @@ mod tests {
         h: 300,
     };
 
-    fn on_view() -> Option<(i32, PixelRect)> {
-        Some((9, VIEW))
+    fn on_view() -> Option<ViewHit> {
+        Some(ViewHit {
+            view: 9,
+            rect: VIEW,
+            #[cfg(feature = "webview")]
+            frus: Axes::default(),
+        })
+    }
+
+    /// A view inside a frus list that scrolls vertically.
+    #[cfg(feature = "webview")]
+    fn in_list() -> Option<ViewHit> {
+        Some(ViewHit {
+            view: 9,
+            rect: VIEW,
+            frus: Axes {
+                vertical: true,
+                horizontal: false,
+            },
+        })
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_drag_the_page_cannot_follow_is_handed_to_the_list() {
+        let mut router = TouchRouter::default();
+        // The page is at its top: it can only scroll down.
+        router.set_scroll(9, scroll::DOWN);
+        assert!(matches!(
+            router.route(1, Phase::Started, (150.0, 250.0), in_list),
+            Routed::View(_)
+        ));
+        // Within the slop: still the view's.
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 260.0), || None),
+            Routed::View(_)
+        ));
+        // Past it, pulling down (showing what is above): the page cannot, the list can.
+        let Routed::Handover { cancel, from } =
+            router.route(1, Phase::Moved, (152.0, 300.0), || None)
+        else {
+            panic!("the list takes the drag");
+        };
+        assert_eq!((cancel.view, cancel.action), (9, action::CANCEL));
+        assert_eq!(
+            from,
+            (150.0, 250.0),
+            "frus is pressed where the finger went down"
+        );
+        // From then on everything is frus's, and the view is out of it.
+        assert_eq!(
+            router.route(1, Phase::Moved, (152.0, 340.0), || None),
+            Routed::Frus
+        );
+        assert_eq!(
+            router.route(1, Phase::Ended, (152.0, 340.0), || None),
+            Routed::Frus
+        );
+        assert_eq!(router.active_view(), None);
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_drag_the_page_can_follow_stays_its_until_its_edge() {
+        let mut router = TouchRouter::default();
+        router.set_scroll(9, scroll::UP | scroll::DOWN);
+        router.route(1, Phase::Started, (150.0, 450.0), in_list);
+        // Pushing up (scrolling the page down): the page can.
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 400.0), || None),
+            Routed::View(_)
+        ));
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 380.0), || None),
+            Routed::View(_)
+        ));
+        // The page reached its bottom while the finger keeps pushing: the list goes on.
+        router.set_scroll(9, scroll::UP);
+        let Routed::Handover { from, .. } = router.route(1, Phase::Moved, (150.0, 360.0), || None)
+        else {
+            panic!("the list takes the rest of the drag");
+        };
+        assert_eq!(from, (150.0, 380.0), "from where the page stopped");
+    }
+
+    #[cfg(feature = "webview")]
+    #[test]
+    fn a_sideways_drag_a_pinch_or_a_view_outside_a_list_are_never_handed_over() {
+        let mut router = TouchRouter::default();
+        router.set_scroll(9, 0);
+        // Sideways, in a list that only scrolls vertically.
+        router.route(1, Phase::Started, (150.0, 250.0), in_list);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (220.0, 255.0), || None),
+            Routed::View(_)
+        ));
+        router.route(1, Phase::Ended, (220.0, 255.0), || None);
+        // A pinch.
+        router.route(1, Phase::Started, (150.0, 250.0), in_list);
+        router.route(2, Phase::Started, (200.0, 300.0), || None);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 350.0), || None),
+            Routed::View(_)
+        ));
+        router.route(1, Phase::Ended, (150.0, 350.0), || None);
+        router.route(2, Phase::Ended, (200.0, 300.0), || None);
+        // No list around the view.
+        router.route(1, Phase::Started, (150.0, 250.0), on_view);
+        assert!(matches!(
+            router.route(1, Phase::Moved, (150.0, 350.0), || None),
+            Routed::View(_)
+        ));
     }
 
     #[test]
@@ -673,6 +1196,122 @@ mod tests {
             router.route(2, Phase::Moved, (160.0, 250.0), || None),
             Routed::Frus
         );
+    }
+
+    #[test]
+    fn a_view_in_sight_is_whole_and_what_covers_it_is_cut_out() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert_eq!(Shape::of(rect, rect, &[]), Shape::Whole);
+        // A page scrolled by fractions of a pixel: whole on every frame, never reshaped.
+        for step in 0..60 {
+            let moved = rect.translate(0.3, step as f32 * 0.37);
+            assert_eq!(Shape::of(moved, moved, &[]), Shape::Whole);
+        }
+        // Half under the top of the scrolling area.
+        let area = Rect::new(0.0, 45.0, 400.0, 400.0);
+        assert_eq!(
+            Shape::of(rect, area.intersect(rect), &[]),
+            Shape::Parts(vec![PixelRect {
+                x: 0,
+                y: 25,
+                w: 100,
+                h: 25
+            }])
+        );
+        assert_eq!(
+            Shape::of(rect, Rect::new(0.0, 0.0, 0.0, 0.0), &[]),
+            Shape::Hidden
+        );
+        // A menu over its top-left corner: the band under the menu and the part beside it.
+        assert_eq!(
+            Shape::of(rect, rect, &[Rect::new(0.0, 0.0, 40.0, 40.0)]),
+            Shape::Parts(vec![
+                PixelRect {
+                    x: 0,
+                    y: 20,
+                    w: 100,
+                    h: 30
+                },
+                PixelRect {
+                    x: 30,
+                    y: 0,
+                    w: 70,
+                    h: 20
+                },
+            ])
+        );
+        // A dialog's scrim: none of it shows, and a picture can stand in.
+        let scrim = Rect::new(0.0, 0.0, 1000.0, 1000.0);
+        assert_eq!(Shape::of(rect, rect, &[scrim]), Shape::Covered);
+        assert!(!Shape::Covered.shows() && !Shape::Hidden.shows() && Shape::Whole.shows());
+        // Something drawn beside it covers nothing of it.
+        assert_eq!(
+            Shape::of(rect, rect, &[Rect::new(200.0, 0.0, 50.0, 50.0)]),
+            Shape::Whole
+        );
+    }
+
+    #[test]
+    fn what_is_left_after_a_cut_is_every_pixel_but_the_cut_once() {
+        let whole = PixelRect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 9,
+        };
+        for (x, y, w, h) in [
+            (-3, -3, 5, 5),
+            (4, 2, 3, 3),
+            (10, 7, 9, 9),
+            (0, 0, 12, 9),
+            (5, -1, 2, 20),
+        ] {
+            let cut = PixelRect { x, y, w, h };
+            let pieces = whole.minus(cut);
+            for py in 0..whole.h {
+                for px in 0..whole.w {
+                    let inside =
+                        |r: &PixelRect| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+                    let count = pieces.iter().filter(|p| inside(p)).count();
+                    assert_eq!(
+                        count,
+                        usize::from(!inside(&cut)),
+                        "({px}, {py}) after {cut:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hosted_view_is_reshaped_only_when_its_shape_changes() {
+        let mut views = PlatformViews::default();
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let mut wanted = want(1, rect);
+        wanted.shape = Some(Shape::Whole);
+        let made = views.sync(std::slice::from_ref(&wanted), 1.0);
+        assert!(matches!(made[0], Command::Create { view: 1, .. }));
+        assert_eq!(
+            made[1],
+            Command::Clip {
+                view: 1,
+                shape: Shape::Whole
+            }
+        );
+        assert!(views.sync(std::slice::from_ref(&wanted), 1.0).is_empty());
+        wanted.shape = Some(Shape::Covered);
+        assert_eq!(
+            views.sync(std::slice::from_ref(&wanted), 1.0),
+            [Command::Clip {
+                view: 1,
+                shape: Shape::Covered
+            }]
+        );
+        // A view frus draws itself is never clipped.
+        let mut drawn = PlatformViews::default();
+        let plain = want(2, rect);
+        let made = drawn.sync(std::slice::from_ref(&plain), 1.0);
+        assert_eq!(made.len(), 1);
     }
 
     #[test]

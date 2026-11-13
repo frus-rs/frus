@@ -62,6 +62,9 @@ pub struct GuideAnimation;
 pub struct GuideShaders;
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
+#[cfg(all(doctest, feature = "webview"))]
+#[doc = include_str!("../../../docs/guide/webview.md")]
+pub struct GuideWebView;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/build-variants.md")]
 pub struct GuideBuildVariants;
@@ -74,6 +77,9 @@ pub struct GuideTextures;
 #[cfg(all(doctest, feature = "camera", feature = "scanner"))]
 #[doc = include_str!("../../../docs/guide/camera.md")]
 pub struct GuideCamera;
+#[cfg(all(doctest, feature = "video"))]
+#[doc = include_str!("../../../docs/guide/video.md")]
+pub struct GuideVideo;
 #[cfg(all(
     doctest,
     feature = "file-dialogs",
@@ -206,9 +212,17 @@ pub use frus_shell::{open_permission_settings, Permission, PermissionStatus};
 /// dialer — and sharing through the system's share sheet (milestone 775).
 pub use frus_shell::{open_url, share, OpenUrlError, Share, ShareError, ShareOutcome};
 
-/// Native Android views inside the page (milestone 794): a plugin registers the factory that
-/// makes its views, and the application embeds them with [`AndroidView`].
-pub use frus_shell::{register_android_view_factory, PlatformViewError};
+/// What another application shares into this one, from the system's share sheet (milestone
+/// 801): handed to [`Application::on_share`] or to [`FrusApp::on_share`].
+pub use frus_shell::SharedContent;
+
+/// Native views inside the page (milestones 794, 802): a plugin registers the factory that
+/// makes its views — a Java class on Android, a Rust function on Windows and the web — and the
+/// application embeds them with [`PlatformView`].
+pub use frus_shell::{
+    register_android_view_factory, register_platform_view_factory, NativeView, PlatformViewChannel,
+    PlatformViewContext, PlatformViewError,
+};
 
 // Cross-platform HTTP (feature `net`): the `frus::fetch(url).await` shorthand and the
 // `frus::Request` builder (method / headers / body / timeout) — see [`frus::net`].
@@ -243,6 +257,31 @@ pub use frus_shell::{image_cache, ImageCache};
 /// ```
 #[cfg(feature = "sqlite")]
 pub use frus_shell::{database, params, Database, DatabaseBuilder, DatabaseError};
+
+/// **Video playback** (feature `video`, milestone 797): a [`VideoPlayerController`] plays a
+/// clip from the application's bytes, a file or the network with the platform's player;
+/// [`VideoPlayer`] shows it, [`VideoProgressIndicator`] and [`VideoControls`] drive it.
+/// Android, Windows and the Web; elsewhere `initialize` answers [`VideoError::Unsupported`].
+///
+/// ```no_run
+/// use frus::{spawn_local, StatelessWidget, VideoControls, VideoPlayer, VideoPlayerController};
+///
+/// let controller = VideoPlayerController::network_url("https://example.com/clip.mp4");
+/// let c = controller.clone();
+/// spawn_local(async move {
+///     if c.initialize().await.is_ok() {
+///         c.play();
+///     }
+/// });
+/// let picture = VideoPlayer::new(&controller).into_widget();
+/// let controls = VideoControls::new(&controller).into_widget();
+/// # let _ = (picture, controls);
+/// ```
+#[cfg(feature = "video")]
+pub use frus_shell::{
+    DataSource, DurationRange, VideoControls, VideoControlsStyle, VideoError, VideoPlayer,
+    VideoPlayerController, VideoPlayerValue, VideoProgressColors, VideoProgressIndicator,
+};
 
 #[cfg(all(feature = "auth", feature = "secure-store"))]
 pub use frus_shell::stored_refresh_token;

@@ -71,6 +71,9 @@ jobs:
           # The camera and the code reader (milestone 798), and their guide.
           cargo test -p frus-shell --features "camera scanner" --lib
           cargo test -p frus --features "camera scanner" --doc
+          # Video playback (milestone 797): the controller and the widgets, and their guide.
+          cargo test -p frus-shell --features video --lib video::
+          cargo test -p frus --features video --doc
 
       # The tray icon on Linux (milestone 706): its menus are made with GTK 3, which nothing
       # else here needs, so it is built on its own rather than through the demo, which leaves
@@ -269,6 +272,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           cargo test -p frus-gpu
+          cargo test -p frus-gpu --features warm-shaders --lib custom::
           cargo test -p frus-test --lib
           cargo test -p frus-test --test clip --test multiline_scroll --test transforms
 

@@ -75,6 +75,7 @@ pub struct FrusApp {
     decorative_frame_rate: Option<f32>,
     icon: crate::AppIcon,
     on_start: Option<Box<dyn FnOnce()>>,
+    on_share: Option<Box<dyn Fn(crate::SharedContent)>>,
     tray: Option<Box<dyn Fn() -> crate::Tray<Callback>>>,
     taskbar: Option<Box<dyn Fn() -> crate::Taskbar>>,
     shortcuts: Option<Box<dyn Fn() -> Vec<crate::GlobalShortcut<Callback>>>>,
@@ -154,6 +155,7 @@ impl FrusApp {
             decorative_frame_rate: Some(crate::DECORATIVE_FRAME_RATE),
             icon: crate::AppIcon::Frus,
             on_start: None,
+            on_share: None,
             tray: None,
             taskbar: None,
             shortcuts: None,
@@ -291,6 +293,27 @@ impl FrusApp {
     /// for what has to be true from the first frame — registering data, opening a store.
     pub fn on_start(mut self, start: impl FnOnce() + 'static) -> Self {
         self.on_start = Some(Box::new(start));
+        self
+    }
+
+    /// Hands `receive` **what another application shares into this one** (milestone 801): text,
+    /// a subject, files, from the system's share sheet. See
+    /// [`Application::on_share`](crate::Application::on_share) for when it comes; the interface
+    /// is built again afterwards, so a state `receive` sets shows at once.
+    ///
+    /// ```
+    /// use frus_shell::FrusApp;
+    /// use frus_widgets::text;
+    ///
+    /// let app = FrusApp::from_fn(|_| Box::new(text("Notes"))).on_share(|shared| {
+    ///     if let Some(text) = shared.text {
+    ///         frus_shell::log::info!("shared with us: {text}");
+    ///     }
+    /// });
+    /// # let _ = app;
+    /// ```
+    pub fn on_share(mut self, receive: impl Fn(crate::SharedContent) + 'static) -> Self {
+        self.on_share = Some(Box::new(receive));
         self
     }
 
@@ -517,6 +540,13 @@ impl Application for FrusApp {
     fn open_location(&mut self, location: &str) -> Command<Callback> {
         if let Some(router) = &self.router {
             router.open(location);
+        }
+        Command::none()
+    }
+
+    fn on_share(&mut self, shared: crate::SharedContent) -> Command<Callback> {
+        if let Some(receive) = &self.on_share {
+            receive(shared);
         }
         Command::none()
     }

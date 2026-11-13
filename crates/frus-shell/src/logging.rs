@@ -320,6 +320,16 @@ mod tests {
         assert_eq!(debug.max(), log::LevelFilter::Debug);
     }
 
+    /// **No message pattern**: logcat's filter is built without a regex engine (milestone 803),
+    /// which only a `crate=level/pattern` part would need. The default never has one.
+    #[test]
+    fn the_default_filter_needs_no_pattern_engine() {
+        for debug_build in [false, true] {
+            let filter = default_filter("my_app", debug_build);
+            assert!(!filter.contains('/'), "{filter}");
+        }
+    }
+
     /// **A filter it cannot read in part** keeps the parts it can.
     #[test]
     fn a_broken_part_is_skipped() {

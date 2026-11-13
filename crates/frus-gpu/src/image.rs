@@ -409,6 +409,13 @@ impl ImagePainter {
         ranges
     }
 
+    /// Calls `each` with every texture the cache holds, for the memory count (milestone 796).
+    pub(crate) fn each_texture(&self, mut each: impl FnMut(&wgpu::Texture)) {
+        for cached in self.cache.values() {
+            each(cached.view.texture());
+        }
+    }
+
     /// Ends a frame: evicts the textures no draw of the frame used. Called once a frame,
     /// after the frame's last `prepare_frame`.
     pub(crate) fn end_frame(&mut self) {
@@ -508,8 +515,12 @@ impl ImagePainter {
             .is_some_and(|slot| slot.generation == frame.generation());
         if !current {
             let mut slot = self.cache.get_mut(&id).and_then(|c| c.external.take());
-            let fresh = self.external.update(device, queue, &mut slot, &frame);
-            let slot = slot.expect("the uploader fills the slot");
+            let updated = self.external.update(device, queue, &mut slot, &frame);
+            let (Some(fresh), Some(slot)) = (updated, slot) else {
+                // A frame this renderer cannot show: nothing is drawn for it.
+                self.cache.remove(&id);
+                return;
+            };
             match self.cache.get_mut(&id) {
                 Some(cached) if !fresh => cached.external = Some(slot),
                 _ => {
@@ -532,7 +543,8 @@ impl ImagePainter {
                 }
             }
         }
-        // The frame's buffer goes back to its producer now that it is on the GPU.
+        // The frame's buffer goes back to its producer now that it is on the GPU (a hardware
+        // buffer's, once the GPU has read it: the uploader holds it until then).
         drop(frame);
         self.bind(device, id, wanted);
     }

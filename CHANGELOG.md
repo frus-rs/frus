@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 798 so far, each documenting the objective, the alternatives
+> record — one per step, 803 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -28,6 +28,83 @@ any release may break.
   an orientation (`ExternalTexture::set_orientation`, `FrameOrientation`: quarter turns and a
   mirror, applied in the GPU conversion pass), and `TextureSurface` a frame observer and
   `into_texture`.
+
+- **690 KB off every Android application** (J803). The logcat logger is built without its
+  regular-expression engine, which only a `crate=level/pattern` filter needs and which the
+  filter frus gives it never has. The smallest application's library goes from 14,499,592 to
+  13,793,112 bytes (rustc 1.100), back under the size budget with 690 KB of room, without
+  raising it. Nothing an application sees changes: the same messages reach logcat.
+
+- **Video playback** (J797, feature `video`). `VideoPlayerController::asset(bytes)`, `::file(path)`
+  and `::network_url(url)` play a clip with the platform's player — `MediaPlayer` on Android
+  (into a texture surface; HTTP(S) and HLS), Media Foundation's media engine on Windows, a
+  `<video>` element on the web — with `initialize().await`, `play`, `pause`, `seek_to`,
+  `set_volume`, `set_looping`, `set_playback_speed`, a `value()` (duration, position, size,
+  aspect ratio, downloaded ranges, playing, buffering, completed, error) and listeners. Clips
+  pause in the background and play again on return. `VideoPlayer` shows the picture,
+  `VideoProgressIndicator` is a scrubbable progress bar, `VideoControls` a default overlay whose
+  look and parts are all replaceable. macOS, Linux and iOS answer `VideoError::Unsupported`.
+  Nothing runs while no clip is open.
+
+- **Lighter and faster on a phone's GPU** (J796). A page visited no longer leaves GPU memory
+  behind it: the glyph atlas reuses its room instead of only ever doubling, the multisampled
+  targets and the backdrop's staging copy a frame no longer draws with are let go, and on Android
+  and iOS the device's allocator takes blocks of 8 to 64 MB instead of 128 to 256 MB. Where the
+  GPU keeps them in its tile memory (a phone's), the multisampled targets are transient and take
+  no memory at all, and every pass discards its samples instead of writing four times the screen
+  back to memory. A rounded, oval or rectangular clip around an animated shader or a GPU pass is
+  folded into its compositing draw, a layer's texture is no larger than what it holds (a shader
+  mask over a title was a full-screen pass), and a layer drawn again reuses its texture. A native
+  view is moved once it stops instead of on every scroll frame. On the test phone: 130 MB of GPU
+  memory no longer kept after the first page visited (PSS 279 → 101 MB after a visit), the shader
+  gallery at 32–33 fps instead of 18 on a warm phone. The frame statistics line ends with the GPU memory held
+  (`Renderer::gpu_memory`, `GpuMemory`).
+- **Native views on Windows and the web** (J802). `PlatformView::new(view_type, params)` is the
+  native view widget for every platform: Android's `View` as before, a child window on
+  Windows, an element of the page on the web. `"frus/edittext"` is an `EDIT` control on Windows
+  and an `<input>` on the web; `"frus/webview"` is WebView2 on Windows (feature `webview2`) and
+  an `<iframe>` on the web; `"frus/video"` is a `<video>` on the web. They take the same
+  `PlatformViewController` calls and send the same events as on Android. The view is moved,
+  resized and clipped with the frame; what frus draws over it (a menu, a button) is cut out of
+  it, and under a dialog Windows shows a picture of it. `register_platform_view_factory` adds a
+  view type from Rust on Windows and the web. `AndroidView` is unchanged. macOS, Linux and iOS
+  still show the fallback.
+- **Android applications come back to the running activity** (J801). `frus run` and
+  `frus build` package frus's own activity, `dev.frus.FrusActivity` (the native activity with
+  `onNewIntent` forwarded, `launchMode="singleTop"`, about 900 bytes of code): a link, a share, a
+  notification's tap and a sign-in's redirect that open the application while it runs reach the
+  running one, with its state, instead of finishing and starting it again. Custom-scheme
+  redirects now work on Android with `frus::auth_session` (`com.example.app:/oauth`, in a Custom
+  Tab). New: receiving what other applications share — `Application::on_share`,
+  `FrusApp::on_share`, `frus::SharedContent` (text, subject, files copied into the cache). An
+  application that names an activity of its own keeps it; a package made by hand with
+  `cargo apk` runs in the native activity as before.
+- **Video and camera frames without a copy on Android, shaders compiled ahead** (J800). Where
+  the GPU can import Android's hardware buffers (Vulkan with
+  `VK_ANDROID_external_memory_android_hardware_buffer` and the sampler Y'CbCr conversion), the
+  renderer opens its device with them, a `TextureSurface` hands out GPU buffers in the
+  decoder's or the camera's own format, and each frame is read by the GPU where the producer
+  wrote it, YUV converted as it is read: no plane is copied by the CPU (feature
+  `hardware-buffers` of `frus`, off by default). The copying path stays
+  for OpenGL ES, Android 7 and GPUs without the extensions, chosen at run time. A frame's buffer
+  goes back to the producer only once the GPU has read it. `ExternalTexture::push_hardware_buffer`
+  and `HardwareBuffer` let a producer of its own hand buffers over; `textures().hardware_buffers()`
+  says whether the renderer imports them. With the `warm-shaders` feature, `Shader::from_wgsl`
+  starts compiling the shader's GPU pipeline at once, on a thread of the renderer's: the first
+  frame that shows a shader finds its pipeline ready instead of waiting for the driver.
+- **Web views** (J799), behind the `webview` cargo feature of `frus` (off by default; `frus
+  build` then declares the INTERNET permission). `WebViewController` loads requests (headers, `POST`), HTML, files and
+  assets; reloads and moves in the history; runs JavaScript, with or without its result (a
+  future); opens JavaScript channels the page posts to; sets the JavaScript mode, the user agent,
+  the background and zoom; clears the cache and the local storage; and holds the page's address,
+  title, progress and history, notifying on each change. `NavigationDelegate` hears the page
+  starting, progressing, finishing, failing (`WebResourceError`, `HttpResponseError`), changing
+  its address, and decides each navigation. `WebViewWidget` shows the controller's page; the
+  controller owns it, so a widget built again shows the same page with its history.
+  `WebViewCookieManager` sets and clears cookies. The system's Back goes back in the page while
+  it can. Android only for now; elsewhere the widget shows its stand-in. Native views on
+  Android: a drag on a view inside a frus list goes to the list once the view's content cannot
+  follow it, and a focused native view is scrolled above the keyboard. Demo: `/browser`.
 - **Network images cached on disk, a SQLite database, signing in with PKCE** (J795).
   `Image::network` keeps what it downloads in the application's cache folder as HTTP says
   (`Cache-Control`, `Expires`, `Last-Modified`, revalidated with `ETag`; a stale copy is shown

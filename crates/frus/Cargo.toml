@@ -49,6 +49,17 @@ taskbar = ["frus-shell/taskbar"]
 # Global shortcuts: `GlobalShortcut`. The desktop (X11 on Linux); off by default.
 global-shortcuts = ["frus-shell/global-shortcuts"]
 json = ["frus-shell/json"]
+# Video and camera frames shown without a copy on Android (milestone 800): a `TextureSurface`
+# hands out GPU buffers the renderer imports, where the GPU allows it. Off by default.
+hardware-buffers = ["frus-shell/hardware-buffers"]
+# Custom shaders' GPU pipelines compiled on a thread of the renderer's as soon as
+# `Shader::from_wgsl` loads them, so their first frame does not wait (milestone 800). Off by
+# default.
+warm-shaders = ["frus-shell/warm-shaders"]
+# A web page inside the page on Windows, hosted by the system's WebView2:
+# `PlatformView::new("frus/webview", ..)` (milestone 802). Off by default; Android and the web
+# need no feature.
+webview2 = ["frus-shell/webview2"]
 # A SQLite database in the application's data folder: `database()` (milestone 795). Off by
 # default: SQLite itself is compiled in. Not on the Web, where `open` answers `Unsupported`.
 sqlite = ["frus-shell/sqlite"]
@@ -68,6 +79,10 @@ scanner = ["frus-shell/scanner"]
 # Every barcode format rxing reads (EAN, UPC, Code 128, Data Matrix, PDF417, Aztec...), not
 # only QR codes: about 1 MB more than `scanner`.
 scanner-all-formats = ["frus-shell/scanner-all-formats"]
+# Video playback: `VideoPlayerController`, `VideoPlayer`, `VideoProgressIndicator`,
+# `VideoControls` (milestone 797). Off by default. Android, Windows and the Web; elsewhere
+# `initialize` answers `VideoError::Unsupported`.
+video = ["frus-shell/video"]
 default = ["frus-shell/default", "frus-widgets/default", "frus-text/default"]
 # Decoding embedded PNG/JPEG: `Image::memory` and `asset!`. Part of `default`;
 # dropping it leaves both reporting a missing decoder rather than panicking.
@@ -85,6 +100,10 @@ bundled-arabic = ["frus-shell/bundled-arabic", "frus-widgets/bundled-arabic", "f
 # Line breaking between the words of Thai, Lao, Khmer and Myanmar (milestone 784). Part of
 # `default`; see frus-text's manifest for its size.
 dictionary-line-breaks = ["frus-shell/dictionary-line-breaks", "frus-widgets/dictionary-line-breaks", "frus-text/dictionary-line-breaks"]
+# Web pages inside the page: `WebViewController`, `WebViewWidget`, `NavigationDelegate`,
+# `WebViewCookieManager` (milestone 799). Android for now. Off by default: an application
+# without a web view pays nothing for it. `frus build` declares the INTERNET permission.
+webview = ["frus-shell/webview", "frus-widgets/webview"]
 icons-outlined = ["frus-widgets/icons-outlined"]
 icons-rounded = ["frus-widgets/icons-rounded"]
 icons-sharp = ["frus-widgets/icons-sharp"]

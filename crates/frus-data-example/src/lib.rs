@@ -8,7 +8,12 @@
 //! - **Notes**: a SQLite database (`frus::database`) with two migrations, typed rows and a
 //!   transaction;
 //! - **Sign in**: `frus::auth_session`, the authorization code with PKCE, through the system's
-//!   browser (a Custom Tab on Android, a popup on the Web).
+//!   browser (a Custom Tab on Android, a popup on the Web). On Android the answer comes back
+//!   to the running application at its own scheme, `com.frus.data:/callback` (milestone 801).
+//!
+//! It also opens at a page from a link (`com.frus.data://notes`), takes text another
+//! application shares into it as a note, and posts a notification, to show that each of them
+//! reaches the running application on Android (milestone 801).
 //!
 //! The server it talks to is named at build time: `frus run --define DATA_SERVER=http://…`
 //! (default `http://127.0.0.1:8795`, the mock server of milestone 795's checks).
@@ -33,10 +38,13 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE notes ADD COLUMN done INTEGER NOT NULL DEFAULT 0",
 ];
 
-/// The address the sign-in comes back to on this platform.
+/// The address the sign-in comes back to on this platform: a page of the server on the Web,
+/// the application's own scheme on Android, the loopback interface on a desktop.
 fn redirect_uri() -> String {
     if cfg!(target_arch = "wasm32") {
         format!("{SERVER}/callback.html")
+    } else if cfg!(target_os = "android") {
+        "com.frus.data:/callback".to_string()
     } else {
         "http://127.0.0.1/callback".to_string()
     }
@@ -77,6 +85,8 @@ struct DataExample {
     notes: Vec<Note>,
     draft: String,
     auth: String,
+    /// What the last notification's answer was.
+    notified: String,
 }
 
 /// What the interface and the effects send.
@@ -96,6 +106,8 @@ enum Msg {
     SignInLoopback,
     Refresh,
     Signed(Result<frus::AuthTokens, frus::AuthError>),
+    Notify,
+    Notified(String),
 }
 
 /// The notes, newest first.
@@ -274,6 +286,20 @@ impl Application for DataExample {
                     Msg::Signed(sign_in_request(redirect_uri()).refresh(&refresh).await)
                 });
             }
+            Msg::Notify => {
+                self.notified = "Posted: tap it in the shade".to_string();
+                return Command::perform_async(async {
+                    let answer = frus::SystemNotification::new("frus data")
+                        .body("Tap to come back to the running application")
+                        .show_async()
+                        .await;
+                    Msg::Notified(format!("{answer:?}"))
+                });
+            }
+            Msg::Notified(answer) => {
+                frus::log::info!("notification: {answer}");
+                self.notified = format!("The notification answered {answer}");
+            }
             Msg::Signed(result) => {
                 self.auth = match result {
                     Ok(tokens) => format!(
@@ -294,6 +320,32 @@ impl Application for DataExample {
                 };
                 frus::log::info!("auth: {}", self.auth);
             }
+        }
+        Command::none()
+    }
+
+    /// `com.frus.data://notes` (or `/images`, `/signin`) shows that page.
+    fn open_location(&mut self, location: &str) -> Command<Msg> {
+        frus::log::info!("location {location}");
+        match location.split(['?', '#']).next().unwrap_or("") {
+            "/images" => self.page = Page::Images,
+            "/notes" => self.page = Page::Notes,
+            "/signin" => self.page = Page::SignIn,
+            _ => {}
+        }
+        Command::none()
+    }
+
+    /// Text another application shared becomes the note being written, on the notes page.
+    fn on_share(&mut self, shared: frus::SharedContent) -> Command<Msg> {
+        frus::log::info!(
+            "shared: {:?} text, {} file(s)",
+            shared.text.as_ref().map(String::len),
+            shared.files.len()
+        );
+        if let Some(text) = shared.text {
+            self.draft = text;
+            self.page = Page::Notes;
         }
         Command::none()
     }
@@ -377,6 +429,8 @@ impl Application for DataExample {
                     ]
                     .gap(8.0),
                     text(self.auth.clone()).wrap(),
+                    button("Notify", Msg::Notify),
+                    text(self.notified.clone()).wrap(),
                 ]
                 .gap(12.0),
             ),

@@ -19,7 +19,7 @@ crate-type = ["rlib", "cdylib"]
 # **A single dependency**: the `frus` facade re-exports the shell, the widgets and
 # `main!` — plus anyhow and log. An app declares nothing else, wasm-bindgen for the Web
 # aside.
-frus = { path = "../frus" }
+frus = { path = "../frus", features = ["warm-shaders"] }
 
 # Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

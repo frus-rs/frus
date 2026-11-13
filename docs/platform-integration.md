@@ -46,6 +46,11 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
 - **Sharing**: `frus::share("text")`, or `frus::Share::text(..).subject(..).url(..).file(path)`
   for more, shows the system's share sheet (Android, Windows, macOS, the web). Where a desktop
   cannot show one, the text is copied to the clipboard and the call says so.
+- **Receiving a share**: an application that declares an `ACTION_SEND` intent filter (commented
+  out in the template's `Cargo.toml`) is listed in other applications' share sheets on Android;
+  what they share — text, a subject, files copied into the cache folder — reaches
+  `Application::on_share`, or the handler given to `FrusApp::on_share`, whether it starts the
+  application or comes while it runs.
 - **Haptic feedback**: `frus::haptics::light()` and its siblings give the system's touch
   feedback (Android, the web; the desktops answer `Unsupported`).
 - **Which network**: `frus::connectivity()`, and `cx.use_connectivity()` in a component, say
@@ -75,11 +80,17 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
   place and the maximized state it was closed with, fitted to the screens there are at the
   next start. Nothing to write; `FrusApp::remember_window(false)` turns it off, and
   `.window_size(w, h)` is the size of the first run.
+- **Playing video**: `frus::VideoPlayerController::network_url(..)` (or `asset`, `file`;
+  feature `video`) plays a clip with the platform's player — `MediaPlayer` on Android, Media
+  Foundation on Windows, `<video>` on the web — and `VideoPlayer`, `VideoProgressIndicator` and
+  `VideoControls` show and drive it. No JNI to write. macOS, Linux and iOS answer
+  `VideoError::Unsupported` for now. See [the guide](guide/video.md).
 - **Video, camera and native pictures**: `frus::textures().create()` gives a texture any
   thread pushes RGBA, BGRA, NV12 or I420 frames into, and `frus::Texture::new(id)` shows it
   (every platform). On Android, `frus::TextureSurface` is a `Surface` for `MediaCodec`,
   Camera2 or a media player, from the NDK or from Java, with no JNI of the application's own
-  beyond handing it over. See [the guide](guide/textures.md).
+  beyond handing it over; with the `hardware-buffers` feature, on a Vulkan phone its frames
+  are shown where the decoder wrote them, without a copy. See [the guide](guide/textures.md).
 - **The camera and code scanning** (features `camera`, `scanner`): `frus::available_cameras()`,
   `frus::CameraController` (preview, pictures, frames, flash, zoom, focus, the other camera)
   and `frus::CameraPreview`; `frus::Scanner` reads QR codes and barcodes with
@@ -211,8 +222,8 @@ bindings: more glue, still no hand-written JavaScript.
 The honest summary of everything above is that the language question is nearly
 settled and the *coverage* question is wide open.
 
-An application needing biometrics or in-app purchases gets no help from frus today (a
-camera or a video decoder at least has a surface to draw into, `TextureSurface`). Its author
+An application needing biometrics or in-app purchases gets no help from frus today (video plays
+through `VideoPlayerController`, and a camera at least has a surface to draw into, `TextureSurface`). Its author
 writes JNI by hand — reachable, verbose, easy to get wrong, and repeated in every application
 that needs the same thing. That is the actual obstacle for someone shipping a real
 application, and it is not solved by adding another widget.

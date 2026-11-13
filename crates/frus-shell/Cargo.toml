@@ -22,6 +22,8 @@ categories = ["gui", "wasm"]
 # ~3.4 MB of faces, and an application that ships its own turns off the ones it does
 # not need. All on by default.
 [features]
+# Web views (milestone 799): the shell's side of `WebViewController`. Off by default.
+webview = ["frus-widgets/webview"]
 # A driver with no window, for an application's tests to feed input and frames through the
 # shell's own paths. Hidden; not for applications to ship.
 testing = []
@@ -82,7 +84,31 @@ camera = [
 scanner = ["camera", "dep:rxing", "dep:async-channel"]
 # Every format rxing reads: EAN, UPC, Code 128, Data Matrix, PDF417, Aztec...
 scanner-all-formats = ["scanner", "rxing/full_barcode_format_support"]
+# Video playback: `VideoPlayerController`, `VideoPlayer` (milestone 797). Off by default. The
+# platform's own player does the work (Android's MediaPlayer, Windows' Media Foundation, the
+# browser's <video>), so nothing is compiled in but the bindings.
+video = [
+    "windows/Win32_Media_MediaFoundation",
+    "windows/Win32_Graphics_Imaging",
+    "web-sys/HtmlVideoElement",
+    "web-sys/HtmlMediaElement",
+    "web-sys/MediaError",
+    "web-sys/TimeRanges",
+    "web-sys/CanvasRenderingContext2d",
+    "web-sys/ImageData",
+    "web-sys/Url",
+]
+# A web page inside the page on Windows: `PlatformView::new("frus/webview", ..)` hosted by the
+# system's WebView2 (milestone 802). Off by default: the bindings are a few hundred kilobytes,
+# and the Edge WebView2 runtime must be on the machine (it ships with Windows 11). Without it,
+# a web view shows its fallback on Windows; Android and the web have one with no feature.
+webview2 = ["dep:webview2-com"]
 default = ["frus-gpu/default", "frus-widgets/default"]
+# Android (milestone 800): a `TextureSurface`'s frames shown without a copy where the GPU can
+# import hardware buffers (Vulkan). Off by default: an application with no video pays nothing.
+hardware-buffers = ["frus-gpu/hardware-buffers"]
+# Custom shaders compiled ahead of their first frame (milestone 800). Off by default.
+warm-shaders = ["frus-gpu/warm-shaders"]
 bundled-sans = ["frus-gpu/bundled-sans", "frus-widgets/bundled-sans"]
 bundled-italic = ["frus-gpu/bundled-italic", "frus-widgets/bundled-italic"]
 bundled-mono = ["frus-gpu/bundled-mono", "frus-widgets/bundled-mono"]
@@ -227,6 +253,12 @@ image = { workspace = true, optional = true }
 windows = { version = "0.62", features = ["ApplicationModel_DataTransfer", "Foundation", "Networking_Connectivity", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The share window's list of files, and waiting for a file to be found (milestone 775).
 windows-collections = "0.3"
+# The media engine's callback (feature `video`, milestone 797): `#[implement]` names this crate.
+# Already in the tree, through `windows`.
+windows-core = "0.62"
+# The web view on Windows (feature `webview2`, milestone 802): the WebView2 COM interfaces, over
+# the same `windows` crate as above.
+webview2-com = { version = "0.39", optional = true }
 windows-future = "0.3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -234,6 +266,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     # The secure store (milestone 776): the Credential Manager's generic credentials.
     "Win32_Security_Credentials",
+    # A picture of a native view under a dialog (milestone 802): `PrintWindow`.
+    "Win32_Storage_Xps",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
@@ -319,13 +353,20 @@ web-sys = { version = "0.3", features = [
     # 770).
     "ScrollIntoViewOptions",
     "ScrollLogicalPosition",
+    # Native views over the canvas (milestone 802): a page in a frame, a video.
+    "HtmlIFrameElement",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
 ] }
 
 # On Android, winit goes through the native activity (android-activity) and the logs
 # land in logcat.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
-android_logger = "0.14"
+# Without its default `regex` feature (milestone 803): the filter frus gives it is
+# `level,crate=level,…` and never a `/pattern`, and the regex engine that only a pattern
+# needs was about 450 KB of every application's library.
+android_logger = { version = "0.14", default-features = false }
 # The input bridge (InputConnection): loading the bundled dex plus its natives.
 jni = "0.21"
 # The Java VM a texture surface's `android.view.Surface` is made in (milestone 793); already

@@ -156,6 +156,9 @@ mod taskbar;
 mod texture_surface;
 // The tray icon (milestone 706): its description everywhere, the system's own on the desktop.
 mod tray;
+// Video playback (feature `video`, milestone 797).
+#[cfg(feature = "video")]
+mod video;
 // The Web side of a reload under `frus run`: the states kept across the page's reload.
 #[cfg(web)]
 mod web_dev;
@@ -175,6 +178,8 @@ pub(crate) mod runtime;
 #[cfg(feature = "secure-store")]
 mod secure_store;
 mod selection;
+// What other applications share into this one (milestone 801).
+mod received_share;
 // Sharing through the system's share sheet (milestone 775).
 mod share;
 mod simulated;
@@ -182,6 +187,10 @@ mod subscription;
 mod theming;
 #[cfg(windows)]
 mod title_bar;
+// Native views hosted over frus's surface (milestone 802): what the Windows and the web hosts
+// share, and the factories plugins register.
+#[cfg_attr(not(any(windows, web)), allow(dead_code))]
+mod view_host;
 #[cfg(web)]
 mod web_clipboard;
 #[cfg(any(web, test))]
@@ -192,12 +201,18 @@ mod web_failure;
 mod web_icon;
 #[cfg(any(web, test))]
 mod web_keys;
+// The web host of native views (milestone 802).
 #[cfg(any(web, test))]
 mod web_page;
+#[cfg(web)]
+mod web_platform_view;
 mod widget_app;
 // The desktop window's size, place and maximized state, kept between runs (milestone 783).
 #[cfg(any(desktop, test))]
 mod window_memory;
+// The Windows host of native views (milestone 802).
+#[cfg(windows)]
+mod windows_platform_view;
 // When the next frame comes, with decoration alone moving (milestone 783).
 mod pacing;
 
@@ -240,6 +255,7 @@ pub use open_url::{open_url, OpenUrlError};
 pub use pacing::DECORATIVE_FRAME_RATE;
 pub use permission::{open_permission_settings, Permission, PermissionStatus};
 pub use platform_view::{register_android_view_factory, PlatformViewError};
+pub use received_share::SharedContent;
 pub use remote::RemoteData;
 /// Reading QR codes and barcodes (feature `scanner`, milestone 798): the [`Scanner`] widget.
 #[cfg(feature = "scanner")]
@@ -262,6 +278,9 @@ pub use taskbar::{Taskbar, TaskbarProgress};
 pub use tester::Tester;
 pub use texture_surface::{FrameObserver, SurfaceFormat, SurfaceFrame, TextureSurface};
 pub use tray::Tray;
+pub use view_host::{
+    register_platform_view_factory, NativeView, PlatformViewChannel, PlatformViewContext,
+};
 pub use widget_app::FrusApp;
 
 /// Cross-platform HTTP (`net` feature) — the [`fetch`] shorthand, the [`Request`]
@@ -277,6 +296,12 @@ pub use auth::{auth_session, AuthError, AuthRequest, AuthTokens, DEFAULT_AUTH_TI
 /// A SQLite database (feature `sqlite`, milestone 795): [`database()`], [`Database`].
 #[cfg(feature = "sqlite")]
 pub use database::{database, Database, DatabaseBuilder, DatabaseError, Row};
+/// Video playback (feature `video`, milestone 797): [`VideoPlayerController`], [`VideoPlayer`].
+#[cfg(feature = "video")]
+pub use video::{
+    DataSource, DurationRange, VideoControls, VideoControlsStyle, VideoError, VideoPlayer,
+    VideoPlayerController, VideoPlayerValue, VideoProgressColors, VideoProgressIndicator,
+};
 
 /// The size the disk cache of network images is kept under by default.
 #[cfg(all(feature = "net", not(web)))]
@@ -586,6 +611,9 @@ pub fn run_android<A: Application>(app: A, android_app: AndroidApp) -> anyhow::R
         // Input bridge (a real InputConnection): composition, swipe, CJK. On failure the
         // shell falls back to key mode (TYPE_NULL).
         android_ime::install(&android_app);
+        // The intents that open the application again, handed to it while it runs (milestone
+        // 801): a link, a share, a sign-in's redirect.
+        android_link::listen(&android_app);
         // Keep the activity handle around to query the system insets.
         app.set_android_app(android_app);
         event_loop.run_app(&mut app)?;

@@ -214,7 +214,7 @@ pub(crate) fn edit_manifest(xml: &str, project: &Project, version_code: u32) -> 
 }
 
 /// `name="value"` on the first `element` tag: replaced where it is, added where it is not.
-fn set_attribute(xml: &str, element: &str, name: &str, value: &str) -> String {
+pub(crate) fn set_attribute(xml: &str, element: &str, name: &str, value: &str) -> String {
     let escaped = value
         .replace('&', "&amp;")
         .replace('"', "&quot;")
@@ -254,6 +254,9 @@ struct Built<'a> {
     dir: PathBuf,
     /// The processors packaged.
     abis: Vec<&'static str>,
+    /// The libraries the package holds, `lib/<abi>/<name>.so`: the folder beside it may also
+    /// hold another application's, from a target directory they share.
+    packaged: Vec<String>,
     tools: Tools,
     key: Key,
     work: PathBuf,
@@ -278,6 +281,7 @@ impl<'a> Built<'a> {
             .iter()
             .map(|t| abi_of(t).ok_or_else(|| format!("{t} is not an Android target")))
             .collect::<Result<Vec<_>, _>>()?;
+        let packaged = packaged_libraries(apk)?;
         let tools = tools(project)?;
         let key = signing_key(project, mode, for_device)?;
         let work = dir.join("frus");
@@ -288,6 +292,7 @@ impl<'a> Built<'a> {
             mode,
             dir,
             abis,
+            packaged,
             tools,
             key,
             work,
@@ -338,6 +343,20 @@ impl<'a> Built<'a> {
         Ok(path)
     }
 
+    /// Whether the manifest names frus's activity, whose code the package must then carry: left
+    /// beside cargo-apk's package as `classes.dex` (`app_links::finish_package`), and written
+    /// there again in case it is not.
+    fn has_code(&self) -> Result<bool, String> {
+        let written = self.dir.join("AndroidManifest.xml");
+        let xml = std::fs::read_to_string(&written).map_err(|e| e.to_string())?;
+        if !crate::android_activity::uses_frus_activity(&xml) {
+            return Ok(false);
+        }
+        std::fs::write(self.dir.join("classes.dex"), crate::android_activity::DEX)
+            .map_err(|e| format!("classes.dex: {e}"))?;
+        Ok(true)
+    }
+
     /// `aapt2 link`: the manifest and the resources, as an APK or (`proto`) as a bundle's.
     fn link(&self, manifest: &Path, out: &Path, proto: bool) -> Result<(), String> {
         let mut link = Command::new(&self.tools.aapt2);
@@ -364,16 +383,16 @@ impl<'a> Built<'a> {
 
     /// The libraries of `abi`, as the paths inside the package: `lib/arm64-v8a/libapp.so`.
     fn libraries(&self, abi: &str) -> Result<Vec<String>, String> {
-        let dir = self.dir.join("lib").join(abi);
-        let mut found: Vec<String> = std::fs::read_dir(&dir)
-            .map_err(|e| format!("no libraries for {abi} in {}: {e}", dir.display()))?
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "so"))
-            .map(|e| format!("lib/{abi}/{}", e.file_name().to_string_lossy()))
+        let prefix = format!("lib/{abi}/");
+        let mut found: Vec<String> = self
+            .packaged
+            .iter()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
             .collect();
         found.sort();
         if found.is_empty() {
-            return Err(format!("cargo-apk left no library in {}", dir.display()));
+            return Err(format!("cargo-apk's package has no library for {abi}"));
         }
         Ok(found)
     }
@@ -395,6 +414,10 @@ impl<'a> Built<'a> {
         for abi in abis {
             add.args(self.libraries(abi)?);
         }
+        // frus's activity, which the manifest names (milestone 801): its code, at the root.
+        if self.has_code()? {
+            add.arg("classes.dex");
+        }
         add.stdout(std::process::Stdio::null());
         cargo::run(&mut add)?;
         let apk = self.dir.join(format!("{name}.apk"));
@@ -414,6 +437,21 @@ impl<'a> Built<'a> {
         )?;
         Ok(apk)
     }
+}
+
+/// The libraries `apk` holds (`lib/<abi>/<name>.so`): what is packaged again. Not the `lib/`
+/// folder cargo-apk leaves beside it, which keeps every application's built into the same
+/// target directory — milestone 801 found a new application's package carrying the example
+/// built before it.
+pub(crate) fn packaged_libraries(apk: &Path) -> Result<Vec<String>, String> {
+    let libraries: Vec<String> = zip::names(apk)?
+        .into_iter()
+        .filter(|name| name.starts_with("lib/") && name.ends_with(".so"))
+        .collect();
+    if libraries.is_empty() {
+        return Err(format!("{} holds no library", apk.display()));
+    }
+    Ok(libraries)
 }
 
 /// The name a package of this build is given: the library's, the flavor's, the processor's.
@@ -511,6 +549,12 @@ pub(crate) fn app_bundle(project: &Project, mode: Mode, apk: &Path) -> Result<Pa
             let bytes = std::fs::read(built.dir.join(&lib)).map_err(|e| e.to_string())?;
             entries.push((lib, bytes));
         }
+    }
+    if built.has_code()? {
+        entries.push((
+            "dex/classes.dex".to_string(),
+            crate::android_activity::DEX.to_vec(),
+        ));
     }
     if let Some(assets) = &project.android_assets {
         let root = project.root.join(assets);
@@ -666,14 +710,39 @@ pub(crate) mod zip {
         !crc
     }
 
-    #[cfg(test)]
     fn u16_at(b: &[u8], at: usize) -> Option<u16> {
         Some(u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?))
     }
 
-    #[cfg(test)]
     fn u32_at(b: &[u8], at: usize) -> Option<u32> {
         Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    }
+
+    /// The names of the entries of `archive`, compressed or not, from its central directory.
+    pub(crate) fn names(archive: &Path) -> Result<Vec<String>, String> {
+        let bytes = std::fs::read(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+        names_in(&bytes)
+            .ok_or_else(|| format!("{} is not an archive frus can read", archive.display()))
+    }
+
+    pub(crate) fn names_in(b: &[u8]) -> Option<Vec<String>> {
+        let end = (0..=b.len().checked_sub(22)?)
+            .rev()
+            .find(|&at| u32_at(b, at) == Some(END))?;
+        let count = u16_at(b, end + 10)? as usize;
+        let mut at = u32_at(b, end + 16)? as usize;
+        let mut names = Vec::with_capacity(count);
+        for _ in 0..count {
+            if u32_at(b, at)? != CENTRAL {
+                return None;
+            }
+            let name_len = u16_at(b, at + 28)? as usize;
+            let extra_len = u16_at(b, at + 30)? as usize;
+            let comment_len = u16_at(b, at + 32)? as usize;
+            names.push(String::from_utf8_lossy(b.get(at + 46..at + 46 + name_len)?).into_owned());
+            at += 46 + name_len + extra_len + comment_len;
+        }
+        Some(names)
     }
 
     /// Every entry of `archive`, which must all be stored: what the tests read back.
@@ -909,6 +978,11 @@ mod tests {
         ];
         zip::write_stored(&path, &entries).unwrap();
         assert_eq!(zip::read_stored(&path).unwrap(), entries);
+        // The libraries a package holds are read from it, not from a folder beside it.
+        assert_eq!(
+            packaged_libraries(&path).unwrap(),
+            ["lib/arm64-v8a/libapp.so"]
+        );
         assert_eq!(zip::crc32(b"123456789"), 0xCBF4_3926);
         std::fs::remove_dir_all(&dir).unwrap();
     }

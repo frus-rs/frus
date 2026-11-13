@@ -442,7 +442,7 @@ impl Preview {
                 .take()
                 .ok_or_else(|| CameraError::Platform("the preview texture is gone".into()))?,
         };
-        let surface = TextureSurface::with_texture(texture, size.0, size.1, SurfaceFormat::Yuv420)
+        let surface = TextureSurface::readable_with_texture(texture, size.0, size.1, SurfaceFormat::Yuv420)
             .map_err(|e| CameraError::Platform(e.to_string()))?;
         let surface = Arc::new(surface);
         *slot = Some((surface.clone(), size));

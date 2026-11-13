@@ -11,6 +11,7 @@
 //! router's; nothing here keeps them.
 
 mod board;
+mod browser;
 mod camera;
 mod charts;
 mod data;
@@ -19,6 +20,7 @@ mod journal;
 mod licenses;
 mod menu;
 mod native;
+mod player;
 mod settings;
 mod sheet;
 mod task;
@@ -28,6 +30,7 @@ mod video;
 mod wizard;
 
 pub(crate) use board::*;
+pub(crate) use browser::*;
 pub(crate) use camera::*;
 pub(crate) use charts::*;
 pub(crate) use data::*;
@@ -36,6 +39,7 @@ pub(crate) use journal::*;
 pub(crate) use licenses::*;
 pub(crate) use menu::window;
 pub(crate) use native::*;
+pub(crate) use player::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
 pub(crate) use task::*;
@@ -83,6 +87,8 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("video", |_, _| VideoPage.into_widget()),
         GoRoute::new("camera", |_, _| CameraPage.into_widget()),
         GoRoute::new("native", |_, _| NativePage.into_widget()),
+        GoRoute::new("player", |_, _| PlayerPage.into_widget()),
+        GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
         task,
     ])])
 }
