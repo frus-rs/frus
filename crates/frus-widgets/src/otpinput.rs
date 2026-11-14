@@ -505,12 +505,16 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
         let fill = self.fill.or(t.fill).unwrap_or(Color::TRANSPARENT);
         let (rest, focused, error, ink, separator_ink) = if self.enabled {
             (
-                self.border_color.or(t.border_color).unwrap_or(scheme.outline),
+                self.border_color
+                    .or(t.border_color)
+                    .unwrap_or(scheme.outline),
                 self.focused_border_color
                     .or(t.focused_border_color)
                     .unwrap_or(scheme.primary),
                 self.error_color.or(t.error_color).unwrap_or(scheme.error),
-                self.text_color.or(t.text_color).unwrap_or(scheme.on_surface),
+                self.text_color
+                    .or(t.text_color)
+                    .unwrap_or(scheme.on_surface),
                 t.separator_color.unwrap_or(scheme.on_surface_variant),
             )
         } else {
@@ -530,7 +534,14 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
             let is_active = active == Some(i) && selected.is_none();
             let in_selection = selected.is_some_and(|(a, b)| i >= a && i < b);
             let (border, width) = if self.error {
-                (error, if is_active { focused_width } else { border_width })
+                (
+                    error,
+                    if is_active {
+                        focused_width
+                    } else {
+                        border_width
+                    },
+                )
             } else if is_active {
                 (focused, focused_width)
             } else {
@@ -824,7 +835,10 @@ mod tests {
         let input = input("1234");
         let m = input.metrics(None);
         let middle = |i: usize| input.layout(m).0[i] + m.width / 2.0;
-        assert_eq!(input.cursor_at(middle(1), 10.0, 0.0, 0).map(|p| p.offset), Some(1));
+        assert_eq!(
+            input.cursor_at(middle(1), 10.0, 0.0, 0).map(|p| p.offset),
+            Some(1)
+        );
         assert_eq!(
             input.cursor_at(middle(5), 10.0, 0.0, 0).map(|p| p.offset),
             Some(4),
@@ -916,7 +930,12 @@ mod tests {
         let input = input("1").enabled(false);
         assert!(!input.focusable());
         assert!(!input.takes_typing());
-        let ui = build_ui(&input, Size::new(400.0, 100.0), &Runtime::default(), &Theme::default());
+        let ui = build_ui(
+            &input,
+            Size::new(400.0, 100.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
         let (_, _, props) = ui
             .semantics()
             .iter()

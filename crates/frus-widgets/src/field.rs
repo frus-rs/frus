@@ -713,7 +713,9 @@ mod tests {
     /// No error, no error line, and nothing live.
     #[test]
     fn a_field_without_an_error_has_no_live_region() {
-        let field = Field::new(TextField::<Msg>::new("")).label("Name").error(None);
+        let field = Field::new(TextField::<Msg>::new(""))
+            .label("Name")
+            .error(None);
         let ui = build_ui(
             &field,
             Size::new(320.0, 300.0),
@@ -774,9 +776,7 @@ mod tests {
                     .primitives()
                     .iter()
                     .find_map(|p| match p {
-                        Primitive::Text { text, position, .. } if text == words => {
-                            Some(position.x)
-                        }
+                        Primitive::Text { text, position, .. } if text == words => Some(position.x),
                         _ => None,
                     })
                     .expect(words)
@@ -784,11 +784,21 @@ mod tests {
             (at("https://"), at(".com"))
         };
         let g = group();
-        let (lead, trail) = xs(&build_ui(&g, Size::new(400.0, 100.0), &Runtime::default(), &theme));
+        let (lead, trail) = xs(&build_ui(
+            &g,
+            Size::new(400.0, 100.0),
+            &Runtime::default(),
+            &theme,
+        ));
         assert!(lead < trail);
         let rtl = Theme::default().rtl();
         let g = group();
-        let (lead, trail) = xs(&build_ui(&g, Size::new(400.0, 100.0), &Runtime::default(), &rtl));
+        let (lead, trail) = xs(&build_ui(
+            &g,
+            Size::new(400.0, 100.0),
+            &Runtime::default(),
+            &rtl,
+        ));
         assert!(lead > trail, "mirrored: {lead} {trail}");
     }
 }

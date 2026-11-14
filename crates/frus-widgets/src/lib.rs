@@ -108,7 +108,9 @@ mod presence;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
 mod animationhandle;
+mod emptystate;
 mod expandrail;
+mod field;
 mod glass;
 pub mod host;
 mod icon;
@@ -123,11 +125,6 @@ mod interaction;
 mod interactive;
 mod kanban;
 mod kbd;
-mod emptystate;
-mod field;
-mod otpinput;
-mod swipeactions;
-mod wheelpicker;
 mod keepalive;
 mod keyboarddismiss;
 mod keyed;
@@ -157,6 +154,7 @@ mod navigator;
 mod navrail;
 mod navscaffold;
 mod notifier;
+mod otpinput;
 mod overflowbar;
 mod overscroll;
 mod pageselector;
@@ -219,11 +217,13 @@ mod steps;
 mod stretch;
 #[cfg(feature = "svg")]
 mod svg;
+mod swipeactions;
 mod switch;
 mod table;
 mod tabs;
 mod text;
 mod textinput;
+mod wheelpicker;
 // External textures: video, camera, maps, native views (milestone 793).
 mod texture;
 mod theme;
@@ -408,6 +408,7 @@ pub use dropdown::{DropdownButton, DropdownOption};
 pub use dropdownmenu::DropdownMenu;
 pub use dsl::{button, center, expanded, flexible, keyed, spacer, text};
 pub use editing::TextEditingController;
+pub use emptystate::{EmptyState, EmptyStateTheme};
 pub use expanded::{Expanded, FlexFit, Flexible};
 pub use expandrail::{
     ExpandableNavigationRail, ExpandableRailTheme, RailDestination, RAIL_COLLAPSED_WIDTH,
@@ -415,6 +416,7 @@ pub use expandrail::{
 };
 pub use expansionpanel::{ExpansionPanel, ExpansionPanelList};
 pub use fab::{FabSize, FloatingActionButton};
+pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
 pub use filters::{BackdropFilter, BackdropGroup, ColorFiltered, ImageFiltered, ShaderMask};
 pub use fittedbox::FittedBox;
 pub use flex::{Flex, ListBody, Wrap};
@@ -458,16 +460,7 @@ pub use inspector::{
 pub use interaction::{Cursor, InputState, Interaction, Key, KeyResponse, Status, WidgetId};
 pub use interactive::{InteractiveView, InteractiveViewer};
 pub use kanban::{kanban_slot, Kanban};
-pub use emptystate::{EmptyState, EmptyStateTheme};
-pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
 pub use kbd::Kbd;
-pub use otpinput::{
-    OtpInput, OtpInputTheme, OtpKind, OTP_BOX_HEIGHT, OTP_BOX_WIDTH, OTP_GAP, OTP_GROUP_GAP,
-};
-pub use swipeactions::{
-    SwipeAction, SwipeActions, SwipeActionsTheme, SWIPE_ACTION_WIDTH, SWIPE_FULL_THRESHOLD,
-    SWIPE_ROW_HEIGHT,
-};
 pub use keepalive::KeepAlive;
 pub use keyboarddismiss::{KeyboardDismissBehavior, TapOutside};
 pub use keyed::{ChildKey, Keyed};
@@ -510,6 +503,9 @@ pub use navrail::{BottomBar, DestinationIcon, NavigationDestination, NavigationR
 pub use navscaffold::NavScaffold;
 pub use notifier::{ChangeNotifier, Listenable, Subscription, ValueNotifier};
 pub use opencontainer::{OpenContainer, OpenContainerTheme};
+pub use otpinput::{
+    OtpInput, OtpInputTheme, OtpKind, OTP_BOX_HEIGHT, OTP_BOX_WIDTH, OTP_GAP, OTP_GROUP_GAP,
+};
 pub use overflowbar::OverflowBar;
 pub use overscroll::{
     cross_axis as glow_cross_axis, edge_for, GlowEdge, OverscrollGlow, ScrollGlows,
@@ -630,6 +626,10 @@ pub use sticky::StickyHeader;
 pub use stretch::{OverscrollStretch, ScrollStretch};
 #[cfg(feature = "svg")]
 pub use svg::SvgPicture;
+pub use swipeactions::{
+    SwipeAction, SwipeActions, SwipeActionsTheme, SWIPE_ACTION_WIDTH, SWIPE_FULL_THRESHOLD,
+    SWIPE_ROW_HEIGHT,
+};
 pub use switch::Switch;
 pub use switcher::AnimatedSwitcher;
 pub use system_ui::{AnnotatedRegion, SystemBars, SystemUiOverlayStyle};

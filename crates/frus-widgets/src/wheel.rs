@@ -186,7 +186,9 @@ impl<Msg> ListWheel<Msg> {
             selected: 0,
             // A looping wheel's rows are copies: the row at any place is its place round the
             // count. For a wheel that does not loop the place is the row.
-            build: Box::new(move |index| Box::new(build(index % count.max(1))) as Box<dyn Widget<Msg>>),
+            build: Box::new(move |index| {
+                Box::new(build(index % count.max(1))) as Box<dyn Widget<Msg>>
+            }),
             on_selected: None,
             label: None,
             physics: None,
@@ -244,11 +246,15 @@ impl<Msg> ListWheel<Msg> {
             return (places / count / 2) * count + chosen;
         };
         let base = shown - shown % count;
-        [base + chosen, (base + chosen).wrapping_sub(count), base + chosen + count]
-            .into_iter()
-            .filter(|&p| p < places)
-            .min_by_key(|&p| p.abs_diff(shown))
-            .unwrap_or(chosen)
+        [
+            base + chosen,
+            (base + chosen).wrapping_sub(count),
+            base + chosen + count,
+        ]
+        .into_iter()
+        .filter(|&p| p < places)
+        .min_by_key(|&p| p.abs_diff(shown))
+        .unwrap_or(chosen)
     }
 
     /// The row the application says is chosen. Applied on the first frame and on every

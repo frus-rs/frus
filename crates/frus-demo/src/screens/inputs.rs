@@ -24,13 +24,20 @@ fn page(router: GoRouter, title: &str, theme: &Theme, body: Flex) -> Box<dyn Wid
                     })))
                     .build(),
             )
-            .body(SingleChildScrollView::new().flex(1.0).child(body.padding(16.0).gap(20.0)))
+            .body(
+                SingleChildScrollView::new()
+                    .flex(1.0)
+                    .child(body.padding(16.0).gap(20.0)),
+            )
             .build(),
     )
 }
 
 fn heading(words: &str, theme: &Theme) -> Text {
-    text(words).size(16.0).weight(FontWeight::SemiBold).color(theme.on_surface)
+    text(words)
+        .size(16.0)
+        .weight(FontWeight::SemiBold)
+        .color(theme.on_surface)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -96,9 +103,13 @@ impl State for OtpState {
             )
             .child(heading("Masked PIN", &theme))
             .child(
-                OtpInput::new(&self.pin, 4, cx.handler(|s: &mut OtpState, c: String| s.pin = c))
-                    .masked(true)
-                    .label("PIN"),
+                OtpInput::new(
+                    &self.pin,
+                    4,
+                    cx.handler(|s: &mut OtpState, c: String| s.pin = c),
+                )
+                .masked(true)
+                .label("PIN"),
             )
             .child(heading("Letters and digits", &theme))
             .child(
@@ -247,8 +258,11 @@ impl State for EmptyStateState {
                     .icon(Icons::FOLDER_OPEN)
                     .description("Projects you create show up here. Start one, or import one.")
                     .action(
-                        button("New project", cx.callback(|s: &mut EmptyStateState| s.projects = 1))
-                            .variant(Variant::Filled),
+                        button(
+                            "New project",
+                            cx.callback(|s: &mut EmptyStateState| s.projects = 1),
+                        )
+                        .variant(Variant::Filled),
                     )
                     .action(button("Import", on(|| {})).variant(Variant::Outlined)),
             )
@@ -329,8 +343,13 @@ impl State for SwipeState {
                         .gap(12.0)
                         .height(72.0)
                         .align(Align::Center)
-                        .child(Icon::new(if pinned { Icons::PUSH_PIN } else { Icons::MAIL }).color(theme.muted))
-                        .child(Expanded::new(text(subject).size(16.0).color(theme.on_surface))),
+                        .child(
+                            Icon::new(if pinned { Icons::PUSH_PIN } else { Icons::MAIL })
+                                .color(theme.muted),
+                        )
+                        .child(Expanded::new(
+                            text(subject).size(16.0).color(theme.on_surface),
+                        )),
                 );
             list = list.child(keyed(
                 u64::from(id),
@@ -338,7 +357,10 @@ impl State for SwipeState {
                     .leading(
                         SwipeAction::new(if pinned { "Unpin" } else { "Pin" }, pin)
                             .icon(Icons::PUSH_PIN)
-                            .colors(theme.scheme.tertiary_container, theme.scheme.on_tertiary_container),
+                            .colors(
+                                theme.scheme.tertiary_container,
+                                theme.scheme.on_tertiary_container,
+                            ),
                     )
                     .trailing(
                         SwipeAction::new("Delete", delete)
@@ -387,8 +409,18 @@ impl StatefulWidget for WheelPage {
 }
 
 const MONTHS: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 impl State for WheelState {
@@ -398,35 +430,55 @@ impl State for WheelState {
         let theme = cx.theme().clone();
         let time = WheelPicker::new()
             .column(
-                WheelColumn::new(24, |h| format!("{h:02}"), cx.handler(|s: &mut WheelState, h: usize| s.hour = h))
-                    .selected(self.hour)
-                    .looping(true)
-                    .semantic_label(|h| format!("{h} hours")),
+                WheelColumn::new(
+                    24,
+                    |h| format!("{h:02}"),
+                    cx.handler(|s: &mut WheelState, h: usize| s.hour = h),
+                )
+                .selected(self.hour)
+                .looping(true)
+                .semantic_label(|h| format!("{h} hours")),
             )
             .column(
-                WheelColumn::new(60, |m| format!("{m:02}"), cx.handler(|s: &mut WheelState, m: usize| s.minute = m))
-                    .selected(self.minute)
-                    .looping(true)
-                    .semantic_label(|m| format!("{m} minutes")),
+                WheelColumn::new(
+                    60,
+                    |m| format!("{m:02}"),
+                    cx.handler(|s: &mut WheelState, m: usize| s.minute = m),
+                )
+                .selected(self.minute)
+                .looping(true)
+                .semantic_label(|m| format!("{m} minutes")),
             )
             .width(240.0);
         let days = days_in(self.month, self.year);
         let date = WheelPicker::new()
             .column(
-                WheelColumn::new(days, |d| format!("{}", d + 1), cx.handler(|s: &mut WheelState, d: usize| s.day = d))
-                    .selected(self.day.min(days - 1))
-                    .looping(true)
-                    .flex(1.0),
+                WheelColumn::new(
+                    days,
+                    |d| format!("{}", d + 1),
+                    cx.handler(|s: &mut WheelState, d: usize| s.day = d),
+                )
+                .selected(self.day.min(days - 1))
+                .looping(true)
+                .flex(1.0),
             )
             .column(
-                WheelColumn::new(12, |m| MONTHS[m].to_string(), cx.handler(|s: &mut WheelState, m: usize| s.month = m))
-                    .selected(self.month)
-                    .looping(true)
-                    .flex(2.0),
+                WheelColumn::new(
+                    12,
+                    |m| MONTHS[m].to_string(),
+                    cx.handler(|s: &mut WheelState, m: usize| s.month = m),
+                )
+                .selected(self.month)
+                .looping(true)
+                .flex(2.0),
             )
             .column(
-                WheelColumn::numbers(1950..=2050, self.year, cx.handler(|s: &mut WheelState, y: i32| s.year = y))
-                    .flex(1.5),
+                WheelColumn::numbers(
+                    1950..=2050,
+                    self.year,
+                    cx.handler(|s: &mut WheelState, y: i32| s.year = y),
+                )
+                .flex(1.5),
             );
         let body = Flex::column()
             .child(heading("A time, from two looping wheels", &theme))

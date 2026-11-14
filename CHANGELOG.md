@@ -8,25 +8,10 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 808 so far, each documenting the objective, the alternatives
+> record — one per step, 810 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
-
-- **The camera preview turns with the display on Android** (J806). The display's rotation was
-  read through an activity method the process's context (the application) does not have: it
-  threw at every open, and every preview was turned as if the phone stood upright, sideways
-  once the display turned. It is read through the `DisplayManager` now. Each camera session
-  also logs how long its first frame took, which tells a dark scene (frames, black) from no
-  frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
-  too, and the torch lit the same preview.
-
-- **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
-  `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
-  `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
-  feature was on, so an application making HTTP requests worked under `frus run` (whose
-  hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
-  offline. INTERNET is a normal permission: granted at install, with no question asked.
 
 - **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
   next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for
@@ -42,6 +27,21 @@ any release may break.
   (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
   TalkBack. The web editing element carries the field's `autocomplete` token. Guides:
   `docs/guide/input.md`, `docs/guide/lists.md`; the demo has a screen per widget.
+
+- **The camera preview turns with the display on Android** (J806). The display's rotation was
+  read through an activity method the process's context (the application) does not have: it
+  threw at every open, and every preview was turned as if the phone stood upright, sideways
+  once the display turned. It is read through the `DisplayManager` now. Each camera session
+  also logs how long its first frame took, which tells a dark scene (frames, black) from no
+  frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
+  too, and the torch lit the same preview.
+
+- **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
+  `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
+  `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
+  feature was on, so an application making HTTP requests worked under `frus run` (whose
+  hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
+  offline. INTERNET is a normal permission: granted at install, with no question asked.
 
 - **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
   `query_products(ids)` (title, description, formatted price, price in micros, currency,

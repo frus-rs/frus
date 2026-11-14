@@ -201,11 +201,13 @@ fn build<Msg: Clone + 'static>(p: Parts<Msg>) -> Box<dyn Widget<Msg>> {
             .unwrap_or(scale.title_medium)
             .color(pick(o.title_color, t.title_color, scheme.on_surface));
         column = column.child(
-            Container::new().max_width(max_width).child(Semantics::heading(
-                Text::styled(p.title.clone(), title_style)
-                    .wrap()
-                    .align(TextAlign::Center),
-            )),
+            Container::new()
+                .max_width(max_width)
+                .child(Semantics::heading(
+                    Text::styled(p.title.clone(), title_style)
+                        .wrap()
+                        .align(TextAlign::Center),
+                )),
         );
         if let Some(description) = &p.description {
             let style = o
@@ -263,8 +265,17 @@ mod tests {
     #[test]
     fn an_empty_state_reads_and_lays_out() {
         let e = empty();
-        let ui = build_ui(&e, Size::new(400.0, 600.0), &Runtime::default(), &Theme::default());
-        let nodes: Vec<_> = ui.semantics().iter().map(|(_, r, s)| (*r, s.clone())).collect();
+        let ui = build_ui(
+            &e,
+            Size::new(400.0, 600.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
+        let nodes: Vec<_> = ui
+            .semantics()
+            .iter()
+            .map(|(_, r, s)| (*r, s.clone()))
+            .collect();
         let (title_rect, _) = nodes
             .iter()
             .find(|(_, s)| s.role == Role::Heading)

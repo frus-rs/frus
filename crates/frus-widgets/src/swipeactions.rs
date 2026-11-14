@@ -298,7 +298,9 @@ fn panel<Msg: Clone + 'static>(
     };
     let mut stack = Stack::new();
     if let Some(primary) = actions.first() {
-        stack = stack.layer(Positioned::fill(Container::new().color(background(primary))));
+        stack = stack.layer(Positioned::fill(
+            Container::new().color(background(primary)),
+        ));
     }
     for (i, action) in actions.iter().enumerate() {
         let fg = action
@@ -526,7 +528,10 @@ mod tests {
         settle(&mut runtime, &[it]);
         let state = runtime.dismiss.get(&it.id).copied().expect("open");
         assert_eq!(state.phase(), DismissPhase::Open);
-        assert!((state.progress() + 160.0 / W).abs() < 1e-4, "rests on its actions");
+        assert!(
+            (state.progress() + 160.0 / W).abs() < 1e-4,
+            "rests on its actions"
+        );
         assert_eq!(runtime.open_swipe_rows(), vec![it.id]);
 
         let mut runtime = Runtime::default();
@@ -559,7 +564,10 @@ mod tests {
             "stops at its actions"
         );
         runtime.swipe_release(&short, 0.0, 0.0, false);
-        assert!(settle(&mut runtime, &[short]).is_empty(), "nothing performed");
+        assert!(
+            settle(&mut runtime, &[short]).is_empty(),
+            "nothing performed"
+        );
         // A side with no actions refuses the swipe outright.
         let one_sided = item(
             &SwipeActions::new(Text::new("x")).trailing(SwipeAction::new("Delete", Msg::Delete)),
@@ -586,7 +594,11 @@ mod tests {
         runtime.swipe_drag(&b, -120.0);
         runtime.swipe_release(&b, 0.0, 0.0, false);
         settle(&mut runtime, &[a, b]);
-        assert_eq!(runtime.open_swipe_rows(), vec![b.id], "a closed when b opened");
+        assert_eq!(
+            runtime.open_swipe_rows(),
+            vec![b.id],
+            "a closed when b opened"
+        );
         runtime.close_swipe_rows();
         settle(&mut runtime, &[a, b]);
         assert!(runtime.open_swipe_rows().is_empty());
@@ -598,7 +610,11 @@ mod tests {
         let r = row();
         let it = item(&r, &Theme::default());
         let keys = r.on_keystroke().expect("a listener");
-        assert_eq!(keys(KeyStroke::new(ShortcutKey::Left)), None, "sends nothing");
+        assert_eq!(
+            keys(KeyStroke::new(ShortcutKey::Left)),
+            None,
+            "sends nothing"
+        );
         let mut runtime = Runtime::default();
         settle(&mut runtime, &[it]);
         assert!((runtime.swipe_progress(it.id) + 160.0 / W).abs() < 1e-4);
@@ -612,7 +628,12 @@ mod tests {
     #[test]
     fn the_actions_are_named_actions_of_the_row() {
         let r = row();
-        let ui = build_ui(&r, Size::new(W, 72.0), &Runtime::default(), &Theme::default());
+        let ui = build_ui(
+            &r,
+            Size::new(W, 72.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
         let (id, _, props) = ui
             .semantics()
             .iter()

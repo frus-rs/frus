@@ -842,7 +842,11 @@ pub(crate) fn swipe_release(
             } else {
                 item.spec.threshold
             };
-            let (velocity, cross) = if cancelled { (0.0, 0.0) } else { (velocity, cross) };
+            let (velocity, cross) = if cancelled {
+                (0.0, 0.0)
+            } else {
+                (velocity, cross)
+            };
             release_of(states, item.id, velocity, cross, item.spec.axis, threshold);
         }
     }

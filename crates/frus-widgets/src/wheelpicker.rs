@@ -366,14 +366,8 @@ fn build<Msg: Clone + 'static>(p: Parts<Msg>) -> Box<dyn Widget<Msg>> {
     Box::new(ThemeBuilder::boxed(move |theme: &Theme| {
         let t = theme.widgets.wheel_picker;
         let scheme = &theme.scheme;
-        let extent = p
-            .item_extent
-            .or(t.item_extent)
-            .unwrap_or(WHEEL_ITEM_EXTENT);
-        let height = p
-            .height
-            .or(t.height)
-            .unwrap_or(extent * WHEEL_VISIBLE_ROWS);
+        let extent = p.item_extent.or(t.item_extent).unwrap_or(WHEEL_ITEM_EXTENT);
+        let height = p.height.or(t.height).unwrap_or(extent * WHEEL_VISIBLE_ROWS);
         let look = RowLook {
             extent,
             style: p
@@ -472,7 +466,10 @@ fn wheel_of<Msg: Clone + 'static>(
     .haptic_ticks(ticks);
     let on_selected = column.on_selected.clone();
     wheel = wheel.on_selected(move |i| on_selected(i));
-    let spoken = column.spoken.clone().unwrap_or_else(|| column.label.clone());
+    let spoken = column
+        .spoken
+        .clone()
+        .unwrap_or_else(|| column.label.clone());
     wheel = wheel.label(move |i| spoken(i));
     if let Some(ratio) = diameter {
         wheel = wheel.diameter_ratio(ratio);
@@ -596,7 +593,12 @@ mod tests {
         theme.widgets.wheel_picker.band_color = Some(Color::rgb(1.0, 0.0, 0.0));
         theme.widgets.wheel_picker.haptic_ticks = Some(false);
         let picker = time(1, 2);
-        let ui = build_ui(&picker, Size::new(300.0, 400.0), &Runtime::default(), &theme);
+        let ui = build_ui(
+            &picker,
+            Size::new(300.0, 400.0),
+            &Runtime::default(),
+            &theme,
+        );
         let area = ui.scroll_regions()[0];
         assert_eq!(area.page.expect("paged").extent, 30.0);
         assert_eq!(area.viewport.height, 150.0, "five rows of thirty");

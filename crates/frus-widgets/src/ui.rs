@@ -5694,7 +5694,8 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             });
             // A swipe that is settling, flying or collapsing drives itself; a row of actions
             // resting open does not.
-            if state.is_some_and(|s| !matches!(s.phase(), DismissPhase::Drag | DismissPhase::Open)) {
+            if state.is_some_and(|s| !matches!(s.phase(), DismissPhase::Drag | DismissPhase::Open))
+            {
                 self.wants_animation = true;
             }
         } else if let Some(custom) = widget.custom_layout() {
