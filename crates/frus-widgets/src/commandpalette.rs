@@ -385,7 +385,7 @@ fn results<Msg>(commands: &[Command<Msg>], query: &str, filter: bool) -> Vec<(us
             .collect();
         if ranked {
             // Stable: equal scores keep the order the commands were given in.
-            members.sort_by(|a, b| b.1.cmp(&a.1));
+            members.sort_by_key(|m| std::cmp::Reverse(m.1));
         }
         out.extend(members.into_iter().map(|(i, _, m)| (*i, m.clone())));
     }
@@ -1111,7 +1111,7 @@ impl<Msg> ResultRow<Msg> {
             decoration: style.decoration,
             decoration_color: None,
             letter_spacing: style.letter_spacing,
-            shaping: style.shaping.clone(),
+            shaping: style.shaping,
         };
         let mut runs: Vec<TextRun> = Vec::new();
         let mut current = String::new();

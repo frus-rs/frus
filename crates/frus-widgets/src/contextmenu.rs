@@ -467,8 +467,10 @@ mod tests {
     /// right of its rows, the keys on the left.
     #[test]
     fn right_to_left_it_is_mirrored() {
-        let mut theme = Theme::default();
-        theme.direction = frus_core::TextDirection::Rtl;
+        let theme = Theme {
+            direction: frus_core::TextDirection::Rtl,
+            ..Theme::default()
+        };
         let at = Point::new(300.0, 60.0);
         let ui = frame(&menu(&ContextMenuState::open_at(at)), &theme);
         let copy = text_at(&ui, "Copy").unwrap();

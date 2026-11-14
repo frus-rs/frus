@@ -259,6 +259,9 @@ impl HandleStyle {
 
 type OnChange<Msg> = Rc<dyn Fn(ResizablePanelsState) -> Msg>;
 
+/// One panel as the build needs it: what it shows, its limits, its name.
+type PanelParts<Msg> = (Rc<dyn Widget<Msg>>, Limits, Option<String>);
+
 /// What the panels are built from that only the theme knows: the direction of the text, a
 /// handle's size and a key's step. Learnt in [`Widget::expand`], which runs before the build.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -422,7 +425,7 @@ impl<Msg: Clone + 'static> ResizablePanels<Msg> {
     /// another reaches it.
     fn rebuilt(mut self) -> Self {
         let vertical = self.vertical;
-        let panels: Vec<(Rc<dyn Widget<Msg>>, Limits, Option<String>)> = self
+        let panels: Vec<PanelParts<Msg>> = self
             .panels
             .iter()
             .map(|p| (p.child.clone(), p.limits, p.label.clone()))
@@ -450,7 +453,7 @@ impl<Msg: Clone + 'static> ResizablePanels<Msg> {
 /// handle between each two.
 fn build_group<Msg: Clone + 'static>(
     vertical: bool,
-    panels: &[(Rc<dyn Widget<Msg>>, Limits, Option<String>)],
+    panels: &[PanelParts<Msg>],
     state: &ResizablePanelsState,
     on_change: &OnChange<Msg>,
     style: HandleStyle,
@@ -991,8 +994,10 @@ mod tests {
     /// Right to left, the first panel is on the right.
     #[test]
     fn right_to_left_the_first_panel_is_on_the_right() {
-        let mut theme = Theme::default();
-        theme.direction = frus_core::TextDirection::Rtl;
+        let theme = Theme {
+            direction: frus_core::TextDirection::Rtl,
+            ..Theme::default()
+        };
         let ui = frame(&group(&ResizablePanelsState::new([0.25, 0.75])), &theme);
         let a = rect_of(&ui, A).unwrap();
         assert_eq!((a.x, a.width), (308.0, 100.0));
