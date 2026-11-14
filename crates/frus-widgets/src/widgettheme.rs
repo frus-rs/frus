@@ -209,6 +209,16 @@ pub struct WidgetThemes {
     /// Defaults for [`SelectableItem`](crate::SelectableItem) and
     /// [`SelectionAppBar`](crate::SelectionAppBar).
     pub selection: crate::SelectionTheme,
+    // Milestone 809.
+    /// Defaults for [`HoverCard`](crate::HoverCard).
+    pub hover_card: crate::HoverCardTheme,
+    /// Defaults for [`ContextMenu`](crate::ContextMenu)'s menus, over a desktop's menus on a
+    /// desktop theme and [`menu`](Self::menu).
+    pub context_menu: MenuTheme,
+    /// Defaults for [`CommandPalette`](crate::CommandPalette).
+    pub command_palette: crate::CommandPaletteTheme,
+    /// Defaults for [`ResizablePanels`](crate::ResizablePanels).
+    pub resizable_panels: crate::ResizablePanelsTheme,
 }
 
 /// How a selection in text that is not a field looks — a

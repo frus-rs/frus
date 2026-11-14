@@ -671,6 +671,7 @@ impl HomeState {
                         link("Native views →", "/native"),
                         link("Web browser →", "/browser"),
                         link("In-app purchases →", "/shop"),
+                        link("Overlays and panels →", "/overlays"),
                     ]
                     .gap(12.0),
                 ),

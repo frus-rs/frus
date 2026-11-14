@@ -357,6 +357,13 @@ pub struct InputState {
     /// The widget a drag last took a thumb of, and which thumb (see `Status::thumb`). Set
     /// by the shell.
     pub thumb: Option<(WidgetId, usize)>,
+    /// Where the pointer that hovers is, in the window's logical pixels: a mouse wherever
+    /// it last moved inside the window, a finger only while it touches (milestone 809).
+    /// `None` once the mouse has left the window or the finger has lifted. Set by the
+    /// shell; a [`HoverCard`](crate::HoverCard) opens and closes from it.
+    pub pointer: Option<frus_core::Point>,
+    /// Whether that pointer, or the last one there was, is a finger rather than a mouse.
+    pub pointer_touch: bool,
 }
 
 impl InputState {
