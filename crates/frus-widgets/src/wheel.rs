@@ -159,7 +159,18 @@ pub struct ListWheel<Msg = crate::callback::Callback> {
     flex: f32,
     /// Where the chosen row is kept for restoration; see [`ListWheel::restoration_id`].
     restoration: Option<Vec<String>>,
+    /// The rows go round: after the last comes the first again (milestone 810).
+    looping: bool,
+    /// A haptic tick as each row passes the middle (milestone 810).
+    ticks: bool,
+    /// The page on show when the wheel was built, for a looping wheel to rest on the nearest
+    /// copy of its row rather than travel to another.
+    shown: std::cell::Cell<Option<usize>>,
 }
+
+/// How many rows a looping wheel lays out in all: enough turns either way that nobody
+/// reaches an end, and few enough that an offset in pixels stays exact in an `f32`.
+const LOOP_ROWS: usize = 10_000;
 
 impl<Msg> ListWheel<Msg> {
     /// A wheel of `count` rows, each `extent` pixels tall, built on demand.
@@ -173,7 +184,9 @@ impl<Msg> ListWheel<Msg> {
             extent: extent.max(1.0),
             geometry: WheelGeometry::default(),
             selected: 0,
-            build: Box::new(move |index| Box::new(build(index)) as Box<dyn Widget<Msg>>),
+            // A looping wheel's rows are copies: the row at any place is its place round the
+            // count. For a wheel that does not loop the place is the row.
+            build: Box::new(move |index| Box::new(build(index % count.max(1))) as Box<dyn Widget<Msg>>),
             on_selected: None,
             label: None,
             physics: None,
@@ -182,7 +195,60 @@ impl<Msg> ListWheel<Msg> {
             sized: (false, false),
             flex: 0.0,
             restoration: None,
+            looping: false,
+            ticks: false,
+            shown: std::cell::Cell::new(None),
         }
+    }
+
+    /// **The rows go round** (milestone 810): spun past the last, the wheel comes to the first
+    /// again, the way the minutes of a clock do. [`selected`](ListWheel::selected),
+    /// [`on_selected`](ListWheel::on_selected) and [`label`](ListWheel::label) still speak of
+    /// the rows `0..count`; which copy of a row is on show is the wheel's business.
+    pub fn looping(mut self, looping: bool) -> Self {
+        self.looping = looping && self.count > 1;
+        self
+    }
+
+    /// A **haptic tick** as each row passes the middle (milestone 810), where the platform
+    /// has haptics and the theme's [`enable_feedback`](crate::Theme::enable_feedback) is on.
+    /// Off by default; a [`WheelPicker`](crate::WheelPicker) turns it on.
+    pub fn haptic_ticks(mut self, ticks: bool) -> Self {
+        self.ticks = ticks;
+        self
+    }
+
+    /// How many places the wheel lays out: the rows, or for a looping wheel, many turns of
+    /// them.
+    fn places(&self) -> usize {
+        if self.looping {
+            let turns = (LOOP_ROWS / self.count.max(1)).max(3);
+            turns * self.count
+        } else {
+            self.count
+        }
+    }
+
+    /// The place the wheel asks to rest on: the chosen row, and for a looping wheel the copy
+    /// of it nearest to what is on show — so a value the application echoes back is where
+    /// the wheel already is, and a value it changes is reached the short way round.
+    fn requested_place(&self) -> usize {
+        let chosen = self.chosen();
+        if !self.looping {
+            return chosen;
+        }
+        let count = self.count;
+        let places = self.places();
+        let Some(shown) = self.shown.get().filter(|&p| p < places) else {
+            // The middle turn: as far from either end as the wheel goes.
+            return (places / count / 2) * count + chosen;
+        };
+        let base = shown - shown % count;
+        [base + chosen, (base + chosen).wrapping_sub(count), base + chosen + count]
+            .into_iter()
+            .filter(|&p| p < places)
+            .min_by_key(|&p| p.abs_diff(shown))
+            .unwrap_or(chosen)
     }
 
     /// The row the application says is chosen. Applied on the first frame and on every
@@ -278,10 +344,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for ListWheel<Msg> {
         runtime: &crate::runtime::Runtime,
         theme: &Theme,
     ) {
+        self.shown.set(runtime.page_shown.get(&id).copied());
         if let Some(path) = &self.restoration {
             runtime
                 .restoration
-                .register_page(path.clone(), id, self.chosen());
+                .register_page(path.clone(), id, self.requested_place());
         }
         self.build_themed(theme)
     }
@@ -330,11 +397,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for ListWheel<Msg> {
 
     fn page_view(&self) -> Option<PagedView<'_, Msg>> {
         Some(PagedView {
-            count: self.count,
+            count: self.places(),
             axis: Axis::Vertical,
             viewport_fraction: 1.0,
             extent: Some(self.extent),
-            requested: self.chosen(),
+            requested: self.requested_place(),
             // The first row rests **centred**, not against the top edge: the middle of a
             // wheel is where the answer is, so that is where row nought has to be able to
             // get to. This is also what makes the last row reachable at all.
@@ -346,7 +413,13 @@ impl<Msg: Clone + 'static> Widget<Msg> for ListWheel<Msg> {
     }
 
     fn on_page_changed(&self, index: usize) -> Option<Msg> {
-        self.on_selected.as_ref().map(|f| f(index))
+        self.on_selected
+            .as_ref()
+            .map(|f| f(index % self.count.max(1)))
+    }
+
+    fn page_tick(&self) -> bool {
+        self.ticks
     }
 
     fn scroll_physics(&self) -> Option<ScrollPhysics> {
@@ -599,6 +672,69 @@ mod tests {
             .find(|(_, _, s)| s.role == frus_core::Role::Slider)
             .expect("still a selector");
         assert_eq!(props.value.as_deref(), Some("31 minutes"));
+    }
+
+    /// **A fling carries on while the application echoes each value** (milestone 810).
+    ///
+    /// A wheel tells the application of each row as it passes the middle, mid-fling, and an
+    /// application keeps its value by answering with it — so the next build asks for the
+    /// row the wheel already shows. Treated as a request to go there, it glided to that row
+    /// and stopped the fling at the first value it passed.
+    #[test]
+    fn a_fling_survives_the_application_echoing_each_row() {
+        let mut runtime = Runtime::default();
+        let mut selected = 10;
+        let area = |selected: usize, runtime: &Runtime| {
+            ui_of(&wheel(60, selected, Rc::new(Cell::new(0))), runtime)
+                .scroll_regions()
+                .first()
+                .copied()
+                .expect("a region")
+        };
+        let first = area(selected, &runtime);
+        runtime.sync_pages(&[first]);
+        runtime.page_changes(&[first]);
+        assert!(runtime.fling_scroll(first, first.physics, (0.0, -2500.0)));
+        let mut passed = 0;
+        for _ in 0..240 {
+            // The order of a frame in the shell: the requests, the springs, the reports.
+            let now = area(selected, &runtime);
+            runtime.sync_pages(&[now]);
+            let moving = runtime.advance_scroll(&[now], 1.0 / 60.0);
+            for (_, page) in runtime.page_changes(&[now]) {
+                selected = page;
+                passed += 1;
+            }
+            if !moving {
+                break;
+            }
+        }
+        assert!(
+            passed >= 3 && selected >= 13,
+            "a fast fling passes several rows: {passed} changes, resting on {selected}"
+        );
+    }
+
+    /// **A looping wheel goes round**: the row after the last is the first, and the
+    /// application's value is the row, never the copy.
+    #[test]
+    fn a_looping_wheel_wraps() {
+        let wheel = wheel(12, 11, Rc::new(Cell::new(0))).looping(true);
+        let ui = ui_of(&wheel, &Runtime::default());
+        let told: ListWheel<usize> =
+            ListWheel::new(12, EXTENT, |_| Container::new().height(EXTENT))
+                .looping(true)
+                .on_selected(|i| i);
+        let snap = ui.scroll_regions()[0].page.expect("paged");
+        assert!(snap.count > 12 * 3);
+        assert_eq!(snap.requested % 12, 11);
+        assert_eq!(told.on_page_changed(snap.requested + 1), Some(0));
+        let (_, _, props) = ui
+            .semantics()
+            .iter()
+            .find(|(_, _, s)| s.role == frus_core::Role::Slider)
+            .expect("a selector");
+        assert_eq!(props.range, Some((0.0, 11.0, 11.0)), "the row, of twelve");
     }
 
     /// A wheel with words on it, at a given row.

@@ -209,6 +209,19 @@ pub struct WidgetThemes {
     /// Defaults for [`SelectableItem`](crate::SelectableItem) and
     /// [`SelectionAppBar`](crate::SelectionAppBar).
     pub selection: crate::SelectionTheme,
+    // Milestone 810.
+    /// Defaults for [`OtpInput`](crate::OtpInput).
+    pub otp_input: crate::OtpInputTheme,
+    /// Defaults for [`Field`](crate::Field).
+    pub field: crate::FieldTheme,
+    /// Defaults for [`InputGroup`](crate::InputGroup).
+    pub input_group: crate::InputGroupTheme,
+    /// Defaults for [`EmptyState`](crate::EmptyState).
+    pub empty_state: crate::EmptyStateTheme,
+    /// Defaults for [`SwipeActions`](crate::SwipeActions).
+    pub swipe_actions: crate::SwipeActionsTheme,
+    /// Defaults for [`WheelPicker`](crate::WheelPicker).
+    pub wheel_picker: crate::WheelPickerTheme,
 }
 
 /// How a selection in text that is not a field looks — a

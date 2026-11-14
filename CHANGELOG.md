@@ -27,6 +27,21 @@ any release may break.
   hot-reload manifest names INTERNET) and then failed every connection in a release APK, as if
   offline. INTERNET is a normal permission: granted at install, with no question asked.
 
+- **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
+  next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for
+  the platform's SMS-code autofill), `Field` (a label, description, error and required marker
+  around any control; its error is read out by a screen reader when it appears), `InputGroup`
+  with `Addon` (a field and its text, icon or button in one bordered box), `SwipeActions` with
+  `SwipeAction` (a list row that rests open on its actions, performs the first on a swipe all
+  the way, opens one row per group, and offers its actions to the keyboard and to screen
+  readers by name), `WheelPicker` with `WheelColumn` (spinning wheels for a time or a date,
+  looping, with a haptic tick on phones), and `EmptyState`. Each has a theme in
+  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a fling no longer
+  stops when the application echoes each value back. Semantics gained live regions
+  (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
+  TalkBack. The web editing element carries the field's `autocomplete` token. Guides:
+  `docs/guide/input.md`, `docs/guide/lists.md`; the demo has a screen per widget.
+
 - **In-app purchases** (J807). Feature `purchases`: `frus::Purchases` — `is_available()`,
   `query_products(ids)` (title, description, formatted price, price in micros, currency,
   kind: consumable, non-consumable or subscription, and the ids the store does not sell),

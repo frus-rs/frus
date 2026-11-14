@@ -97,6 +97,8 @@ pub mod haptics;
 #[cfg(any(web, test))]
 mod history;
 mod hover;
+#[cfg(any(desktop, web, android, test))]
+mod live_region;
 // The disk cache of fetched images (milestone 795).
 #[cfg(all(feature = "net", not(web)))]
 mod http_cache;

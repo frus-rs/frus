@@ -123,6 +123,11 @@ mod interaction;
 mod interactive;
 mod kanban;
 mod kbd;
+mod emptystate;
+mod field;
+mod otpinput;
+mod swipeactions;
+mod wheelpicker;
 mod keepalive;
 mod keyboarddismiss;
 mod keyed;
@@ -392,8 +397,8 @@ pub use disabled::{
     DISABLED_CONTENT_OPACITY,
 };
 pub use dismiss::{
-    DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState, Dismissable,
-    Dismissible,
+    revealed_strip, DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState,
+    Dismissable, Dismissible, RevealSpec,
 };
 pub use divider::{Divider, VerticalDivider, DIVIDER_SPACE, DIVIDER_THICKNESS};
 pub use dragdrop::{DragSource, DragTarget, Draggable, DropZone};
@@ -453,7 +458,16 @@ pub use inspector::{
 pub use interaction::{Cursor, InputState, Interaction, Key, KeyResponse, Status, WidgetId};
 pub use interactive::{InteractiveView, InteractiveViewer};
 pub use kanban::{kanban_slot, Kanban};
+pub use emptystate::{EmptyState, EmptyStateTheme};
+pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
 pub use kbd::Kbd;
+pub use otpinput::{
+    OtpInput, OtpInputTheme, OtpKind, OTP_BOX_HEIGHT, OTP_BOX_WIDTH, OTP_GAP, OTP_GROUP_GAP,
+};
+pub use swipeactions::{
+    SwipeAction, SwipeActions, SwipeActionsTheme, SWIPE_ACTION_WIDTH, SWIPE_FULL_THRESHOLD,
+    SWIPE_ROW_HEIGHT,
+};
 pub use keepalive::KeepAlive;
 pub use keyboarddismiss::{KeyboardDismissBehavior, TapOutside};
 pub use keyed::{ChildKey, Keyed};
@@ -679,6 +693,9 @@ pub use webview::{
     WEB_VIEW_DEFAULT_HEIGHT, WEB_VIEW_TYPE,
 };
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
+pub use wheelpicker::{
+    WheelColumn, WheelPicker, WheelPickerTheme, WHEEL_ITEM_EXTENT, WHEEL_VISIBLE_ROWS,
+};
 pub use widget::{
     CellFn, DragMode, DragTrack, FillAxes, FilterContext, ReorderAxis, ThumbDrag, Widget,
 };

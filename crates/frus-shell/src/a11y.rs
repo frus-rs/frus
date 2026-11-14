@@ -118,6 +118,17 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         // would have produced, so a field that refuses typing refuses this too.
         node.add_action(Action::SetValue);
     }
+    if !sem.custom_actions.is_empty() && !sem.disabled {
+        // Named actions beyond activating it — a list row's Archive and Delete
+        // (milestone 810) — offered in the reader's actions menu, by index.
+        for (index, name) in sem.custom_actions.iter().enumerate() {
+            node.push_custom_action(accesskit::CustomAction {
+                id: index as i32,
+                description: name.clone(),
+            });
+        }
+        node.add_action(Action::CustomAction);
+    }
     node.add_action(Action::Focus);
     node
 }
@@ -249,6 +260,8 @@ pub(crate) enum A11yAction {
     Focus(WidgetId),
     /// Put this text in the field (milestone 710).
     SetValue(WidgetId, String),
+    /// Perform the widget's named action at this index (milestone 810).
+    Custom(WidgetId, usize),
 }
 
 type Shared = Arc<Mutex<Snapshot>>;
@@ -287,6 +300,9 @@ fn forwarded(request: ActionRequest) -> Option<A11yAction> {
         (Action::Focus, _) => A11yAction::Focus(id),
         (Action::SetValue, Some(ActionData::Value(value))) => {
             A11yAction::SetValue(id, value.to_string())
+        }
+        (Action::CustomAction, Some(ActionData::CustomAction(index))) if index >= 0 => {
+            A11yAction::Custom(id, index as usize)
         }
         _ => return None,
     })

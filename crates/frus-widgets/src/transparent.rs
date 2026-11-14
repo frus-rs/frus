@@ -605,6 +605,14 @@ macro_rules! forward_transparent {
                 self.inner.on_page_changed(page)
             }
 
+            fn page_tick(&self) -> bool {
+                self.inner.page_tick()
+            }
+
+            fn on_custom_action(&self, index: usize) -> Option<Msg> {
+                self.inner.on_custom_action(index)
+            }
+
             fn on_scroll(
                 &self,
                 position: $crate::scrollposition::ScrollPosition,

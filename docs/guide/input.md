@@ -176,6 +176,74 @@ A control is turned off with `.enabled(false)`; it then looks disabled and ignor
 There are more: `RangeSlider`, `SegmentedButton`, `Rating`, `Stepper`, date and time pickers,
 `Autocomplete`, `SearchBar`. The widget gallery (`frus-examples/widgets`) shows each one.
 
+## A one-time code, a labelled field, a group
+
+`OtpInput` is the row of boxes a code sent by SMS is typed into. Typing moves to the next box,
+backspace to the one before, and a paste fills them all. It tells the platform it holds a
+one-time code, so Android's autofill and the browser offer the code from the message, and a
+phone shows its number keypad. `.on_completed` hears the edit that fills the last box:
+
+```rust
+use frus::{component, Field, OtpInput, Widget};
+
+fn verify() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let code = cx.use_state(String::new);
+        let wrong = cx.use_state(|| false);
+        let (typed, done, refused) = (code.clone(), code.clone(), wrong.clone());
+        let checked = wrong.clone();
+        Box::new(
+            Field::new(
+                OtpInput::new(&code.get(), 6, move |c: String| {
+                    typed.set(c);
+                    refused.set(false);
+                })
+                .on_completed(move |c: String| {
+                    checked.set(c != "123456");
+                    done.set(c);
+                })
+                .groups([3, 3])
+                .error(wrong.get()),
+            )
+            .label("Verification code")
+            .description("We sent it to your phone.")
+            .error(wrong.get().then(|| "That code is not right.".to_string())),
+        )
+    }))
+}
+```
+
+`.masked(true)` shows dots, `.kind(OtpKind::Alphanumeric)` takes letters too, `.enabled(false)`
+greys it out. `Field` puts a label, a description, an error and a required marker around any
+control — a field, a dropdown, a group of radio buttons — and a screen reader reads its error out
+when it appears.
+
+`InputGroup` joins a field and what is attached to it into one bordered box: words, an icon, a
+button. The box lights up as a whole while the field has the focus.
+
+```rust
+use frus::{button, component, Addon, Icons, InputGroup, TextField, Widget};
+
+fn website() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let site = cx.use_state(String::new);
+        let typed = site.clone();
+        Box::new(
+            InputGroup::new(
+                TextField::new(&site.get()).on_input(move |text: String| typed.set(text)),
+            )
+            .leading(Addon::text("https://"))
+            .trailing(Addon::icon(Icons::SEARCH))
+            .trailing(Addon::widget(button("Go", || {}))),
+        )
+    }))
+}
+```
+
+Every colour, size and type of these is the theme's: `theme.widgets.otp_input`,
+`theme.widgets.field` and `theme.widgets.input_group`, and each widget's own builders win over
+the theme.
+
 ## A form, checked
 
 `frus::form` checks a set of values against rules and says what is wrong with each. It only

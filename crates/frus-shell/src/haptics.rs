@@ -142,6 +142,16 @@ pub(crate) fn long_press_feedback(platform: frus_widgets::TargetPlatform) -> Opt
     }
 }
 
+/// What a wheel's value passing the middle feels like (milestone 810): the clock tick on
+/// Android, the selection click on iOS, and nothing on a desktop, which has nothing to tick.
+pub(crate) fn wheel_tick_feedback(platform: frus_widgets::TargetPlatform) -> Option<Haptic> {
+    use frus_widgets::TargetPlatform as P;
+    match platform {
+        P::Android | P::Fuchsia | P::Ios => Some(Haptic::Selection),
+        P::Linux | P::MacOs | P::Windows => None,
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 thread_local! {
     /// The feedback the shell gave on this thread, for its tests.

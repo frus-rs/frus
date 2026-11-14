@@ -16,6 +16,7 @@ mod camera;
 mod charts;
 mod data;
 mod grid;
+mod inputs;
 mod journal;
 mod licenses;
 mod menu;
@@ -36,6 +37,7 @@ pub(crate) use camera::*;
 pub(crate) use charts::*;
 pub(crate) use data::*;
 pub(crate) use grid::*;
+pub(crate) use inputs::*;
 pub(crate) use journal::*;
 pub(crate) use licenses::*;
 pub(crate) use menu::window;
@@ -92,6 +94,11 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("player", |_, _| PlayerPage.into_widget()),
         GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
         GoRoute::new("shop", |_, _| ShopPage.into_widget()),
+        GoRoute::new("otp", |_, _| OtpPage.into_widget()),
+        GoRoute::new("fields", |_, _| FieldsPage.into_widget()),
+        GoRoute::new("empty", |_, _| EmptyPage.into_widget()),
+        GoRoute::new("swipe", |_, _| SwipePage.into_widget()),
+        GoRoute::new("wheel", |_, _| WheelPage.into_widget()),
         task,
     ])])
 }
