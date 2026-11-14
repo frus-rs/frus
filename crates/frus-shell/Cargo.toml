@@ -22,8 +22,9 @@ categories = ["gui", "wasm"]
 # ~3.4 MB of faces, and an application that ships its own turns off the ones it does
 # not need. All on by default.
 [features]
-# Web views (milestone 799): the shell's side of `WebViewController`. Off by default.
-webview = ["frus-widgets/webview"]
+# Web views (milestones 799 and 804): the shell's side of `WebViewController`. Off by default.
+# Android's web view, WebView2 on Windows (through `webview2`), an `<iframe>` on the web.
+webview = ["frus-widgets/webview", "webview2", "dep:serde_json"]
 # A driver with no window, for an application's tests to feed input and frames through the
 # shell's own paths. Hidden; not for applications to ship.
 testing = []
@@ -107,7 +108,7 @@ purchases = []
 # system's WebView2 (milestone 802). Off by default: the bindings are a few hundred kilobytes,
 # and the Edge WebView2 runtime must be on the machine (it ships with Windows 11). Without it,
 # a web view shows its fallback on Windows; Android and the web have one with no feature.
-webview2 = ["dep:webview2-com"]
+webview2 = ["dep:webview2-com", "dep:serde_json"]
 default = ["frus-gpu/default", "frus-widgets/default"]
 # Android (milestone 800): a `TextureSurface`'s frames shown without a copy where the GPU can
 # import hardware buffers (Vulkan). Off by default: an application with no video pays nothing.
@@ -362,6 +363,8 @@ web-sys = { version = "0.3", features = [
     "HtmlIFrameElement",
     "HtmlMediaElement",
     "HtmlVideoElement",
+    # A page in a frame posting to a JavaScript channel (milestone 804).
+    "MessageEvent",
 ] }
 
 # On Android, winit goes through the native activity (android-activity) and the logs
