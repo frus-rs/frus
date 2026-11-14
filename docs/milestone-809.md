@@ -75,6 +75,13 @@ The panels lay themselves out in a layout builder (their sizes are shares of the
 given), and learn the text direction, the handle size and the keyboard step from the theme in
 `Widget::expand`, which runs before the build.
 
+### Naming
+
+A palette's row is a `PaletteCommand`, not a `Command`. `frus` re-exports the widgets and the
+shell side by side, and the shell's `Command` (the effect `update` returns) names the type in
+`frus`, so a palette type called `Command` could not be reached there. The guide's doctest
+caught it.
+
 ### Keyboard
 
 - Palette: the field keeps the focus; Up and Down (bound on the palette) move the highlight

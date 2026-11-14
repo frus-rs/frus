@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use frus_widgets::host;
 use frus_widgets::{
-    Command, CommandPalette, CommandPaletteState, ContextMenu, ContextMenuState, HoverCard,
-    KeyStroke, MenuItem, ResizablePanel, ResizablePanels, ResizablePanelsState, ShortcutKey,
+    CommandPalette, CommandPaletteState, ContextMenu, ContextMenuState, HoverCard, KeyStroke,
+    MenuItem, PaletteCommand, ResizablePanel, ResizablePanels, ResizablePanelsState, ShortcutKey,
     SubmenuButton, Text,
 };
 
@@ -279,9 +279,9 @@ impl State for OverlaysState {
             .filter(false)
             .loading(self.loading)
             .commands(
-                self.found
-                    .iter()
-                    .map(|&i| Command::new(PEOPLE[i].1, run(cx, PEOPLE[i].1)).group("People")),
+                self.found.iter().map(|&i| {
+                    PaletteCommand::new(PEOPLE[i].1, run(cx, PEOPLE[i].1)).group("People")
+                }),
             )
         } else {
             CommandPalette::new(
@@ -290,19 +290,19 @@ impl State for OverlaysState {
                 cx.handler(|s, state: CommandPaletteState| s.palette = state),
             )
             .commands([
-                Command::new("New file", run(cx, "New file"))
+                PaletteCommand::new("New file", run(cx, "New file"))
                     .group("File")
                     .icon(Icons::ADD)
                     .shortcut("Ctrl+N"),
-                Command::new("Open file", run(cx, "Open file"))
+                PaletteCommand::new("Open file", run(cx, "Open file"))
                     .group("File")
                     .icon(Icons::FOLDER_OPEN)
                     .shortcut("Ctrl+O"),
-                Command::new("Save", run(cx, "Save"))
+                PaletteCommand::new("Save", run(cx, "Save"))
                     .group("File")
                     .icon(Icons::SAVE)
                     .shortcut("Ctrl+S"),
-                Command::new(
+                PaletteCommand::new(
                     "Toggle sidebar",
                     cx.callback(|s| {
                         let shut = s.columns.sizes().first().is_some_and(|w| *w < 0.01);
@@ -313,10 +313,10 @@ impl State for OverlaysState {
                 )
                 .group("View")
                 .shortcut("Ctrl+B"),
-                Command::new("Go to settings", run(cx, "Go to settings"))
+                PaletteCommand::new("Go to settings", run(cx, "Go to settings"))
                     .group("View")
                     .keywords(["preferences", "options"]),
-                Command::new("Print", run(cx, "Print"))
+                PaletteCommand::new("Print", run(cx, "Print"))
                     .group("File")
                     .enabled(false),
             ])

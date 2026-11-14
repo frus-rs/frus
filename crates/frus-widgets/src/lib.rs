@@ -351,7 +351,7 @@ pub use collapsible::{ControlAffinity, ExpansionTile};
 pub use collapsingheader::{header_rect, CollapsingHeader, HeaderState, COLLAPSED_HEIGHT};
 pub use colorpicker::ColorPicker;
 pub use commandpalette::{
-    fuzzy_match, Command, CommandPalette, CommandPaletteState, CommandPaletteTheme,
+    fuzzy_match, CommandPalette, CommandPaletteState, CommandPaletteTheme, PaletteCommand,
 };
 pub use component::{
     back_blocked, component, intervals, rebuild_requested, request_rebuild, take_rebuild_request,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! [`CommandPalette`], [`Command`] and [`CommandPaletteState`]: a window over the page that
+//! [`CommandPalette`], [`PaletteCommand`] and [`CommandPaletteState`]: a window over the page that
 //! finds a command by typing a few letters of its name, and runs it (milestone 809).
 //!
 //! # Where "is it open" lives
@@ -121,7 +121,7 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
 
 /// **One command a [`CommandPalette`] offers**: what it is called, what it sends, and how it
 /// is found and shown.
-pub struct Command<Msg = crate::callback::Callback> {
+pub struct PaletteCommand<Msg = crate::callback::Callback> {
     label: String,
     message: Msg,
     group: Option<String>,
@@ -131,7 +131,7 @@ pub struct Command<Msg = crate::callback::Callback> {
     enabled: bool,
 }
 
-impl<Msg> Command<Msg> {
+impl<Msg> PaletteCommand<Msg> {
     /// A command called `label`, sending `message` when it is chosen.
     pub fn new(label: impl Into<String>, message: Msg) -> Self {
         Self {
@@ -349,7 +349,11 @@ enum Line {
 /// first appear; within a group by how well they match, unless `filter` is off, when every
 /// command is listed in the order given. A command found only by a keyword ranks under one
 /// found by its label.
-fn results<Msg>(commands: &[Command<Msg>], query: &str, filter: bool) -> Vec<(usize, Vec<usize>)> {
+fn results<Msg>(
+    commands: &[PaletteCommand<Msg>],
+    query: &str,
+    filter: bool,
+) -> Vec<(usize, Vec<usize>)> {
     let mut scored: Vec<(usize, i32, Vec<usize>)> = Vec::new();
     for (index, command) in commands.iter().enumerate() {
         let by_label = fuzzy_match(query, &command.label);
@@ -396,7 +400,7 @@ fn results<Msg>(commands: &[Command<Msg>], query: &str, filter: bool) -> Vec<(us
 /// application in one place, reached from the keyboard.
 ///
 /// ```
-/// use frus_widgets::{Command, CommandPalette, CommandPaletteState, KeyStroke, ShortcutKey, Text};
+/// use frus_widgets::{PaletteCommand, CommandPalette, CommandPaletteState, KeyStroke, ShortcutKey, Text};
 ///
 /// #[derive(Clone)]
 /// enum Msg { Palette(CommandPaletteState), Open, Save, Settings }
@@ -405,16 +409,16 @@ fn results<Msg>(commands: &[Command<Msg>], query: &str, filter: bool) -> Vec<(us
 /// let page = Text::new("The page");
 /// let palette = CommandPalette::new(page, &state, Msg::Palette)
 ///     .open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl())
-///     .command(Command::new("Open file", Msg::Open).group("File").shortcut("Ctrl+O"))
-///     .command(Command::new("Save", Msg::Save).group("File").shortcut("Ctrl+S"))
-///     .command(Command::new("Settings", Msg::Settings).keywords(["preferences"]));
+///     .command(PaletteCommand::new("Open file", Msg::Open).group("File").shortcut("Ctrl+O"))
+///     .command(PaletteCommand::new("Save", Msg::Save).group("File").shortcut("Ctrl+S"))
+///     .command(PaletteCommand::new("Settings", Msg::Settings).keywords(["preferences"]));
 /// # let _: CommandPalette<Msg> = palette;
 /// ```
 ///
 /// - **Typing filters the commands** by a fuzzy match: the letters typed must appear in the
 ///   name in order, and the letters that matched are drawn in the match colour. A command is
-///   also found by its [`keywords`](Command::keywords). Results are listed under their
-///   [groups](Command::group), each with its [keys](Command::shortcut) on the right.
+///   also found by its [`keywords`](PaletteCommand::keywords). Results are listed under their
+///   [groups](PaletteCommand::group), each with its [keys](PaletteCommand::shortcut) on the right.
 /// - **The keyboard drives it**: Up and Down move the highlight (round the ends, past
 ///   unavailable commands), Enter runs the highlighted command, Escape closes the palette. So
 ///   does a press outside it. The key that [opens](Self::open_on) it closes it again.
@@ -431,7 +435,7 @@ fn results<Msg>(commands: &[Command<Msg>], query: &str, filter: bool) -> Vec<(us
 pub struct CommandPalette<Msg = crate::callback::Callback> {
     state: CommandPaletteState,
     on_change: Rc<dyn Fn(CommandPaletteState) -> Msg>,
-    commands: Vec<Command<Msg>>,
+    commands: Vec<PaletteCommand<Msg>>,
     open_on: Option<KeyStroke>,
     placeholder: String,
     empty_text: String,
@@ -476,14 +480,14 @@ impl<Msg: Clone + 'static> CommandPalette<Msg> {
 
     /// Adds a command, after the others.
     #[must_use]
-    pub fn command(mut self, command: Command<Msg>) -> Self {
+    pub fn command(mut self, command: PaletteCommand<Msg>) -> Self {
         self.commands.push(command);
         self.rebuilt()
     }
 
     /// Adds commands, after the others.
     #[must_use]
-    pub fn commands(mut self, commands: impl IntoIterator<Item = Command<Msg>>) -> Self {
+    pub fn commands(mut self, commands: impl IntoIterator<Item = PaletteCommand<Msg>>) -> Self {
         self.commands.extend(commands);
         self.rebuilt()
     }
@@ -1300,18 +1304,20 @@ mod tests {
         assert!(prefix > scattered, "{prefix} {scattered}");
     }
 
-    fn commands() -> Vec<Command<Msg>> {
+    fn commands() -> Vec<PaletteCommand<Msg>> {
         vec![
-            Command::new("Open file", Msg::Open)
+            PaletteCommand::new("Open file", Msg::Open)
                 .group("File")
                 .shortcut("Ctrl+O"),
-            Command::new("Save", Msg::Save)
+            PaletteCommand::new("Save", Msg::Save)
                 .group("File")
                 .shortcut("Ctrl+S"),
-            Command::new("Settings", Msg::Settings)
+            PaletteCommand::new("Settings", Msg::Settings)
                 .group("App")
                 .keywords(["preferences"]),
-            Command::new("Quit", Msg::Quit).group("App").enabled(false),
+            PaletteCommand::new("Quit", Msg::Quit)
+                .group("App")
+                .enabled(false),
         ]
     }
 

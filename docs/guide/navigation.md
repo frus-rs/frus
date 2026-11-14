@@ -345,8 +345,8 @@ message that hands back the new value.
 
 ```rust
 use frus::{
-    Command, CommandPalette, CommandPaletteState, ContextMenu, ContextMenuState, HoverCard,
-    KeyStroke, MenuItem, ResizablePanel, ResizablePanels, ResizablePanelsState, ShortcutKey,
+    CommandPalette, CommandPaletteState, ContextMenu, ContextMenuState, HoverCard, KeyStroke,
+    MenuItem, PaletteCommand, ResizablePanel, ResizablePanels, ResizablePanelsState, ShortcutKey,
     State, StateContext, StatefulWidget, Text, Widget,
 };
 
@@ -401,7 +401,7 @@ impl State for EditorState {
                 cx.handler(|s: &mut Self, palette: CommandPaletteState| s.palette = palette),
             )
             .open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl())
-            .command(Command::new("Save", save).group("File").shortcut("Ctrl+S")),
+            .command(PaletteCommand::new("Save", save).group("File").shortcut("Ctrl+S")),
         )
     }
 }

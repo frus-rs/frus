@@ -14,7 +14,8 @@ any release may break.
 ## [Unreleased]
 
 - **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
-  (J809). A command palette over the screen, opened by a key the application chooses: fuzzy
+  (J809). A command palette over the screen, opened by a key the application chooses (its
+  rows are `PaletteCommand`s, a name that leaves `Command` to effects): fuzzy
   matching with the matched letters marked, groups, keys shown on the right, Up, Down, Enter and
   Escape, an empty state, and a mode for results the application fetches itself. A hover card
   that opens after the pointer rests on its anchor (or a long press), stays while the pointer is
