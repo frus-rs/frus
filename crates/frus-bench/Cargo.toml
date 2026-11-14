@@ -13,11 +13,12 @@ publish = false
 
 [dependencies]
 frus-core = { path = "../frus-core" }
-frus-gpu = { path = "../frus-gpu" }
 frus-text = { path = "../frus-text" }
 frus-widgets = { path = "../frus-widgets" }
 
 [dev-dependencies]
+# Only `benches/batch.rs` measures the renderer's batching.
+frus-gpu = { path = "../frus-gpu" }
 # `plotters` and its HTML reports are left out: the numbers go to the terminal and
 # into a milestone note, and the dependency tree stays small enough to build on a
 # phone-sized machine.

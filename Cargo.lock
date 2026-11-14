@@ -1930,6 +1930,7 @@ dependencies = [
  "frus-shell",
  "frus-widgets",
  "log",
+ "wasm-bindgen",
 ]
 
 [[package]]
