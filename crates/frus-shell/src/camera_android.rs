@@ -307,7 +307,9 @@ impl Characteristics {
         let configs = i32s(SCALER_STREAM_CONFIGURATIONS);
         let sizes = |format: i32| -> Vec<(u32, u32)> {
             configs
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|c| c[0] == format && c[3] == 0 && c[1] > 0 && c[2] > 0)
                 .map(|c| (c[1] as u32, c[2] as u32))
                 .collect()

@@ -584,6 +584,41 @@ jobs:
       - run: cargo clippy -p frus-demo --features shots --all-targets -- -D warnings
 
   # ---------------------------------------------------------------------------
+  # clippy for the phone and the browser (milestone 805). The job above lints the
+  # Linux build only, so code under `cfg(target_os = "android")` or
+  # `cfg(target_arch = "wasm32")` was never linted: it built, and its warnings
+  # piled up unseen. `--no-deps` keeps the lint to frus's own crates. The NDK is
+  # set up as the size job does: some dependencies compile C for the target.
+  # ---------------------------------------------------------------------------
+  clippy-targets:
+    name: clippy (Android, wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26d
+
+      - name: clippy for aarch64 Android
+        env:
+          NDK_BIN: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        run: |
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          cargo clippy --workspace --target aarch64-linux-android --no-deps -- -D warnings
+
+      # The command-line tool runs on the developer's machine, never in a browser.
+      - name: clippy for wasm32
+        run: cargo clippy --workspace --exclude frus-cli --target wasm32-unknown-unknown --no-deps -- -D warnings
+
+  # ---------------------------------------------------------------------------
   # Docs must build, and the strict pass — broken intra-doc links, code blocks that
   # are not parseable Rust — is blocking as of milestone 298. It is the only step
   # here, since `-D warnings` covers what the plain build would have caught.
