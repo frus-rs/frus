@@ -680,14 +680,19 @@ mod tests {
         assert_eq!(props.value.as_deref(), Some("31 minutes"));
     }
 
-    /// **A fling carries on while the application echoes each value** (milestone 810).
+    /// **A spin carries on while the application echoes each value** (milestone 810).
     ///
-    /// A wheel tells the application of each row as it passes the middle, mid-fling, and an
+    /// A wheel tells the application of each row as it passes the middle, mid-drag, and an
     /// application keeps its value by answering with it — so the next build asks for the
-    /// row the wheel already shows. Treated as a request to go there, it glided to that row
-    /// and stopped the fling at the first value it passed.
+    /// row the wheel already shows. Treated as a request to go there, it glided back to that
+    /// row: the finger dragged the wheel and every frame pulled it back to the value just
+    /// passed, and the release ended on the first row it had passed.
+    ///
+    /// The drag goes **onwards** (a growing offset), several rows, the application echoing
+    /// each one, and the release flicks onwards again. A release turns one more row: a wheel
+    /// does not coast through several yet.
     #[test]
-    fn a_fling_survives_the_application_echoing_each_row() {
+    fn a_spin_survives_the_application_echoing_each_row() {
         let mut runtime = Runtime::default();
         let mut selected = 10;
         let area = |selected: usize, runtime: &Runtime| {
@@ -700,25 +705,54 @@ mod tests {
         let first = area(selected, &runtime);
         runtime.sync_pages(&[first]);
         runtime.page_changes(&[first]);
-        assert!(runtime.fling_scroll(first, first.physics, (0.0, -2500.0)));
+        let start = runtime.scroll.get(&first.id).copied().expect("an offset").1;
+        assert_eq!(start, first.page.expect("paged").offset_of(10));
+
+        // The order of a frame in the shell: the requests, the springs, the reports — and
+        // the application answering each report with the row it was told of.
         let mut passed = 0;
-        for _ in 0..240 {
-            // The order of a frame in the shell: the requests, the springs, the reports.
-            let now = area(selected, &runtime);
+        let mut frame = |runtime: &mut Runtime, selected: &mut usize| {
+            let now = area(*selected, runtime);
             runtime.sync_pages(&[now]);
             let moving = runtime.advance_scroll(&[now], 1.0 / 60.0);
             for (_, page) in runtime.page_changes(&[now]) {
-                selected = page;
+                *selected = page;
                 passed += 1;
             }
-            if !moving {
+            (now, moving)
+        };
+
+        // A finger drags the wheel five rows on, a third of a row a frame.
+        runtime.hold_scroll(first.id);
+        for step in 1..=15 {
+            // Computed afresh each step, so the last lands exactly on row 15.
+            let offset = start + EXTENT * step as f32 / 3.0;
+            runtime.scroll.insert(first.id, (0.0, offset));
+            frame(&mut runtime, &mut selected);
+            let shown = runtime.scroll.get(&first.id).copied().expect("an offset").1;
+            assert_eq!(
+                shown, offset,
+                "an echoed value never pulls the wheel back under the finger (row {selected})"
+            );
+        }
+        assert_eq!(selected, 15, "the application was told of each row on the way");
+
+        // The finger lets go with a flick onwards: one more row, and it stays there.
+        runtime.release_scroll(first.id);
+        let (now, _) = frame(&mut runtime, &mut selected);
+        assert!(runtime.fling_scroll(now, now.physics, (0.0, 2500.0)));
+        for _ in 0..240 {
+            if !frame(&mut runtime, &mut selected).1 {
                 break;
             }
         }
+        let rest = runtime.scroll.get(&first.id).copied().expect("an offset").1;
+        assert_eq!(selected, 16, "the flick turned one row on: {passed} changes");
         assert!(
-            passed >= 3 && selected >= 13,
-            "a fast fling passes several rows: {passed} changes, resting on {selected}"
+            (rest - first.page.expect("paged").offset_of(16)).abs() < 0.5,
+            "and the wheel rests on it: {rest}"
         );
+        assert!(passed >= 6, "told of every row passed: {passed}");
     }
 
     /// **A looping wheel goes round**: the row after the last is the first, and the

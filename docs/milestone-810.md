@@ -40,9 +40,9 @@ Each has a theme in `theme.widgets` (`otp_input`, `field`, `input_group`, `swipe
 - **`ListWheel`** can loop (`.looping(true)`) and tick (`.haptic_ticks(true)`). A looping wheel
   lays out many turns of its rows and rests on the copy of the chosen row nearest to what is
   on show; `selected` and `on_selected` still speak of rows `0..count`.
-- **A fling carries on while the application echoes each value.** A wheel reports each row
+- **A spin carries on while the application echoes each value.** A wheel reports each row
   as it passes the middle; the application answering with that row made the next build ask to
-  go there, and the fling stopped at the first value it passed. The runtime now ignores a
+  go there, so a drag was pulled back to the value just passed. The runtime now ignores a
   requested page that is already the page on show.
 - **Haptic tick on wheels**: `Widget::page_tick` asks the shell for the platform's selection
   tick as each value passes the middle (Android and iOS, nothing on a desktop), unless the
@@ -85,13 +85,18 @@ frus does not have yet.
   backspace, paste and completion; opening, snapping, the full swipe, one open row per group,
   keyboard and named actions; the field's live error; a looping wheel's row arithmetic; and
   live regions saying nothing on the first frame and speaking on a change.
-- A runtime test covers the fling carrying on while the application echoes each value, and
-  a wheel test covers looping.
+- A wheel test drags across five rows with the application echoing each one, then flicks
+  onwards, and checks the wheel is never pulled back and rests on the next row. Another
+  wheel test covers looping.
 - Doc tests on `SemanticsProperties::live`, `custom_action` and `AutofillHint::web`/`ios`.
 - `cargo fmt --all`, workspace clippy with `-D warnings`, Android (`aarch64-linux-android`)
   and `wasm32-unknown-unknown` clippy with `-D warnings`, and the workspace tests.
 
 ## Not done
+
+- **A fling moves one row: wheels don't coast yet.** A wheel is a snapping paged region, and a
+  paged release springs to the next row whatever its speed. Spinning through several rows
+  under friction and settling on one is left for its own milestone.
 
 - Not run on a phone: the haptic tick, TalkBack's actions menu and the SMS-code autofill
   offer were checked only through the code paths that set them up.

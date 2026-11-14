@@ -331,7 +331,11 @@ impl<Msg> Addon<Msg> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// An input group's parts before its row is built: the field, the leading addons and the
+/// trailing ones.
+type Parts<Msg> = (TextField<Msg>, Vec<Addon<Msg>>, Vec<Addon<Msg>>);
+
+#[derive(Clone, Copy, Debug)]
 struct Look {
     height: f32,
     radius: f32,
@@ -367,7 +371,7 @@ struct Look {
 /// interface. Wrap the group in a [`Field`] for a label and an error message.
 pub struct InputGroup<Msg = crate::callback::Callback> {
     /// The parts, until the row is first asked for.
-    parts: std::cell::RefCell<Option<(TextField<Msg>, Vec<Addon<Msg>>, Vec<Addon<Msg>>)>>,
+    parts: std::cell::RefCell<Option<Parts<Msg>>>,
     /// The row: the leading addons, the field, the trailing addons.
     row: std::cell::OnceCell<Vec<Box<dyn Widget<Msg>>>>,
     /// Where the field is among the row's children: after the leading addons.

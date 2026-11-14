@@ -81,8 +81,8 @@ impl State for OtpState {
             .child(heading("SMS code (6 digits, two groups)", &theme))
             .child(
                 Field::new(
-                    OtpInput::new(&self.sms, 6, move |c| typed(c))
-                        .on_completed(move |c| done(c))
+                    OtpInput::new(&self.sms, 6, typed)
+                        .on_completed(done)
                         .groups([3, 3])
                         .error(error)
                         .label("Verification code"),

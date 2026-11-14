@@ -632,6 +632,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
     }
 
     fn on_edit(&self, edit: &mut Edit, key: &Key) -> Option<Msg> {
+        // A greyed-out code takes no keys, like every other disabled control.
+        if !self.enabled {
+            return None;
+        }
         self.field.on_edit(edit, key)
     }
 
@@ -657,6 +661,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
 
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         let mut props = self.field.semantics()?;
+        // The reader hears a disabled input as disabled, whatever the field below says.
+        if !self.enabled {
+            props = props.disabled(true);
+        }
         if self.error && props.label.is_some() {
             // A refused code is part of what the reader is told about the field.
             props.label = props.label.map(|l| format!("{l}, invalid"));
@@ -684,7 +692,7 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
     }
 
     fn selection_toolbar(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
-        self.field.selection_toolbar(context)
+        Widget::<Msg>::selection_toolbar(&self.field, context)
     }
 
     /// The bar (*Paste*, *Select all*) sits over the box being typed into.
@@ -701,19 +709,20 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
     }
 
     fn autofocus(&self) -> bool {
-        self.field.autofocus()
+        Widget::<Msg>::autofocus(&self.field)
     }
 
     fn on_tap_outside(&self) -> Option<Msg> {
-        self.field.on_tap_outside()
+        Widget::<Msg>::on_tap_outside(&self.field)
     }
 
     fn tap_outside(&self, theme: &Theme) -> crate::TapOutside {
-        self.field.tap_outside(theme)
+        Widget::<Msg>::tap_outside(&self.field, theme)
     }
 
     fn focusable(&self) -> bool {
-        self.field.focusable()
+        // Tab skips a disabled input.
+        self.enabled && self.field.focusable()
     }
 
     fn draws_own_focus(&self) -> bool {

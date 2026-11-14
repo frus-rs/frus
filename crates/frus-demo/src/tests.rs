@@ -680,7 +680,8 @@ fn the_drawers_list_scrolls_when_the_window_is_too_short_for_it() {
         "there is more list than window, so it can be scrolled: {area:?}"
     );
 
-    let tall = Bench::new(411.0, 1400.0);
+    // Tall enough for every entry, the inputs ones of milestone 810 included.
+    let tall = Bench::new(411.0, 2000.0);
     assert!(press_labelled(&tall, "Menu"));
     let (_, ui) = tall.frame();
     assert!(
@@ -689,7 +690,7 @@ fn the_drawers_list_scrolls_when_the_window_is_too_short_for_it() {
         "everything fits, so nothing is left to scroll to"
     );
     assert!(
-        tall.words().iter().any(|w| w == "Kanban board →"),
+        tall.words().iter().any(|w| w == "Wheel picker →"),
         "and the last entry is on show"
     );
 }

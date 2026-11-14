@@ -22,8 +22,8 @@ any release may break.
   the way, opens one row per group, and offers its actions to the keyboard and to screen
   readers by name), `WheelPicker` with `WheelColumn` (spinning wheels for a time or a date,
   looping, with a haptic tick on phones), and `EmptyState`. Each has a theme in
-  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a fling no longer
-  stops when the application echoes each value back. Semantics gained live regions
+  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a drag across a wheel is no
+  longer pulled back when the application echoes each value. Semantics gained live regions
   (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
   TalkBack. The web editing element carries the field's `autocomplete` token. Guides:
   `docs/guide/input.md`, `docs/guide/lists.md`; the demo has a screen per widget.

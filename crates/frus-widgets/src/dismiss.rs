@@ -221,6 +221,7 @@ thread_local! {
 }
 
 /// Asks row `id` to open or close on the next frame.
+#[inline(never)]
 pub(crate) fn request_reveal(id: WidgetId, request: RevealRequest) {
     REVEAL_REQUESTS.with(|r| r.borrow_mut().push((id, request)));
 }
@@ -703,6 +704,7 @@ pub fn revealed_strip(rect: Rect, progress: f32) -> Rect {
 
 /// Advances every dismissible of the frame by `dt`, dropping those that have finished.
 /// Returns `(still animating, the items whose gap has just closed)`.
+#[inline(never)]
 pub(crate) fn advance_all(
     states: &mut std::collections::HashMap<WidgetId, DismissState>,
     items: &[Dismissable],

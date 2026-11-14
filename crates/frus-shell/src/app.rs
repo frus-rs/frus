@@ -8717,7 +8717,7 @@ impl<A: Application> App<A> {
                     } else {
                         dy
                     };
-                    self.runtime.swipe_drag(&item, delta);
+                    self.runtime.swipe_drag(item, delta);
                     *last = self.cursor;
                     self.track_gesture();
                 }
