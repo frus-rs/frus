@@ -46,6 +46,16 @@ pub enum Placement {
     /// floating action button's menu, whose close button lands where the button was
     /// (milestone 786). Kept inside the window.
     Covering,
+    /// **Against** the anchor, on the side and lined up as given; on the other side when
+    /// there is no room on that one, and moved along to stay inside the window: a
+    /// [`HoverCard`](crate::HoverCard) (milestone 809). Shown while the walk finds the card
+    /// open — see [`Widget::hover_card`].
+    Card(crate::CardSide, crate::CardAlign),
+    /// At a **point** the widget names ([`Widget::overlay_at`]): the overlay's start corner on
+    /// it, opening towards the end and down — towards the start or up where the window has no
+    /// room — with no scrim: a [`ContextMenu`](crate::ContextMenu) at the pointer
+    /// (milestone 809).
+    Pointer,
 }
 
 /// A portal: an **anchor** (in the flow) and an optional floating **overlay**.

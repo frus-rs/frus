@@ -76,12 +76,18 @@ struct Hosted {
     content: Content,
     at: PixelRect,
     shown: bool,
+    /// The web view controller whose page this is (milestone 804): kept while its widget is
+    /// away, and handed to the next widget of the same controller.
+    page: Option<u64>,
 }
 
 /// The views of one window.
 pub(crate) struct Host {
     parent: HWND,
     views: HashMap<i32, Hosted>,
+    /// Controllers' pages whose widget went, hidden until one comes back or the controller
+    /// is dropped (`web.release`).
+    parked: HashMap<u64, Hosted>,
     /// Physical pixels per logical one, for the built-in controls' font and margins.
     scale: f32,
     /// The built-in field's font, at `scale`.
@@ -131,6 +137,7 @@ impl Host {
         Some(Self {
             parent,
             views: HashMap::new(),
+            parked: HashMap::new(),
             scale: 0.0,
             font: std::ptr::null_mut(),
         })
@@ -259,6 +266,77 @@ impl Host {
         }
     }
 
+    /// Drops a view: the view first (a plugin's window, the web view's controller), then its
+    /// container.
+    fn destroy(hosted: Hosted) {
+        drop(hosted.content);
+        // SAFETY: the container is ours; destroying it destroys what is left inside.
+        unsafe {
+            DestroyWindow(hosted.hwnd);
+        }
+    }
+
+    /// Gives view `view` the page of controller `page` if another view shows it or it is
+    /// parked (milestone 804): its container, moved to `at`. Says whether it did.
+    #[cfg(feature = "webview2")]
+    fn adopt(&mut self, view: i32, page: u64, at: PixelRect) -> bool {
+        let shown_by = self
+            .views
+            .iter()
+            .find(|(_, hosted)| hosted.page == Some(page))
+            .map(|(v, _)| *v);
+        let hosted = match shown_by {
+            Some(other) => self.views.remove(&other),
+            None => self.parked.remove(&page),
+        };
+        let Some(mut hosted) = hosted else {
+            return false;
+        };
+        if let Content::Web(web) = &mut hosted.content {
+            web.set_view(view);
+        }
+        // SAFETY: the container is ours and alive.
+        unsafe { SetWindowLongPtrW(hosted.hwnd, GWLP_USERDATA, view as isize) };
+        self.views.insert(view, hosted);
+        // Hidden until shaped, as a new view is; the other view's commands now find nothing.
+        self.shape(view, &Shape::Hidden);
+        self.place(view, at);
+        true
+    }
+
+    /// A call for every web view (milestone 804): a page let go, the cookies.
+    #[cfg(feature = "webview2")]
+    pub(crate) fn web_global(&mut self, method: &str, arguments: &str) {
+        use crate::web_view_protocol::Global;
+        let Some(global) = Global::parse(method, arguments) else {
+            return;
+        };
+        match global {
+            Global::Release { controller } => {
+                if let Some(hosted) = self.parked.remove(&controller) {
+                    Self::destroy(hosted);
+                }
+                // Still shown (its widget goes this frame): destroyed when it goes.
+                for hosted in self.views.values_mut() {
+                    if hosted.page == Some(controller) {
+                        hosted.page = None;
+                    }
+                }
+            }
+            cookie_call => {
+                let webs = self
+                    .views
+                    .values()
+                    .chain(self.parked.values())
+                    .filter_map(|hosted| match &hosted.content {
+                        Content::Web(web) => Some(web),
+                        _ => None,
+                    });
+                webview2::cookies(cookie_call, webs);
+            }
+        }
+    }
+
     fn resize_content(&mut self, view: i32) {
         let scale = self.scale;
         let Some(hosted) = self.views.get_mut(&view) else {
@@ -277,6 +355,15 @@ impl Host {
 
 impl ViewHost for Host {
     fn create(&mut self, view: i32, view_type: &str, params: &str, at: PixelRect) {
+        #[cfg(feature = "webview2")]
+        if view_type == "frus/webview" && view_host::factory(view_type).is_none() {
+            let page = crate::web_view_protocol::Params::parse(params).map(|p| p.controller);
+            if let Some(page) = page {
+                if self.adopt(view, page, at) {
+                    return;
+                }
+            }
+        }
         // SAFETY: the parent is frus's live window; the class was registered in `new`.
         let container = unsafe {
             CreateWindowExW(
@@ -311,11 +398,23 @@ impl ViewHost for Host {
                 content: Content::Nothing,
                 at,
                 shown: false,
+                page: None,
             },
         );
         let content = self.make_content(view, view_type, params, container);
+        #[cfg(feature = "webview2")]
+        let page = match &content {
+            Content::Web(_) => {
+                crate::web_view_protocol::Params::parse(params).map(|p| p.controller)
+            }
+            _ => None,
+        };
         if let Some(hosted) = self.views.get_mut(&view) {
             hosted.content = content;
+            #[cfg(feature = "webview2")]
+            {
+                hosted.page = page;
+            }
         }
     }
 
@@ -379,15 +478,28 @@ impl ViewHost for Host {
     }
 
     fn dispose(&mut self, view: i32) {
-        let Some(hosted) = self.views.remove(&view) else {
+        let Some(mut hosted) = self.views.remove(&view) else {
             return;
         };
-        // The view first (a plugin's window, the web view's controller), then its container.
-        drop(hosted.content);
-        // SAFETY: the container is ours; destroying it destroys what is left inside.
-        unsafe {
-            DestroyWindow(hosted.hwnd);
+        // A controller's page waits, hidden, for its controller's next widget.
+        if let Some(page) = hosted.page {
+            if hosted.shown {
+                hosted.shown = false;
+                // SAFETY: the container is ours and alive.
+                unsafe {
+                    ShowWindow(hosted.hwnd, SW_HIDE);
+                }
+            }
+            #[cfg(feature = "webview2")]
+            if let Content::Web(web) = &mut hosted.content {
+                web.set_visible(false);
+            }
+            if let Some(old) = self.parked.insert(page, hosted) {
+                Self::destroy(old);
+            }
+            return;
         }
+        Self::destroy(hosted);
     }
 
     fn invoke(&mut self, view: i32, method: &str, arguments: &str) {
@@ -431,8 +543,9 @@ impl ViewHost for Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
-        for view in self.views.keys().copied().collect::<Vec<_>>() {
-            self.dispose(view);
+        let parked = self.parked.drain().map(|(_, hosted)| hosted);
+        for hosted in self.views.drain().map(|(_, hosted)| hosted).chain(parked) {
+            Self::destroy(hosted);
         }
         if !self.font.is_null() {
             // SAFETY: every field that used it is gone.

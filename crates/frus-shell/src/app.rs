@@ -680,7 +680,18 @@ fn hold_candidates<Msg: Clone>(
         drag,
         None | Some(Drag::Scroll { moved: false, .. }) | Some(Drag::Gesture { moved: false, .. })
     );
-    let long_press = if free { ui.long_press_at(at) } else { None };
+    // Where the press landed, for a widget that opens something there — a context menu
+    // (milestone 809).
+    let long_press = if free {
+        ui.long_press_at(at).map(|message| {
+            ui.long_press_target_at(at)
+                .and_then(|id| tree.and_then(|tree| find_widget(tree, id)))
+                .and_then(|widget| widget.on_long_press_at(at))
+                .unwrap_or(message)
+        })
+    } else {
+        None
+    };
     let lift = ui.drag_source_at(at).filter(|source| {
         tree.and_then(|tree| find_widget(tree, source.id))
             .is_some_and(|widget| widget.drag_needs_long_press())
@@ -2205,6 +2216,32 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Sends the calls for every web view the application made since the last frame (a page
+    /// let go, the cookies: milestone 804) to the host. No call, no work: one thread-local
+    /// borrow.
+    #[cfg(all(any(windows, web), feature = "webview"))]
+    fn send_web_view_calls(&mut self) {
+        let calls = frus_widgets::take_web_view_calls();
+        if calls.is_empty() {
+            return;
+        }
+        if self.view_host.is_none() {
+            // A page let go with no host never had a view; a cookie call needs the host.
+            if calls
+                .iter()
+                .all(|(method, _)| method == frus_widgets::web_view_wire::RELEASE)
+            {
+                return;
+            }
+            self.view_host = self.make_view_host();
+        }
+        if let Some(host) = self.view_host.as_mut() {
+            for (method, arguments) in &calls {
+                host.web_global(method, arguments);
+            }
+        }
+    }
+
     /// The host of the native views, made with the first of them.
     #[cfg(any(windows, web))]
     fn make_view_host(&self) -> Option<NativeHost> {
@@ -2232,9 +2269,24 @@ impl<A: Application> App<A> {
     #[cfg(any(windows, web))]
     fn drain_hosted_views(&mut self) {
         if self.hosted_views.is_empty() {
+            // What no view in particular answered, a web views' cookie call (milestone 804),
+            // can come with no view left.
+            #[cfg(feature = "webview")]
+            for (view, name, data) in crate::view_host::take_events() {
+                if view == -1 && frus_widgets::handle_web_view_global_event(&name, &data) {
+                    self.request_redraw();
+                }
+            }
             return;
         }
         for (view, name, data) in crate::view_host::take_events() {
+            #[cfg(feature = "webview")]
+            if view == -1 {
+                if frus_widgets::handle_web_view_global_event(&name, &data) {
+                    self.request_redraw();
+                }
+                continue;
+            }
             let Some(widget) = self.hosted_views.widget_of(view) else {
                 continue;
             };
@@ -3760,6 +3812,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             // The mouse left the window: nothing in it is under the pointer any more.
             WindowEvent::CursorLeft { .. } => {
                 self.hover.left();
+                self.follow_hover_cards(false);
                 self.sync_hover();
                 self.sync_regions(false);
             }
@@ -4879,6 +4932,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // clipped, hidden under a dialog (milestone 802).
                 #[cfg(any(windows, web))]
                 self.sync_hosted_views();
+                // Calls for every web view (a page let go, the cookies: milestone 804), after
+                // the frame's views, so that a page is let go only once its view is.
+                #[cfg(all(any(windows, web), feature = "webview"))]
+                self.send_web_view_calls();
 
                 // The system bars follow the frame: the regions under them, then the theme.
                 self.sync_system_bars(&theme);
@@ -6132,6 +6189,7 @@ impl<A: Application> App<A> {
     fn route_pointer_event(&mut self, event: PointerEvent) {
         self.cursor = event.position;
         self.hover.event(event.kind, event.position, event.touch);
+        self.follow_hover_cards(event.touch);
         // Whether the gesture under way could still end as a tap, before this event moves
         // it on: the press is shared with it until it cannot (milestone 534).
         let could_tap = gesture_was_a_tap(self.drag.as_ref());
@@ -6427,6 +6485,22 @@ impl<A: Application> App<A> {
         // over a clickable icon, and so on. Recomputed on every move, since the
         // sub-region can change without the hovered widget changing.
         self.update_cursor_icon(hovered);
+    }
+
+    /// Tells the runtime where the pointer is, for the hover cards, and draws a frame when it
+    /// came onto or left one, or a finger touched outside an open one: a card's delay starts
+    /// in that frame (milestone 809).
+    fn follow_hover_cards(&mut self, touch: bool) {
+        let pointer = self.hover.at();
+        self.runtime.input.pointer = pointer;
+        self.runtime.input.pointer_touch = touch;
+        if self
+            .ui
+            .as_ref()
+            .is_some_and(|ui| ui.hover_cards_changed(pointer, touch))
+        {
+            self.request_redraw();
+        }
     }
 
     /// Asks the frame what is under the hovering pointer, and records it.
@@ -11140,17 +11214,31 @@ impl<A: Application> App<A> {
     /// puts the caret where the click landed unless it landed inside the selection there
     /// already is, and opens the bar. On anything else it puts an open bar away.
     fn context_click(&mut self) {
-        // Something that answers a secondary tap takes it (milestone 581).
-        let secondary = self
-            .ui
-            .as_ref()
-            .and_then(|ui| ui.hit(self.cursor))
-            .and_then(|id| {
-                self.tree
-                    .as_ref()
-                    .and_then(|tree| find_widget(tree.as_ref(), id))
+        // Something that answers a secondary tap takes it (milestone 581): the target under
+        // the pointer, or — unless a field is there, whose own menu comes first — the nearest
+        // one under it that answers, so that a context menu round a coloured surface hears
+        // the click the surface stopped (milestone 809).
+        let answers = |id: WidgetId| {
+            self.tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), id))
+                .and_then(|widget| widget.on_secondary_tap_at(self.cursor))
+        };
+        let secondary = self.ui.as_ref().and_then(|ui| {
+            let top = ui.hit(self.cursor)?;
+            answers(top).or_else(|| {
+                let field = ui.focus_hit(self.cursor).is_some_and(|(id, _)| {
+                    self.tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))
+                        .is_some_and(|widget| widget.text_value().is_some())
+                });
+                if field {
+                    return None;
+                }
+                ui.hits_at(self.cursor).skip(1).find_map(answers)
             })
-            .and_then(|widget| widget.on_secondary_tap());
+        });
         if let Some(message) = secondary {
             self.hide_selection_toolbar();
             self.dispatch(message);

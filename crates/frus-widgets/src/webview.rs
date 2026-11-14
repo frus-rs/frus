@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! **Web views** (milestone 799): a web page inside a frus page, driven from Rust.
+//! **Web views** (milestones 799 and 804): a web page inside a frus page, driven from Rust,
+//! with one API on Android, Windows and the web.
 //!
 //! - [`WebViewController`] loads pages ([`load_request`](WebViewController::load_request),
 //!   [`load_html_string`](WebViewController::load_html_string), files and assets), moves in
@@ -18,8 +19,10 @@
 //! history and its scroll. The page goes when the last copy of the controller is dropped.
 //!
 //! Underneath it is a native view ([`PlatformViewSpec`] of type [`WEB_VIEW_TYPE`]): Android's
-//! `WebView`, drawn into the frame. Elsewhere the widget shows its fallback for now, and the
-//! calls that need an answer answer [`WebViewError::Unsupported`].
+//! `WebView`, drawn into the frame; WebView2 on Windows; an `<iframe>` on the web, which can
+//! do only what a browser lets a page do with a frame (see [`WebViewError::Unsupported`]).
+//! On macOS, Linux and iOS the widget shows its fallback, and the calls that need an answer
+//! answer [`WebViewError::Unsupported`] ([`web_views_available`]).
 //!
 //! The controller talks to the view only through [`PlatformViewController::invoke`] and the
 //! view's events, with the names listed in [`web_view_wire`]: any host that makes a
@@ -51,8 +54,49 @@ pub const WEB_VIEW_DEFAULT_HEIGHT: f32 = 300.0;
 /// The native view type every web view is made as.
 pub const WEB_VIEW_TYPE: &str = "frus/webview";
 
-/// Whether this build can show web views: Android, for now.
-pub const WEB_VIEWS_SUPPORTED: bool = cfg!(target_os = "android");
+#[cfg(test)]
+thread_local! {
+    /// A test's stand-in for the platform: whether it has web views, and whether they are a
+    /// browser's frames.
+    static TEST_PLATFORM: Cell<Option<(bool, bool)>> = const { Cell::new(None) };
+}
+
+/// Whether web views are shown here: on Android, on Windows (the shell registers WebView2 at
+/// start-up) and on the web. On macOS, Linux and iOS a [`WebViewWidget`] shows its fallback.
+///
+/// ```
+/// use frus_widgets::web_views_available;
+///
+/// if !web_views_available() {
+///     // A link to open in the browser instead, say.
+/// }
+/// ```
+pub fn web_views_available() -> bool {
+    #[cfg(test)]
+    if let Some((available, _)) = TEST_PLATFORM.with(Cell::get) {
+        return available;
+    }
+    crate::platformview::platform_view_type_available(WEB_VIEW_TYPE)
+}
+
+/// Whether the web views are a browser's frames (the web), which cannot do everything.
+fn in_a_frame() -> bool {
+    #[cfg(test)]
+    if let Some((_, frame)) = TEST_PLATFORM.with(Cell::get) {
+        return frame;
+    }
+    cfg!(target_arch = "wasm32")
+}
+
+/// `Ok` where the platform's web views can do what was asked, [`WebViewError::Unsupported`]
+/// where they cannot (`frame_can`: whether a browser's frame can).
+fn can(frame_can: bool) -> Result<(), WebViewError> {
+    if web_views_available() && (frame_can || !in_a_frame()) {
+        Ok(())
+    } else {
+        Err(WebViewError::Unsupported)
+    }
+}
 
 static NEXT_CONTROLLER: AtomicU64 = AtomicU64::new(1);
 static NEXT_RESULT: AtomicU64 = AtomicU64::new(1);
@@ -61,7 +105,10 @@ static NEXT_RESULT: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WebViewError {
-    /// This build has no web views (see [`WEB_VIEWS_SUPPORTED`]).
+    /// The platform's web views cannot do it. On macOS, Linux and iOS there are none (see
+    /// [`web_views_available`]). On the web a web view is a browser's frame, which has no
+    /// user agent, zoom setting, cache, storage or cookies of its own, and runs no script
+    /// for the page around it in a page of another origin.
     Unsupported,
     /// The script threw, or the page would not run it (on the web, a page from another
     /// origin keeps its scripts to itself).
@@ -75,7 +122,7 @@ pub enum WebViewError {
 impl std::fmt::Display for WebViewError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WebViewError::Unsupported => f.write_str("web views are not available in this build"),
+            WebViewError::Unsupported => f.write_str("the platform's web views cannot do this"),
             WebViewError::JavaScript(why) => write!(f, "the script failed: {why}"),
             WebViewError::InvalidChannelName(name) => {
                 write!(f, "{name:?} is not a JavaScript identifier")
@@ -147,8 +194,9 @@ impl WebRequest {
         }
     }
 
-    /// One more header. Android sends the headers of a `GET` only (its `postUrl` takes none);
-    /// the web cannot send any (an `<iframe>` loads by address).
+    /// One more header. Android sends the headers of a `GET` only (its `postUrl` takes none).
+    /// On the web, a request with headers or a body is fetched by the page and its HTML
+    /// shown in the frame, which the server must allow (CORS).
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
@@ -599,7 +647,7 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         // The page lives as long as its controller: the host lets it go.
-        if WEB_VIEWS_SUPPORTED {
+        if web_views_available() {
             push_global(
                 web_view_wire::RELEASE,
                 format!("{{\"controller\":{}}}", self.id),
@@ -871,8 +919,11 @@ impl WebViewController {
     ///     }
     /// });
     /// ```
+    ///
+    /// On the web it answers [`WebViewError::Unsupported`] for a page of another origin, whose
+    /// scripts the browser keeps from the page around it.
     pub fn run_javascript_returning_result(&self, script: impl Into<String>) -> JavaScriptResult {
-        if !WEB_VIEWS_SUPPORTED {
+        if !web_views_available() {
             return JavaScriptResult {
                 slot: Slot::ready(Err(WebViewError::Unsupported)),
             };
@@ -930,9 +981,14 @@ impl WebViewController {
     }
 
     /// The user agent the view sends; `None` for the platform's own.
-    pub fn set_user_agent(&self, user_agent: Option<&str>) {
+    ///
+    /// [`WebViewError::Unsupported`] on the web for one of its own: a frame sends the
+    /// browser's.
+    pub fn set_user_agent(&self, user_agent: Option<&str>) -> Result<(), WebViewError> {
+        can(user_agent.is_none())?;
         self.inner.settings.borrow_mut().user_agent = user_agent.map(str::to_owned);
         self.call(web_view_wire::SET_USER_AGENT, json(&user_agent));
+        Ok(())
     }
 
     /// The user agent set with [`set_user_agent`](Self::set_user_agent).
@@ -947,20 +1003,35 @@ impl WebViewController {
         self.call(web_view_wire::SET_BACKGROUND, json(&hex(color)));
     }
 
-    /// Whether the page can be zoomed with two fingers (on by default).
-    pub fn enable_zoom(&self, enabled: bool) {
+    /// Whether the page can be zoomed with two fingers, and on Windows with Ctrl and the wheel
+    /// (on by default).
+    ///
+    /// [`WebViewError::Unsupported`] on the web for turning it off: a frame zooms with the
+    /// browser.
+    pub fn enable_zoom(&self, enabled: bool) -> Result<(), WebViewError> {
+        can(enabled)?;
         self.inner.settings.borrow_mut().zoom = enabled;
         self.call(web_view_wire::SET_ZOOM, json(&enabled));
+        Ok(())
     }
 
     /// Clears the cache of every web view of the application.
-    pub fn clear_cache(&self) {
+    ///
+    /// [`WebViewError::Unsupported`] on the web: the cache is the browser's.
+    pub fn clear_cache(&self) -> Result<(), WebViewError> {
+        can(false)?;
         self.call(web_view_wire::CLEAR_CACHE, String::new());
+        Ok(())
     }
 
     /// Clears the local storage of every web view of the application.
-    pub fn clear_local_storage(&self) {
+    ///
+    /// [`WebViewError::Unsupported`] on the web: a page of the application's origin shares
+    /// the application's own storage, and another origin's is the browser's.
+    pub fn clear_local_storage(&self) -> Result<(), WebViewError> {
+        can(false)?;
         self.call(web_view_wire::CLEAR_LOCAL_STORAGE, String::new());
+        Ok(())
     }
 
     /// What the view tells the application about its page, replacing the delegate set
@@ -1143,6 +1214,8 @@ impl WebViewController {
                     let value = text("value").unwrap_or_else(|| "null".to_owned());
                     slot.fill(if flag("ok") {
                         Ok(value)
+                    } else if flag("unsupported") {
+                        Err(WebViewError::Unsupported)
                     } else {
                         Err(WebViewError::JavaScript(value))
                     });
@@ -1245,23 +1318,36 @@ impl WebViewCookie {
 #[must_use = "the answer arrives only when awaited"]
 pub struct CookiesCleared {
     slot: Rc<Slot<bool>>,
+    unsupported: bool,
 }
 
 impl Future for CookiesCleared {
-    type Output = bool;
+    type Output = Result<bool, WebViewError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        self.slot.poll(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.unsupported {
+            return Poll::Ready(Err(WebViewError::Unsupported));
+        }
+        self.slot.poll(cx).map(Ok)
     }
 }
 
 /// The cookies every web view of the application shares.
 ///
+/// On the web the cookies are the browser's: both calls answer [`WebViewError::Unsupported`].
+/// On Windows they go through the first web view made; calls made before one exists wait for
+/// it.
+///
 /// ```
 /// use frus_widgets::{WebViewCookie, WebViewCookieManager};
 ///
 /// let cookies = WebViewCookieManager::new();
-/// cookies.set_cookie(WebViewCookie::new("session", "abc", "example.com"));
+/// if cookies
+///     .set_cookie(WebViewCookie::new("session", "abc", "example.com"))
+///     .is_err()
+/// {
+///     // No cookies of its own here (the web, or no web views).
+/// }
 /// let _cleared = cookies.clear_cookies(); // await it for whether there were any
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
@@ -1275,10 +1361,8 @@ impl WebViewCookieManager {
 
     /// Sets `cookie`, for every web view, from the next request on.
     #[inline(never)]
-    pub fn set_cookie(&self, cookie: WebViewCookie) {
-        if !WEB_VIEWS_SUPPORTED {
-            return;
-        }
+    pub fn set_cookie(&self, cookie: WebViewCookie) -> Result<(), WebViewError> {
+        can(false)?;
         let value = serde_json::json!({
             "url": format!("https://{}{}", cookie.domain.trim_start_matches('.'), cookie.path),
             "name": cookie.name,
@@ -1287,21 +1371,26 @@ impl WebViewCookieManager {
             "path": cookie.path,
         });
         push_global(web_view_wire::SET_COOKIE, value.to_string());
+        Ok(())
     }
 
     /// Clears every cookie; the answer says whether there were any.
     #[inline(never)]
     pub fn clear_cookies(&self) -> CookiesCleared {
-        if !WEB_VIEWS_SUPPORTED {
+        if can(false).is_err() {
             return CookiesCleared {
-                slot: Slot::ready(false),
+                slot: Rc::default(),
+                unsupported: true,
             };
         }
         let id = NEXT_CLEAR.with(|next| next.replace(next.get() + 1));
         let slot: Rc<Slot<bool>> = Rc::default();
         CLEARED.with(|slots| slots.borrow_mut().insert(id, slot.clone()));
         push_global(web_view_wire::CLEAR_COOKIES, format!("{{\"id\":{id}}}"));
-        CookiesCleared { slot }
+        CookiesCleared {
+            slot,
+            unsupported: false,
+        }
     }
 }
 
@@ -1316,7 +1405,9 @@ impl WebViewCookieManager {
 /// A drag that starts on the page scrolls the page while it can, and the list around it once
 /// the page is at its edge. The system's Back goes back in the page's history while it can.
 ///
-/// Elsewhere than on Android it shows its [fallback](Self::fallback) for now.
+/// On Windows and the web the page is a window or an element over frus's surface (see
+/// [`PlatformView`](crate::PlatformView)): frus moves and clips it with the frame. On macOS,
+/// Linux and iOS it shows its [fallback](Self::fallback).
 ///
 /// ```
 /// use frus_widgets::{WebViewController, WebViewWidget};
@@ -1327,6 +1418,8 @@ impl WebViewCookieManager {
 /// # let _ = page;
 /// ```
 pub struct WebViewWidget<Msg> {
+    /// Whether a web view is made here, rather than the fallback shown.
+    available: bool,
     controller: WebViewController,
     spec: PlatformViewSpec,
     width: Option<f32>,
@@ -1338,14 +1431,16 @@ pub struct WebViewWidget<Msg> {
 impl<Msg: 'static> WebViewWidget<Msg> {
     /// The page of `controller`.
     pub fn new(controller: &WebViewController) -> Self {
-        let fallback: Vec<Box<dyn Widget<Msg>>> = if WEB_VIEWS_SUPPORTED {
+        let available = web_views_available();
+        let fallback: Vec<Box<dyn Widget<Msg>>> = if available {
             Vec::new()
         } else {
             vec![Box::new(UnsupportedView::new(
-                "WebViewWidget\nnot available on this platform yet",
+                "WebViewWidget\nnot available on this platform",
             ))]
         };
         Self {
+            available,
             spec: PlatformViewSpec::new(WEB_VIEW_TYPE, controller.creation_params())
                 .with_controller(controller.platform_view_controller()),
             controller: controller.clone(),
@@ -1377,7 +1472,7 @@ impl<Msg: 'static> WebViewWidget<Msg> {
     /// What stands in for the page where there are no web views. The default is an
     /// [`UnsupportedView`].
     pub fn fallback(mut self, fallback: impl Widget<Msg> + 'static) -> Self {
-        if !WEB_VIEWS_SUPPORTED {
+        if !self.available {
             self.fallback = vec![Box::new(fallback)];
         }
         self
@@ -1417,10 +1512,11 @@ impl<Msg: 'static> Widget<Msg> for WebViewWidget<Msg> {
     }
 
     fn paint(&self, bounds: Rect, status: Status, _theme: &Theme, scene: &mut Scene) {
-        if !WEB_VIEWS_SUPPORTED {
+        if !self.available {
             return;
         }
         // The page's latest image, drawn where the widget is; nothing before its first one.
+        // On Windows, the picture of the page taken while a dialog covers it.
         if let Some(frame) = platform_view_frame(scene.current_owner()) {
             scene.draw_image_with(
                 &frame,
@@ -1448,7 +1544,7 @@ impl<Msg: 'static> Widget<Msg> for WebViewWidget<Msg> {
     }
 
     fn platform_view(&self) -> Option<&PlatformViewSpec> {
-        WEB_VIEWS_SUPPORTED.then_some(&self.spec)
+        self.available.then_some(&self.spec)
     }
 
     fn on_platform_view_event(&self, event: &PlatformViewEvent) -> Option<Msg> {
@@ -1682,9 +1778,11 @@ mod tests {
     fn settings_are_kept_for_a_view_made_later() {
         let web = WebViewController::new();
         web.set_javascript_mode(JavaScriptMode::Disabled);
-        web.set_user_agent(Some("frus-test"));
+        on_platform(true, false, || {
+            web.set_user_agent(Some("frus-test")).unwrap();
+            web.enable_zoom(false).unwrap();
+        });
         web.set_background_color(Color::rgb(1.0, 0.0, 0.0));
-        web.enable_zoom(false);
         let params: serde_json::Value = serde_json::from_str(&web.creation_params()).unwrap();
         assert_eq!(params["javascript"], false);
         assert_eq!(params["userAgent"], "frus-test");
@@ -1699,20 +1797,136 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "android"))]
+    /// Runs `test` on a platform with web views or none (`available`), browser frames or not
+    /// (`frame`): a thread-local, so that tests running side by side do not see it.
+    fn on_platform(available: bool, frame: bool, test: impl FnOnce()) {
+        TEST_PLATFORM.with(|platform| platform.set(Some((available, frame))));
+        test();
+        TEST_PLATFORM.with(|platform| platform.set(None));
+    }
+
     #[test]
-    fn elsewhere_a_result_answers_unsupported_at_once() {
+    fn without_web_views_a_result_answers_unsupported_at_once() {
+        on_platform(false, false, || {
+            let web = WebViewController::new();
+            let mut asked = web.run_javascript_returning_result("1 + 1");
+            assert_eq!(
+                poll_now(&mut asked),
+                Poll::Ready(Err(WebViewError::Unsupported))
+            );
+            let mut cleared = WebViewCookieManager::new().clear_cookies();
+            assert_eq!(
+                poll_now(&mut cleared),
+                Poll::Ready(Err(WebViewError::Unsupported))
+            );
+            assert_eq!(
+                web.set_user_agent(Some("a")),
+                Err(WebViewError::Unsupported)
+            );
+            let widget: WebViewWidget<()> = WebViewWidget::new(&web);
+            assert!(widget.platform_view().is_none());
+            assert_eq!(widget.children().len(), 1, "the stand-in");
+        });
+    }
+
+    #[test]
+    fn where_web_views_are_hosted_the_widget_asks_for_one() {
+        for frame in [false, true] {
+            on_platform(true, frame, || {
+                let web = WebViewController::new();
+                let widget: WebViewWidget<()> = WebViewWidget::new(&web);
+                let spec = widget.platform_view().expect("a native view");
+                assert_eq!(spec.view_type(), WEB_VIEW_TYPE);
+                assert!(spec.params().contains("\"controller\""));
+                assert!(widget.children().is_empty(), "no stand-in");
+                // A fallback given anyway is not shown where the page is.
+                let widget = widget.fallback(UnsupportedView::new("x"));
+                assert!(widget.children().is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn a_frame_refuses_what_a_browser_keeps_and_sends_nothing() {
+        on_platform(true, true, || {
+            let web = WebViewController::new();
+            assert_eq!(
+                web.set_user_agent(Some("MyApp")),
+                Err(WebViewError::Unsupported)
+            );
+            assert_eq!(web.user_agent(), None, "not kept either");
+            assert_eq!(web.set_user_agent(None), Ok(()), "the browser's own");
+            assert_eq!(web.enable_zoom(false), Err(WebViewError::Unsupported));
+            assert_eq!(
+                web.enable_zoom(true),
+                Ok(()),
+                "a frame zooms with the browser"
+            );
+            assert_eq!(web.clear_cache(), Err(WebViewError::Unsupported));
+            assert_eq!(web.clear_local_storage(), Err(WebViewError::Unsupported));
+            let cookies = WebViewCookieManager::new();
+            assert_eq!(
+                cookies.set_cookie(WebViewCookie::new("a", "b", "c.test")),
+                Err(WebViewError::Unsupported)
+            );
+            let mut cleared = cookies.clear_cookies();
+            assert_eq!(
+                poll_now(&mut cleared),
+                Poll::Ready(Err(WebViewError::Unsupported))
+            );
+            assert!(take_web_view_calls().is_empty(), "no cookie call went out");
+            let names: Vec<String> = calls(&web).into_iter().map(|(n, _)| n).collect();
+            assert_eq!(
+                names,
+                [web_view_wire::SET_USER_AGENT, web_view_wire::SET_ZOOM],
+                "only what was allowed"
+            );
+        });
+    }
+
+    #[test]
+    fn android_and_windows_take_every_setting() {
+        on_platform(true, false, || {
+            let web = WebViewController::new();
+            assert_eq!(web.set_user_agent(Some("MyApp")), Ok(()));
+            assert_eq!(web.enable_zoom(false), Ok(()));
+            assert_eq!(web.clear_cache(), Ok(()));
+            assert_eq!(web.clear_local_storage(), Ok(()));
+            assert_eq!(calls(&web).len(), 4);
+            let _ = take_web_view_calls();
+            assert_eq!(
+                WebViewCookieManager::new().set_cookie(WebViewCookie::new("a", "b", "c.test")),
+                Ok(())
+            );
+            let mut cleared = WebViewCookieManager::new().clear_cookies();
+            assert_eq!(
+                poll_now(&mut cleared),
+                Poll::Pending,
+                "waits for the platform"
+            );
+            let sent: Vec<String> = take_web_view_calls().into_iter().map(|(n, _)| n).collect();
+            assert_eq!(
+                sent,
+                [web_view_wire::SET_COOKIE, web_view_wire::CLEAR_COOKIES]
+            );
+        });
+    }
+
+    #[test]
+    fn a_script_a_frame_cannot_run_answers_unsupported() {
         let web = WebViewController::new();
-        let mut asked = web.run_javascript_returning_result("1 + 1");
+        let id = 9_999_101;
+        let slot: Rc<Slot<Result<String, WebViewError>>> = Rc::default();
+        web.inner.results.borrow_mut().insert(id, slot.clone());
+        let mut asked = JavaScriptResult { slot };
+        web.handle_event(&event(
+            web_view_wire::JAVASCRIPT_RESULT,
+            serde_json::json!({"id": id, "ok": false, "value": "another origin", "unsupported": true}),
+        ));
         assert_eq!(
             poll_now(&mut asked),
             Poll::Ready(Err(WebViewError::Unsupported))
         );
-        let mut cleared = WebViewCookieManager::new().clear_cookies();
-        assert_eq!(poll_now(&mut cleared), Poll::Ready(false));
-        let widget: WebViewWidget<()> = WebViewWidget::new(&web);
-        assert!(widget.platform_view().is_none());
-        assert_eq!(widget.children().len(), 1, "the stand-in");
     }
 
     #[test]
@@ -1745,14 +1959,17 @@ mod tests {
     fn cookies_cleared_answers_its_own_call() {
         let slot: Rc<Slot<bool>> = Rc::default();
         CLEARED.with(|slots| slots.borrow_mut().insert(77_001, slot.clone()));
-        let mut cleared = CookiesCleared { slot };
+        let mut cleared = CookiesCleared {
+            slot,
+            unsupported: false,
+        };
         assert_eq!(poll_now(&mut cleared), Poll::Pending);
         assert!(!handle_web_view_global_event("web.other", "{}"));
         assert!(handle_web_view_global_event(
             web_view_wire::COOKIES_CLEARED,
             r#"{"id":77001,"had":true}"#
         ));
-        assert_eq!(poll_now(&mut cleared), Poll::Ready(true));
+        assert_eq!(poll_now(&mut cleared), Poll::Ready(Ok(true)));
     }
 
     #[test]

@@ -22,12 +22,42 @@ any release may break.
   the way, opens one row per group, and offers its actions to the keyboard and to screen
   readers by name), `WheelPicker` with `WheelColumn` (spinning wheels for a time or a date,
   looping, with a haptic tick on phones), and `EmptyState`. Each has a theme in
-  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a drag across a wheel is no
-  longer pulled back when the application echoes each value. Semantics gained live regions
-  (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
+  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a drag across a
+  wheel is no longer pulled back when the application echoes each value. Semantics gained
+  live regions (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
   TalkBack. The web editing element carries the field's `autocomplete` token. Guides:
   `docs/guide/input.md`, `docs/guide/lists.md`; the demo has a screen per widget.
-
+- **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
+  (J809). A command palette over the screen, opened by a key the application chooses (its
+  rows are `PaletteCommand`s, a name that leaves `Command` to effects): fuzzy
+  matching with the matched letters marked, groups, keys shown on the right, Up, Down, Enter and
+  Escape, an empty state, and a mode for results the application fetches itself. A hover card
+  that opens after the pointer rests on its anchor (or a long press), stays while the pointer is
+  on the card, closes after a delay, and is placed against its anchor with flip and shift; its
+  timing is the runtime's, so it needs no state. A context menu at the pointer on a right-click
+  or a long press, built on the menu bar's rows, submenus and keyboard, with new radio rows
+  (`MenuItem::radio`). Resizable panels with handles moved by drag or by the arrow keys, least
+  and largest shares, collapsing panels, and the sizes handed back to save. Each has a theme
+  (`theme.widgets.command_palette`, `hover_card`, `context_menu`, `resizable_panels`), works
+  right to left and in both brightnesses. Also: the semantic roles `Dialog` and `Splitter`, a
+  menu row's words and keys now mirrored right to left, `Placement::Card` and
+  `Placement::Pointer`, and `Widget::on_secondary_tap_at` / `on_long_press_at`, which tell a
+  widget where the press landed.
+- **One web view API on Android, Windows and the web** (J804, feature `webview`).
+  `WebViewController`, `NavigationDelegate`, `WebViewWidget` and `WebViewCookieManager` now drive
+  WebView2 on Windows and an `<iframe>` on the web as they drive Android's web view: the same
+  application code loads requests, HTML, files and assets, moves in the history, runs JavaScript
+  with and without its result, opens JavaScript channels, sets the user agent, background and
+  zoom, clears the cache and storage, sets and clears cookies (Windows), and hears the page start,
+  progress, finish, fail, change address and ask whether to navigate. The page belongs to its
+  controller everywhere: a widget that leaves keeps it hidden for the controller's next widget.
+  On the web a frame does what a browser allows: pages of the application's origin get scripts,
+  channels, history and decided links; the user agent, zoom, cache, storage, cookies and scripts
+  in another origin's page answer `WebViewError::Unsupported`. Breaking, within the unreleased
+  API of J799: `WEB_VIEWS_SUPPORTED` is now `web_views_available()`; `set_user_agent`,
+  `enable_zoom`, `clear_cache`, `clear_local_storage` and `set_cookie` return a `Result`, and
+  `clear_cookies` answers `Result<bool, WebViewError>`. The `webview` feature turns on
+  `webview2`. macOS, Linux and iOS keep the stand-in.
 - **The camera preview turns with the display on Android** (J806). The display's rotation was
   read through an activity method the process's context (the application) does not have: it
   threw at every open, and every preview was turned as if the phone stood upright, sideways

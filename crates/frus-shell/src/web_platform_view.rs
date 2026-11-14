@@ -22,8 +22,8 @@ use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
-    Document, Event, HtmlCanvasElement, HtmlElement, HtmlIFrameElement, HtmlInputElement,
-    HtmlVideoElement, KeyboardEvent,
+    Document, Event, EventTarget, HtmlCanvasElement, HtmlElement, HtmlIFrameElement,
+    HtmlInputElement, HtmlVideoElement, KeyboardEvent,
 };
 use winit::platform::web::WindowExtWebSys;
 use winit::window::Window;
@@ -39,10 +39,45 @@ pub(crate) fn register_builtins() {
     }
 }
 
-type Listener = Closure<dyn FnMut(Event)>;
+/// An event listener, removed when dropped: a listener left on the page's window after its
+/// closure is gone would throw on every event.
+pub(crate) struct Listener {
+    target: EventTarget,
+    kind: &'static str,
+    closure: Closure<dyn FnMut(Event)>,
+}
+
+impl Listener {
+    pub(crate) fn new(
+        target: &EventTarget,
+        kind: &'static str,
+        closure: Closure<dyn FnMut(Event)>,
+    ) -> Self {
+        let _ = target.add_event_listener_with_callback(kind, closure.as_ref().unchecked_ref());
+        Self {
+            target: target.clone(),
+            kind,
+            closure,
+        }
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        let _ = self
+            .target
+            .remove_event_listener_with_callback(self.kind, self.closure.as_ref().unchecked_ref());
+    }
+}
+
+/// What adds a listener to an element: its target, the event, the closure.
+type Listen<'a> = dyn FnMut(&EventTarget, &'static str, Closure<dyn FnMut(Event)>) + 'a;
 
 enum Content {
     Frame(HtmlIFrameElement),
+    /// A web view controller's page (milestone 804).
+    #[cfg(feature = "webview")]
+    Page(crate::web_frame::Page),
     Input(HtmlInputElement),
     Video(HtmlVideoElement),
     Plugin(Box<dyn NativeView>),
@@ -55,6 +90,9 @@ struct Hosted {
     at: PixelRect,
     shape: Shape,
     _listeners: Vec<Listener>,
+    /// The web view controller whose page this is (milestone 804): kept while its widget is
+    /// away, and handed to the next widget of the same controller.
+    page: Option<u64>,
 }
 
 /// The views of the page.
@@ -62,6 +100,10 @@ pub(crate) struct Host {
     document: Document,
     canvas: HtmlCanvasElement,
     views: HashMap<i32, Hosted>,
+    /// Controllers' pages whose widget went, hidden until one comes back or the controller
+    /// is dropped (`web.release`). A frame moved in the page would load again, so the page
+    /// keeps its container.
+    parked: HashMap<u64, Hosted>,
 }
 
 impl Host {
@@ -75,6 +117,7 @@ impl Host {
             document,
             canvas,
             views: HashMap::new(),
+            parked: HashMap::new(),
         })
     }
 
@@ -139,31 +182,38 @@ impl Host {
                 }
             };
         }
-        let mut listen = |target: &web_sys::EventTarget, kind: &str, listener: Listener| {
-            let _ =
-                target.add_event_listener_with_callback(kind, listener.as_ref().unchecked_ref());
-            listeners.push(listener);
-        };
-        let focus =
-            |el: &web_sys::EventTarget,
-             listen: &mut dyn FnMut(&web_sys::EventTarget, &str, Listener)| {
-                listen(
-                    el,
-                    "focus",
-                    Closure::new(move |_: Event| {
-                        view_host::send(view, PlatformViewEvent::FOCUS, "true")
-                    }),
-                );
-                listen(
-                    el,
-                    "blur",
-                    Closure::new(move |_: Event| {
-                        view_host::send(view, PlatformViewEvent::FOCUS, "false")
-                    }),
-                );
+        let mut listen =
+            |target: &EventTarget, kind: &'static str, closure: Closure<dyn FnMut(Event)>| {
+                listeners.push(Listener::new(target, kind, closure));
             };
+        let focus = |el: &EventTarget, listen: &mut Listen<'_>| {
+            listen(
+                el,
+                "focus",
+                Closure::new(move |_: Event| {
+                    view_host::send(view, PlatformViewEvent::FOCUS, "true")
+                }),
+            );
+            listen(
+                el,
+                "blur",
+                Closure::new(move |_: Event| {
+                    view_host::send(view, PlatformViewEvent::FOCUS, "false")
+                }),
+            );
+        };
         const FILL: &str = "display:block;box-sizing:border-box;width:100%;height:100%;margin:0;";
         let content = match view_type {
+            #[cfg(feature = "webview")]
+            "frus/webview" if crate::web_view_protocol::Params::parse(params).is_some() => {
+                let Some(params) = crate::web_view_protocol::Params::parse(params) else {
+                    return (Content::Nothing, listeners);
+                };
+                match crate::web_frame::Page::new(&self.document, container, view, &params) {
+                    Some(page) => Content::Page(page),
+                    None => Content::Nothing,
+                }
+            }
             "frus/webview" => {
                 let Some(frame) = self.element::<HtmlIFrameElement>("iframe") else {
                     return (Content::Nothing, listeners);
@@ -326,6 +376,15 @@ fn frame_call(frame: &HtmlIFrameElement, path: &[&str], name: &str) -> Result<Js
 
 impl ViewHost for Host {
     fn create(&mut self, view: i32, view_type: &str, params: &str, at: PixelRect) {
+        #[cfg(feature = "webview")]
+        if view_type == "frus/webview" && view_host::factory(view_type).is_none() {
+            let page = crate::web_view_protocol::Params::parse(params).map(|p| p.controller);
+            if let Some(page) = page {
+                if self.adopt(view, page, at) {
+                    return;
+                }
+            }
+        }
         let Some(container) = self.element::<HtmlElement>("div") else {
             return;
         };
@@ -344,6 +403,15 @@ impl ViewHost for Host {
                 .and_then(|body| body.append_child(&container).ok()),
         };
         let (content, listeners) = self.make(view, view_type, params, &container, at);
+        #[cfg(feature = "webview")]
+        let page = match &content {
+            Content::Page(_) => {
+                crate::web_view_protocol::Params::parse(params).map(|p| p.controller)
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "webview"))]
+        let page = None;
         self.views.insert(
             view,
             Hosted {
@@ -352,6 +420,7 @@ impl ViewHost for Host {
                 at,
                 shape,
                 _listeners: listeners,
+                page,
             },
         );
     }
@@ -385,16 +454,25 @@ impl ViewHost for Host {
     }
 
     fn dispose(&mut self, view: i32) {
-        if let Some(hosted) = self.views.remove(&view) {
+        if let Some(mut hosted) = self.views.remove(&view) {
             let had_focus = self
                 .document
                 .active_element()
                 .is_some_and(|active| hosted.container.contains(Some(&active)));
-            drop(hosted.content);
-            hosted.container.remove();
             if had_focus {
                 let _ = self.canvas.focus();
             }
+            // A controller's page waits, hidden, for its controller's next widget.
+            if let Some(page) = hosted.page {
+                hosted.shape = Shape::Hidden;
+                let style = self.style(hosted.at, &hosted.shape);
+                hosted.container.set_attribute("style", &style).ok();
+                if let Some(old) = self.parked.insert(page, hosted) {
+                    Self::destroy(old);
+                }
+                return;
+            }
+            Self::destroy(hosted);
         }
     }
 
@@ -489,6 +567,11 @@ impl ViewHost for Host {
                 }
                 _ => Ok(()),
             },
+            #[cfg(feature = "webview")]
+            Content::Page(page) => {
+                page.invoke(method, arguments);
+                Ok(())
+            }
             Content::Plugin(plugin) => {
                 plugin.invoke(method, arguments);
                 Ok(())
@@ -516,10 +599,66 @@ impl ViewHost for Host {
     }
 }
 
+impl Host {
+    /// Drops a view and its container.
+    fn destroy(hosted: Hosted) {
+        drop(hosted.content);
+        hosted.container.remove();
+    }
+
+    /// Gives view `view` the page of controller `page` if another view shows it or it is
+    /// parked (milestone 804): its container, moved to `at`. Says whether it did.
+    #[cfg(feature = "webview")]
+    fn adopt(&mut self, view: i32, page: u64, at: PixelRect) -> bool {
+        let shown_by = self
+            .views
+            .iter()
+            .find(|(_, hosted)| hosted.page == Some(page))
+            .map(|(v, _)| *v);
+        let hosted = match shown_by {
+            Some(other) => self.views.remove(&other),
+            None => self.parked.remove(&page),
+        };
+        let Some(mut hosted) = hosted else {
+            return false;
+        };
+        if let Content::Page(content) = &hosted.content {
+            content.set_view(view);
+        }
+        hosted
+            .container
+            .set_attribute("data-frus-view", &view.to_string())
+            .ok();
+        hosted.at = at;
+        hosted.shape = Shape::Hidden;
+        self.views.insert(view, hosted);
+        self.restyle(view);
+        true
+    }
+
+    /// A call for every web view (milestone 804): a page let go. The cookies are the
+    /// browser's: the controller answers that it cannot set them before sending anything.
+    #[cfg(feature = "webview")]
+    pub(crate) fn web_global(&mut self, method: &str, arguments: &str) {
+        use crate::web_view_protocol::Global;
+        if let Some(Global::Release { controller }) = Global::parse(method, arguments) {
+            if let Some(hosted) = self.parked.remove(&controller) {
+                Self::destroy(hosted);
+            }
+            for hosted in self.views.values_mut() {
+                if hosted.page == Some(controller) {
+                    hosted.page = None;
+                }
+            }
+        }
+    }
+}
+
 impl Drop for Host {
     fn drop(&mut self) {
-        for view in self.views.keys().copied().collect::<Vec<_>>() {
-            self.dispose(view);
+        let parked = self.parked.drain().map(|(_, hosted)| hosted);
+        for hosted in self.views.drain().map(|(_, hosted)| hosted).chain(parked) {
+            Self::destroy(hosted);
         }
     }
 }

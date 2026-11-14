@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! A small browser (milestone 799): an address bar, back and forward, a progress bar, and a
-//! JavaScript channel the page answers on. Elsewhere than on Android the page shows its
-//! stand-in.
+//! A small browser (milestones 799 and 804): an address bar, back and forward, a progress
+//! bar, and a JavaScript channel the page answers on. The same code on Android, Windows
+//! (WebView2) and the web (a frame); on macOS, Linux and iOS the page shows its stand-in.
 
 use std::cell::RefCell;
 
