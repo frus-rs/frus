@@ -529,6 +529,8 @@ struct Snapshot {
     semantics: usize,
     system_ui: usize,
     overlays: usize,
+    /// The hover cards walked (milestone 809): a subtree holding one is never replayed.
+    hover_watches: usize,
     focus_scope_start: Option<usize>,
 }
 
@@ -761,6 +763,8 @@ pub struct Focusable {
 pub struct Ui<Msg = crate::callback::Callback> {
     scene: Scene,
     hits: Vec<Hit<Msg>>,
+    /// The hover cards of the frame and what decided them (milestone 809).
+    hover_watches: Vec<HoverWatch>,
     /// Long-press targets (id, visible bounds, message).
     long_presses: Vec<Hit<Msg>>,
     /// Overlay dismissal messages, from the bottom to the **top**.
@@ -1049,6 +1053,16 @@ impl<Msg: Clone> Ui<Msg> {
             .map(|hit| hit.id)
     }
 
+    /// Every press target containing `point`, the topmost first (milestone 809): what a
+    /// press could reach if the ones above it let it through.
+    pub fn hits_at(&self, point: Point) -> impl Iterator<Item = WidgetId> + '_ {
+        self.hits
+            .iter()
+            .rev()
+            .filter(move |hit| hit.contains(point))
+            .map(|hit| hit.id)
+    }
+
     /// The message tied to a given clickable widget. `None` for a target that swallows
     /// input without emitting anything.
     ///
@@ -1108,6 +1122,32 @@ impl<Msg: Clone> Ui<Msg> {
     /// Dismissal message of the **topmost** overlay (for Escape).
     pub fn top_dismiss(&self) -> Option<Msg> {
         self.dismisses.last().cloned()
+    }
+
+    /// **Whether a pointer now at `pointer` changes a hover card** (milestone 809): it came onto
+    /// or left one's anchor or card, or a finger touched outside an open one. The shell asks
+    /// after every pointer event and draws a frame when it does — the card's delay starts there.
+    pub fn hover_cards_changed(&self, pointer: Option<Point>, touch: bool) -> bool {
+        self.hover_watches.iter().any(|watch| {
+            let over = pointer.is_some_and(|p| {
+                watch.anchor.contains(p) || watch.card.is_some_and(|c| c.contains(p))
+            });
+            let lifted = pointer.is_none() && touch;
+            if lifted {
+                return watch.over;
+            }
+            over != watch.over || (watch.open && !over && touch)
+        })
+    }
+
+    /// The widget whose **long press** is the topmost containing `point` — the one
+    /// [`long_press_at`](Self::long_press_at) answers for.
+    pub fn long_press_target_at(&self, point: Point) -> Option<WidgetId> {
+        self.long_presses
+            .iter()
+            .rev()
+            .find(|hit| hit.contains(point))
+            .map(|hit| hit.id)
     }
 
     /// **Long-press** message of the topmost target containing `point`.
@@ -2960,6 +3000,18 @@ pub(crate) fn natural_size<Msg>(
 /// reference had to grow a whole mechanism to avoid. The scrim's colour travels for the
 /// same reason — by the time it is painted, the widget that asked for it is long
 /// behind.
+/// **A hover card the walk passed** (milestone 809), with what decided it: where its anchor
+/// and its card are, and whether the pointer was over them. The shell asks the frame whether a
+/// pointer that has moved changes that, and draws a frame if it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HoverWatch {
+    id: WidgetId,
+    anchor: Rect,
+    card: Option<Rect>,
+    over: bool,
+    open: bool,
+}
+
 type Overlay<'a, Msg> = (
     &'a dyn Widget<Msg>,
     WidgetId,
@@ -3045,6 +3097,8 @@ struct Builder<'a, Msg> {
     /// `0..=1`). The progress animates the appearance (a drawer sliding in, a scrim fading);
     /// it is `1.0` for overlays that are not animated.
     overlays: Vec<Overlay<'a, Msg>>,
+    /// The hover cards walked this frame, with what decided them (milestone 809).
+    hover_watches: Vec<HoverWatch>,
     /// A widget is asking for a continuous, time-driven animation.
     wants_animation: bool,
     /// One whose animation is decoration alone (milestone 783).
@@ -3299,6 +3353,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             semantics: self.semantics.len(),
             system_ui: self.system_ui.len(),
             overlays: self.overlays.len(),
+            hover_watches: self.hover_watches.len(),
             focus_scope_start: self.focus_scope_start,
         }
     }
@@ -3307,7 +3362,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// [`BoundaryData`]. Returns `None` — hence **not cacheable** — when the subtree pushed an
     /// overlay or touched the modal focus scope (global state that cannot be captured here).
     fn capture_since(&self, snap: &Snapshot) -> Option<BoundaryData<Msg>> {
-        if self.overlays.len() != snap.overlays || self.focus_scope_start != snap.focus_scope_start
+        // A hover card is decided as the walk passes it, from the pointer and the time: a
+        // replayed subtree would leave it as it was (milestone 809).
+        if self.overlays.len() != snap.overlays
+            || self.focus_scope_start != snap.focus_scope_start
+            || self.hover_watches.len() != snap.hover_watches
         {
             return None;
         }
@@ -5892,13 +5951,24 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 Placement::Tooltip => {
                     widget.overlay_pinned() || self.runtime.input.hovered == Some(id.child(0))
                 }
+                // A hover card, while the pointer has rested on it (milestone 809).
+                Placement::Card(..) => self.card_open(
+                    widget,
+                    id,
+                    draw_rect.intersect(clip),
+                    child_id(id, 1, content),
+                ),
                 _ => true,
             };
             if visible && progress > 0.001 {
+                // The box it hangs from: the widget's, or a point it names (milestone 809).
+                let anchor = widget
+                    .overlay_at()
+                    .map_or(draw_rect, |at| Rect::new(at.x, at.y, 0.0, 0.0));
                 self.overlays.push((
                     content,
                     child_id(id, 1, content),
-                    draw_rect,
+                    anchor,
                     placement,
                     widget.overlay_dismiss(),
                     progress,
@@ -6438,6 +6508,54 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         ));
     }
 
+    /// **Whether a hover card is open this frame** (milestone 809): the card's own word if
+    /// it gave one, else the runtime's record of where the pointer has rested and for how
+    /// long, moved on to this frame's time. A delay still running asks for the next frame.
+    fn card_open(
+        &mut self,
+        widget: &dyn Widget<Msg>,
+        id: WidgetId,
+        anchor: Rect,
+        card: WidgetId,
+    ) -> bool {
+        let Some(timing) = widget.hover_card() else {
+            return true;
+        };
+        if let Some(open) = timing.open {
+            return open;
+        }
+        let delays = timing.resolve(&self.theme);
+        let runtime = self.runtime;
+        let placed = runtime.card_rects.borrow().get(&card).copied();
+        let mut intents = runtime.hover_cards.borrow_mut();
+        let intent = intents.entry(id).or_default();
+        // The card counts only while it is open: a closed one is nowhere.
+        let shown = placed.filter(|_| intent.open);
+        let inside = |p: Point| anchor.contains(p) || shown.is_some_and(|c| c.contains(p));
+        let running = crate::hovercard::step(
+            intent,
+            runtime.input.pointer,
+            runtime.input.pointer_touch,
+            runtime.time,
+            delays,
+            inside,
+        );
+        if running {
+            self.wants_animation = true;
+        }
+        if !intent.open {
+            runtime.card_rects.borrow_mut().remove(&card);
+        }
+        self.hover_watches.push(HoverWatch {
+            id,
+            anchor,
+            card: shown.filter(|_| intent.open),
+            over: intent.over,
+            open: intent.open,
+        });
+        intent.open
+    }
+
     /// Registers a region the mouse enters and leaves, as far as it shows (milestone 583).
     fn register_hover_region(
         &mut self,
@@ -6665,6 +6783,22 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     0.0,
                     self.available.height - size.height - crate::MediaQuery::of().safe().bottom,
                 ),
+                // Against the anchor, flipped and moved along inside the window (milestone 809).
+                Placement::Card(side, align) => crate::hovercard::place_card(
+                    anchor,
+                    Size::new(size.width, size.height),
+                    window,
+                    side,
+                    align,
+                    self.rtl(),
+                ),
+                // At the point, flipped where there is no room (milestone 809).
+                Placement::Pointer => crate::contextmenu::place_at_point(
+                    Point::new(anchor.x, anchor.y),
+                    Size::new(size.width, size.height),
+                    window,
+                    self.rtl(),
+                ),
             };
 
             // An **anchored** overlay follows a widget; the others (a modal, a drawer, a
@@ -6673,7 +6807,12 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // sliding out under a `Navigator`, a row scrolled sideways past the edge.
             let anchored = matches!(
                 placement,
-                Placement::Below | Placement::Tooltip | Placement::Beside | Placement::Covering
+                Placement::Below
+                    | Placement::Tooltip
+                    | Placement::Beside
+                    | Placement::Covering
+                    | Placement::Card(..)
+                    | Placement::Pointer
             );
             let anchor_on_screen = !anchored
                 || (anchor.x < self.available.width
@@ -6786,6 +6925,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             );
             if modal || traps {
                 self.focus_scope_start = Some(self.focusables.len());
+            }
+
+            // Where an open hover card was placed: the pointer on it keeps it open, and the
+            // next frame's walk asks (milestone 809).
+            if matches!(placement, Placement::Card(..)) {
+                self.runtime
+                    .card_rects
+                    .borrow_mut()
+                    .insert(oid, Rect::new(pos.0, pos.1, size.width, size.height));
             }
 
             // Where a press is the overlay's and not the pages' — a tooltip takes none.
@@ -7165,6 +7313,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         reorderables: Vec::new(),
         interactives: Vec::new(),
         overlays: Vec::new(),
+        hover_watches: Vec::new(),
         wants_animation: false,
         wants_decoration: false,
         available,
@@ -7210,6 +7359,16 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
     // Overlays (floating menus, modals, tooltips) above everything else. (Their walk restarts
     // from depth 0: roots as far as the inspector is concerned.)
     builder.process_overlays();
+
+    // The hover cards that are gone are forgotten, unless one was open or under the pointer:
+    // a frame built for something else must not close a card it never walked (milestone 809).
+    {
+        let seen: Vec<WidgetId> = builder.hover_watches.iter().map(|w| w.id).collect();
+        runtime
+            .hover_cards
+            .borrow_mut()
+            .retain(|id, intent| seen.contains(id) || intent.open || intent.over);
+    }
 
     // End of frame: forget the layout roots and repaint boundaries of widgets that have gone,
     // and freeze the caches' diagnostic counters.
@@ -7257,6 +7416,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         refreshes: builder.refreshes,
         dismissables: builder.dismissables,
         sheets: builder.sheets,
+        hover_watches: builder.hover_watches,
         wants_animation: builder.wants_animation,
         wants_decoration: builder.wants_decoration,
         semantics: builder.semantics,

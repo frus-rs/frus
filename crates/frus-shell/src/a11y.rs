@@ -53,6 +53,8 @@ fn to_ak_role(role: Role) -> AkRole {
         Role::Tab => AkRole::Tab,
         Role::ListItem => AkRole::ListItem,
         Role::ProgressBar => AkRole::ProgressIndicator,
+        Role::Dialog => AkRole::Dialog,
+        Role::Splitter => AkRole::Splitter,
     }
 }
 
@@ -381,6 +383,8 @@ mod tests {
         assert_eq!(to_ak_role(Role::CheckBox), AkRole::CheckBox);
         assert_eq!(to_ak_role(Role::Slider), AkRole::Slider);
         assert_eq!(to_ak_role(Role::ProgressBar), AkRole::ProgressIndicator);
+        assert_eq!(to_ak_role(Role::Dialog), AkRole::Dialog);
+        assert_eq!(to_ak_role(Role::Splitter), AkRole::Splitter);
     }
 
     #[test]

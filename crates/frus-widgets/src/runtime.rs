@@ -884,6 +884,13 @@ pub struct Runtime {
     /// (milestone 594). Behind a `RefCell` for the same reason as the layout cache: the
     /// layout sees a child's new size, and it holds only a shared reference.
     pub(crate) size_anims: RefCell<crate::animatedsize::SizeAnims>,
+    /// What the walk keeps about each [`crate::HoverCard`]: whether the pointer is over it,
+    /// since when, and whether it is open (milestone 809). Behind a `RefCell` like the
+    /// caches: the walk decides it, and it holds only a shared reference.
+    pub(crate) hover_cards: RefCell<HashMap<WidgetId, crate::hovercard::Intent>>,
+    /// Where each open hover card was placed, by the card's own id: the pointer on the card
+    /// keeps it open, and the next frame's walk needs to know where it was.
+    pub(crate) card_rects: RefCell<HashMap<WidgetId, Rect>>,
 }
 
 impl Runtime {

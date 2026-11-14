@@ -123,6 +123,10 @@ mod interaction;
 mod interactive;
 mod kanban;
 mod kbd;
+// Milestone 809: overlays and panels.
+mod commandpalette;
+mod contextmenu;
+mod hovercard;
 mod keepalive;
 mod keyboarddismiss;
 mod keyed;
@@ -178,6 +182,7 @@ mod relayout;
 mod remote;
 mod reorder;
 mod reorderable;
+mod resizable;
 mod responsive;
 mod restoration;
 mod richtext;
@@ -345,6 +350,9 @@ pub use clip::{ClipOval, ClipPath, ClipRRect};
 pub use collapsible::{ControlAffinity, ExpansionTile};
 pub use collapsingheader::{header_rect, CollapsingHeader, HeaderState, COLLAPSED_HEIGHT};
 pub use colorpicker::ColorPicker;
+pub use commandpalette::{
+    fuzzy_match, Command, CommandPalette, CommandPaletteState, CommandPaletteTheme,
+};
 pub use component::{
     back_blocked, component, intervals, rebuild_requested, request_rebuild, take_rebuild_request,
     BuildContext, Component, Interval, IntoCleanup, State, StateContext, StateHandle, StateStore,
@@ -360,6 +368,7 @@ pub use constraints::{
     SizedOverflowBox, UnconstrainedBox,
 };
 pub use container::Container;
+pub use contextmenu::{ContextMenu, ContextMenuState};
 pub use controltile::{CheckboxListTile, RadioListTile, SwitchListTile};
 pub use crossfade::AnimatedCrossFade;
 pub use cupertinocolors::{
@@ -436,6 +445,10 @@ pub use glass::{GlassSurface, GlassTheme, GLASS_BLUR_SIGMA};
 pub use grid::GridView;
 pub use gridtile::{GridTile, GridTileBar, GRID_TILE_BAR_HEIGHT, GRID_TILE_BAR_TWO_LINE_HEIGHT};
 pub use hero::{lerp_rect, Hero, HeroSpot};
+pub use hovercard::{
+    CardAlign, CardSide, HoverCard, HoverCardTheme, HoverCardTiming, HOVER_CARD_CLOSE_DELAY,
+    HOVER_CARD_OPEN_DELAY, HOVER_CARD_TOUCH_DELAY,
+};
 pub use icon::Icon;
 pub use iconbutton::{
     IconButton, IconButtonVariant, ICON_BUTTON_BORDER_WIDTH, ICON_BUTTON_ICON_SIZE,
@@ -544,6 +557,7 @@ pub use reorder::{
     nearest_reorder_slot, reflow_reorder_cards, reflow_reorder_columns, reorder_drop_after,
 };
 pub use reorderable::{settled_index, ReorderGrab, ReorderableList};
+pub use resizable::{ResizablePanel, ResizablePanels, ResizablePanelsState, ResizablePanelsTheme};
 pub use responsive::{responsive, Responsive};
 pub use restoration::{restoration_scope, RestorableValue, Restoration, RestorationBucket};
 pub use richtext::RichText;

@@ -20,6 +20,7 @@ mod journal;
 mod licenses;
 mod menu;
 mod native;
+mod overlays;
 mod player;
 mod settings;
 mod sheet;
@@ -40,6 +41,7 @@ pub(crate) use journal::*;
 pub(crate) use licenses::*;
 pub(crate) use menu::window;
 pub(crate) use native::*;
+pub(crate) use overlays::*;
 pub(crate) use player::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
@@ -92,6 +94,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("player", |_, _| PlayerPage.into_widget()),
         GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
         GoRoute::new("shop", |_, _| ShopPage.into_widget()),
+        GoRoute::new("overlays", |_, _| OverlaysPage.into_widget()),
         task,
     ])])
 }

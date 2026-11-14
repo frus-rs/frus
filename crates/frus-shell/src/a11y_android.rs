@@ -237,13 +237,13 @@ impl VirtualIds {
 /// `EditText` "edit box", an `ActionBar$Tab` "tab".
 fn class_name(role: Role) -> &'static str {
     match role {
-        Role::None | Role::ListItem => "android.view.View",
+        Role::None | Role::ListItem | Role::Dialog => "android.view.View",
         Role::Label | Role::Heading => "android.widget.TextView",
         Role::Button | Role::Link => "android.widget.Button",
         Role::CheckBox => "android.widget.CheckBox",
         Role::Switch => "android.widget.Switch",
         Role::RadioButton => "android.widget.RadioButton",
-        Role::Slider => "android.widget.SeekBar",
+        Role::Slider | Role::Splitter => "android.widget.SeekBar",
         Role::TextInput => "android.widget.EditText",
         Role::Image => "android.widget.ImageView",
         Role::Tab => "android.app.ActionBar$Tab",
@@ -311,7 +311,7 @@ fn to_row(
         }
         // A range speaks its own value, as a percentage or as the value it was given: the
         // description names it.
-        Role::Slider | Role::ProgressBar => description = sem.label.clone(),
+        Role::Slider | Role::Splitter | Role::ProgressBar => description = sem.label.clone(),
         _ => description = joined(sem.label.as_ref(), sem.readable_value()),
     }
     if let Some((min, value, max)) = sem.range {
@@ -806,6 +806,8 @@ mod tests {
             (Role::Label, "android.widget.TextView"),
             (Role::Heading, "android.widget.TextView"),
             (Role::ListItem, "android.view.View"),
+            (Role::Splitter, "android.widget.SeekBar"),
+            (Role::Dialog, "android.view.View"),
         ] {
             assert_eq!(one(sem(role)).class_name, class, "{role:?}");
         }

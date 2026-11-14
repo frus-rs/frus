@@ -161,7 +161,7 @@ impl BarStyle {
 }
 
 /// One entry of a menu: an action, a rule, or a submenu.
-enum Entry<Msg> {
+pub(crate) enum Entry<Msg> {
     Item(MenuItem<Msg>),
     Submenu(SubmenuButton<Msg>),
 }
@@ -229,7 +229,7 @@ impl<Msg> SubmenuButton<Msg> {
 }
 
 /// The message a path is turned into.
-type OnPath<Msg> = Rc<dyn Fn(MenuPath) -> Msg>;
+pub(crate) type OnPath<Msg> = Rc<dyn Fn(MenuPath) -> Msg>;
 
 /// **The menus along the top of a window**: File, Edit, View.
 ///
@@ -440,6 +440,7 @@ impl<Msg: Clone + 'static> MenuBar<Msg> {
             on_path,
             &across,
             &self.style.menus,
+            PanelKind::Bar,
         );
         Box::new(
             portal
@@ -450,19 +451,20 @@ impl<Msg: Clone + 'static> MenuBar<Msg> {
 }
 
 /// What the left and right arrows do when they leave a menu for the bar.
-struct Across<Msg> {
-    previous: Option<Msg>,
-    next: Option<Msg>,
+pub(crate) struct Across<Msg> {
+    pub(crate) previous: Option<Msg>,
+    pub(crate) next: Option<Msg>,
 }
 
 /// The panel of the menu open at `level`, with the submenu open in it, if any.
-fn panel<Msg: Clone + 'static>(
+pub(crate) fn panel<Msg: Clone + 'static>(
     entries: &[Entry<Msg>],
     level: usize,
     path: &MenuPath,
     on_path: &OnPath<Msg>,
     across: &Across<Msg>,
     menus: &crate::MenuTheme,
+    kind: PanelKind,
 ) -> Box<dyn Widget<Msg>> {
     // The first row that can be used takes the focus when the menu opens, so the arrows
     // work in it from there (milestone 605).
@@ -517,7 +519,7 @@ fn panel<Msg: Clone + 'static>(
                 // In a portal open or shut, as the word on the bar is.
                 let portal = OverlayPortal::new_boxed(on_enter(row, hover));
                 if open {
-                    let inner = panel(&sub.entries, level + 1, path, on_path, across, menus);
+                    let inner = panel(&sub.entries, level + 1, path, on_path, across, menus, kind);
                     Box::new(portal.overlay_boxed(inner, Placement::Beside))
                 } else {
                     Box::new(portal)
@@ -550,7 +552,7 @@ fn panel<Msg: Clone + 'static>(
             item_height: menus.item_height,
             divider_height: menus.divider_height,
             enabled: true,
-            kind: PanelKind::Bar,
+            kind,
         },
         &decorate,
     )
