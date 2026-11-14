@@ -20,6 +20,7 @@ any release may break.
   also logs how long its first frame took, which tells a dark scene (frames, black) from no
   frames. Milestone 798's black first frames were the scene: the camera's own JPEG was black
   too, and the torch lit the same preview.
+
 - **Every Android application may use the internet** (J808). `frus build`, `frus run` and the
   `frus create` template now declare `android.permission.INTERNET` beside `VIBRATE` and
   `ACCESS_NETWORK_STATE`, for every application. It was declared only when the `webview`
@@ -40,6 +41,13 @@ any release may break.
   `PurchaseError::Unsupported`. `Purchases::fake(FakeStore)` is an in-memory store on every
   platform for tests and for trying a shop: paid, pending, canceled or failing purchases. Guide:
   `docs/guide/purchases.md`; the demo has a shop screen.
+
+- **clippy for Android and the Web in CI** (J805). A new CI job lints the whole workspace
+  for `aarch64-linux-android` and `wasm32-unknown-unknown`, where only the Linux build was
+  linted before. It found `frus-transforms` not compiling for the Web (no `wasm-bindgen`
+  dependency for `main!`'s entry point) and two dependencies built where nothing uses them:
+  `async-lock` is now part of `frus-shell`'s `net` feature, and `frus-gpu` a dev-dependency
+  of `frus-bench`.
 
 - **The camera and code scanning** (J798). Feature `camera`: `frus::available_cameras()`,
   `CameraController` (initialize, which asks for the permission; `take_picture` to JPEG bytes
