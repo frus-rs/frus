@@ -54,6 +54,10 @@ fn aria_role(role: Role) -> &'static str {
         Role::Tab => "tab",
         Role::ListItem => "listitem",
         Role::ProgressBar => "progressbar",
+        Role::Dialog => "dialog",
+        // A focusable separator with a value is the splitter of the accessibility
+        // specification's window-splitter pattern.
+        Role::Splitter => "separator",
     }
 }
 
@@ -408,7 +412,7 @@ fn apply(el: &HtmlElement, sem: &SemanticsProperties) {
     match (&sem.value, sem.role) {
         // A masked field's text is only dots (milestone 782).
         (Some(_), Role::TextInput) => el.set_text_content(sem.readable_value().as_deref()),
-        (Some(value), Role::Slider | Role::ProgressBar) => {
+        (Some(value), Role::Slider | Role::Splitter | Role::ProgressBar) => {
             element.set_attribute("aria-valuetext", value).ok();
         }
         (Some(value), _) => {
@@ -433,5 +437,7 @@ mod tests {
         assert_eq!(aria_role(Role::Slider), "slider");
         assert_eq!(aria_role(Role::ProgressBar), "progressbar");
         assert_eq!(aria_role(Role::TextInput), "textbox");
+        assert_eq!(aria_role(Role::Dialog), "dialog");
+        assert_eq!(aria_role(Role::Splitter), "separator");
     }
 }

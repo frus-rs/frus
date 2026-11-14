@@ -8,11 +8,27 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 808 so far, each documenting the objective, the alternatives
+> record — one per step, 809 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
+  (J809). A command palette over the screen, opened by a key the application chooses (its
+  rows are `PaletteCommand`s, a name that leaves `Command` to effects): fuzzy
+  matching with the matched letters marked, groups, keys shown on the right, Up, Down, Enter and
+  Escape, an empty state, and a mode for results the application fetches itself. A hover card
+  that opens after the pointer rests on its anchor (or a long press), stays while the pointer is
+  on the card, closes after a delay, and is placed against its anchor with flip and shift; its
+  timing is the runtime's, so it needs no state. A context menu at the pointer on a right-click
+  or a long press, built on the menu bar's rows, submenus and keyboard, with new radio rows
+  (`MenuItem::radio`). Resizable panels with handles moved by drag or by the arrow keys, least
+  and largest shares, collapsing panels, and the sizes handed back to save. Each has a theme
+  (`theme.widgets.command_palette`, `hover_card`, `context_menu`, `resizable_panels`), works
+  right to left and in both brightnesses. Also: the semantic roles `Dialog` and `Splitter`, a
+  menu row's words and keys now mirrored right to left, `Placement::Card` and
+  `Placement::Pointer`, and `Widget::on_secondary_tap_at` / `on_long_press_at`, which tell a
+  widget where the press landed.
 - **One web view API on Android, Windows and the web** (J804, feature `webview`).
   `WebViewController`, `NavigationDelegate`, `WebViewWidget` and `WebViewCookieManager` now drive
   WebView2 on Windows and an `<iframe>` on the web as they drive Android's web view: the same

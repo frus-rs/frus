@@ -1239,6 +1239,21 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// The **point** this widget's overlay hangs from, in the window's logical pixels, when it
+    /// hangs from a point rather than from the widget's box: a context menu at the pointer
+    /// (milestone 809), placed by [`Placement::Pointer`](crate::Placement::Pointer). Default:
+    /// `None` (the widget's own box).
+    fn overlay_at(&self) -> Option<frus_core::Point> {
+        None
+    }
+
+    /// The **timing** of this widget's [`Placement::Card`](crate::Placement::Card) overlay,
+    /// which the walk opens and closes from the pointer — see [`crate::HoverCard`] (milestone
+    /// 809). Default: `None` (not a hover card; a card overlay without it is always shown).
+    fn hover_card(&self) -> Option<crate::HoverCardTiming> {
+        None
+    }
+
     /// Target of the widget's own animated value (e.g. `1.0` for a switch that is on,
     /// `0.0` for off). The runtime drives the retained value towards this target and
     /// hands it back through `Status::value`. `None` = no animated value.
@@ -1969,6 +1984,13 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// The message for a long press **at `at`**, in the window's logical pixels — where the
+    /// finger went down (milestone 809): a context menu opens there. Asked only of a widget
+    /// whose [`on_long_press`](Self::on_long_press) answers; by default, that answer.
+    fn on_long_press_at(&self, _at: frus_core::Point) -> Option<Msg> {
+        self.on_long_press()
+    }
+
     /// Message emitted by a **double tap**: two taps on this widget in quick succession
     /// (within 300 ms and 100 px of each other, the reference's numbers). While one is
     /// possible, a first tap's [`on_click`](Self::on_click) waits out those 300 ms, so that
@@ -1981,6 +2003,13 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// the right one.
     fn on_secondary_tap(&self) -> Option<Msg> {
         None
+    }
+
+    /// The message for a secondary tap **at `at`**, in the window's logical pixels
+    /// (milestone 809): a context menu opens at the pointer. Asked only of a widget whose
+    /// [`on_secondary_tap`](Self::on_secondary_tap) answers; by default, that answer.
+    fn on_secondary_tap_at(&self, _at: frus_core::Point) -> Option<Msg> {
+        self.on_secondary_tap()
     }
 
     /// Whether this widget **hears the pointer's raw events** (milestone 586): a press inside
@@ -2510,6 +2539,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     fn overlay_follows_anchor_width(&self) -> bool {
         (**self).overlay_follows_anchor_width()
     }
+    fn overlay_at(&self) -> Option<frus_core::Point> {
+        (**self).overlay_at()
+    }
+    fn hover_card(&self) -> Option<crate::HoverCardTiming> {
+        (**self).hover_card()
+    }
     fn anim_target(&self) -> Option<f32> {
         (**self).anim_target()
     }
@@ -2697,11 +2732,17 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     fn on_long_press(&self) -> Option<Msg> {
         (**self).on_long_press()
     }
+    fn on_long_press_at(&self, at: frus_core::Point) -> Option<Msg> {
+        (**self).on_long_press_at(at)
+    }
     fn on_double_tap(&self) -> Option<Msg> {
         (**self).on_double_tap()
     }
     fn on_secondary_tap(&self) -> Option<Msg> {
         (**self).on_secondary_tap()
+    }
+    fn on_secondary_tap_at(&self, at: frus_core::Point) -> Option<Msg> {
+        (**self).on_secondary_tap_at(at)
     }
     fn pan_axis(&self) -> Option<crate::PanAxis> {
         (**self).pan_axis()

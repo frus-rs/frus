@@ -88,6 +88,21 @@ pub(crate) fn menu_theme(theme: &Theme, kind: PanelKind) -> crate::MenuTheme {
                 .or(desktop)
                 .or(theme.widgets.menu)
         }
+        // A context menu (milestone 809): its own theme, then a desktop's menus on a
+        // desktop theme — a right-click menu is the desktop's own idiom — then the
+        // application's.
+        PanelKind::Context => {
+            let desktop = if theme.platform.is_desktop() {
+                crate::MenuTheme::desktop(theme)
+            } else {
+                crate::MenuTheme::default()
+            };
+            theme
+                .widgets
+                .context_menu
+                .or(desktop)
+                .or(theme.widgets.menu)
+        }
         _ => theme.widgets.menu,
     }
 }
@@ -109,6 +124,9 @@ pub(crate) enum PanelKind {
     /// A [`MenuBar`](crate::MenuBar)'s menus: the bar's menus, then a desktop's on a desktop
     /// theme, then [`MenuTheme`](crate::MenuTheme) — see [`menu_theme`].
     Bar,
+    /// A [`ContextMenu`](crate::ContextMenu)'s menus (milestone 809): the context menu's
+    /// theme, then a desktop's on a desktop theme, then [`MenuTheme`](crate::MenuTheme).
+    Context,
 }
 
 /// **What a caller said about a menu's panel**, every word optional. The theme's, then
@@ -128,7 +146,9 @@ impl PanelStyle {
     /// The surface: the caller's, the theme's, then `surface_container` for every kind.
     pub(crate) fn background(&self, kind: PanelKind, theme: &Theme) -> Color {
         match kind {
-            PanelKind::Menu | PanelKind::Bar => panel_background(self.background, theme, kind),
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => {
+                panel_background(self.background, theme, kind)
+            }
             PanelKind::Dropdown => self
                 .background
                 .or(theme.widgets.dropdown.menu_background)
@@ -140,7 +160,7 @@ impl PanelStyle {
     /// framework's one corner — see [`Panel::shape_of`] for why not the reference's.
     fn shape(&self, kind: PanelKind, theme: &Theme) -> ShapeBorder {
         let (shape, radius) = match kind {
-            PanelKind::Menu | PanelKind::Bar => {
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => {
                 let m = menu_theme(theme, kind);
                 (m.shape, m.radius)
             }
@@ -161,7 +181,7 @@ impl PanelStyle {
     /// dropdown button.
     fn elevation(&self, kind: PanelKind, theme: &Theme) -> f32 {
         match kind {
-            PanelKind::Menu | PanelKind::Bar => self
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => self
                 .elevation
                 .or(menu_theme(theme, kind).elevation)
                 .unwrap_or(ELEVATION),
@@ -177,7 +197,9 @@ impl PanelStyle {
     /// transparent one casts nothing (milestone 529).
     fn shadow_color(&self, kind: PanelKind, theme: &Theme) -> Color {
         let themed = match kind {
-            PanelKind::Menu | PanelKind::Bar => menu_theme(theme, kind).shadow_color,
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => {
+                menu_theme(theme, kind).shadow_color
+            }
             PanelKind::Dropdown => theme.widgets.dropdown.menu_shadow_color,
         };
         self.shadow_color.or(themed).unwrap_or(theme.scheme.shadow)
@@ -187,7 +209,7 @@ impl PanelStyle {
     /// reference's for a menu and for a dropdown button's list alike.
     fn padding(&self, kind: PanelKind, theme: Option<&Theme>) -> Insets {
         let themed = theme.and_then(|t| match kind {
-            PanelKind::Menu | PanelKind::Bar => menu_theme(t, kind).padding,
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => menu_theme(t, kind).padding,
             PanelKind::Dropdown => t.widgets.dropdown.menu_padding,
         });
         self.padding
@@ -243,6 +265,9 @@ enum Lead {
     Check(bool),
     /// A picture of the caller's choosing.
     Icon(IconData),
+    /// A dot, drawn only when the row is the one chosen of its group (milestone 809). Like
+    /// a tick, the column is kept either way.
+    Radio(bool),
 }
 
 /// What one row needs **across**, kept where the panel can reach it.
@@ -417,22 +442,54 @@ impl<Msg: Clone> Widget<Msg> for Item<Msg> {
         };
         let style = label_style(self.text_style, Some(theme), self.kind);
         let pad = self.padding(Some(theme));
+        // **Right to left, the row is mirrored** (milestone 809): the mark and the words
+        // on the right, the keys and the chevron on the left. Every place below is worked
+        // out left to right and then put through this, with the width of what is drawn.
+        let rtl = theme.direction.is_rtl();
+        let at = |x: f32, width: f32| {
+            if rtl {
+                bounds.x + bounds.width - (x - bounds.x) - width
+            } else {
+                x
+            }
+        };
         // The mark, centred in its column. A tick that is off draws nothing and still
         // holds its place.
         let mark = match self.lead {
             Some(Lead::Check(on)) => on.then_some(Icons::CHECK),
             Some(Lead::Icon(icon)) => Some(icon),
+            Some(Lead::Radio(on)) => {
+                // The chosen row of a group: a dot, a third of the column, centred in it.
+                if on {
+                    let d = LEAD / 3.0;
+                    let x = at(bounds.x + pad.left + (LEAD - d) * 0.5, d);
+                    let y = bounds.y + (bounds.height - d) * 0.5;
+                    scene.draw_rect(
+                        Rect::new(x, y, d, d),
+                        ink.fade(o),
+                        d * 0.5,
+                        0.0,
+                        Color::TRANSPARENT,
+                    );
+                }
+                None
+            }
             None => None,
         };
         if let Some(icon) = mark {
             let y = bounds.y + (bounds.height - LEAD) * 0.5;
-            let path = icon.placed(LEAD, bounds.x + pad.left, y, theme.direction);
+            let path = icon.placed(LEAD, at(bounds.x + pad.left, LEAD), y, theme.direction);
             scene.fill_path(&path, ink.fade(o));
         }
         let ty = bounds.y + (bounds.height - style.line_height()) * 0.5;
         if let Some(label) = &self.label {
+            let width = if rtl {
+                frus_text::measure_resolved(label, &style).width
+            } else {
+                0.0
+            };
             scene.text(
-                Point::new(bounds.x + pad.left + self.lead_room(), ty),
+                Point::new(at(bounds.x + pad.left + self.lead_room(), width), ty),
                 label.clone(),
                 &style,
                 ink.fade(o),
@@ -443,14 +500,15 @@ impl<Msg: Clone> Widget<Msg> for Item<Msg> {
         let chevron_room = if self.submenu {
             let x = bounds.x + bounds.width - pad.right - LEAD;
             let y = bounds.y + (bounds.height - LEAD) * 0.5;
-            let path = Icons::CHEVRON_RIGHT.placed(LEAD, x, y, theme.direction);
+            let path = Icons::CHEVRON_RIGHT.placed(LEAD, at(x, LEAD), y, theme.direction);
             scene.fill_path(&path, ink.fade(o));
             SHORTCUT_GAP + LEAD
         } else {
             0.0
         };
         if let Some(keys) = &self.shortcut {
-            let width = frus_text::measure_resolved(keys, &style).width + chevron_room;
+            let measured = frus_text::measure_resolved(keys, &style).width;
+            let width = measured + chevron_room;
             // **Muted, never the label's ink.** The keys are a reminder of another way
             // in, not a second thing to read.
             let tint = if self.enabled {
@@ -459,7 +517,10 @@ impl<Msg: Clone> Widget<Msg> for Item<Msg> {
                 disabled_content(theme)
             };
             scene.text(
-                Point::new(bounds.x + bounds.width - pad.right - width, ty),
+                Point::new(
+                    at(bounds.x + bounds.width - pad.right - width, measured),
+                    ty,
+                ),
                 keys.clone(),
                 &style,
                 tint.fade(o),
@@ -509,6 +570,7 @@ impl<Msg: Clone> Widget<Msg> for Item<Msg> {
         // announces nothing here and leaves that to whatever they drew.
         let (role, toggled) = match self.lead {
             Some(Lead::Check(on)) => (frus_core::Role::CheckBox, Some(on)),
+            Some(Lead::Radio(on)) => (frus_core::Role::RadioButton, Some(on)),
             _ => (frus_core::Role::Button, None),
         };
         let mut spoken = self.label.clone().unwrap_or_default();
@@ -737,7 +799,7 @@ impl<Msg: Clone> Widget<Msg> for Panel<Msg> {
         // says so with its shadow. A desktop's menus draw a hairline as well
         // (milestone 636).
         let border = match self.kind {
-            PanelKind::Menu | PanelKind::Bar => {
+            PanelKind::Menu | PanelKind::Bar | PanelKind::Context => {
                 self.look.border.or(menu_theme(theme, self.kind).border)
             }
             PanelKind::Dropdown => None,
@@ -874,6 +936,18 @@ impl<Msg> MenuItem<Msg> {
     pub fn checked(label: impl Into<String>, checked: bool, message: Msg) -> Self {
         Self {
             lead: Some(Lead::Check(checked)),
+            ..Self::new(label, message)
+        }
+    }
+
+    /// A row that is **one choice of a group**, marked with a dot when it is the one
+    /// chosen (milestone 809): a sort order, a zoom level. Announced as a radio button.
+    ///
+    /// Like [`checked`](Self::checked), it says what the state *is*; choosing it is the
+    /// application's message.
+    pub fn radio(label: impl Into<String>, selected: bool, message: Msg) -> Self {
+        Self {
+            lead: Some(Lead::Radio(selected)),
             ..Self::new(label, message)
         }
     }

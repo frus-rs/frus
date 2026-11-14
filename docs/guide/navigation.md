@@ -325,6 +325,92 @@ field, and is never left open by a screen that has gone. `BottomSheet::new(open)
 shape for a sheet that rises from the bottom (`.sheet(content)`, `.body(screen)`,
 `.on_dismiss(..)`), and so are `SimpleDialog`, `Dialog`, `MenuAnchor` and `PopupMenuButton`.
 
+## Menus, cards and panels over the screen
+
+Four more pieces of the screen keep their state the same way: a field of the state, and a
+message that hands back the new value.
+
+- **`CommandPalette`** wraps the screen and finds a command by typing: a fuzzy match, the
+  matched letters marked, groups, the keys shown on the right, Up, Down, Enter and Escape. It
+  opens on the key you give `open_on`. An application fetching results itself turns off
+  `filter` and says `loading` while they come.
+- **`ContextMenu`** wraps part of the screen and opens its menu where a right-click or a long
+  press landed: `MenuItem`s (ticks, `MenuItem::radio` choices, keys, rules, unavailable rows) and
+  `SubmenuButton`s, with the menu bar's keyboard.
+- **`ResizablePanels`** puts panels side by side, or one above the other, with a handle
+  between each two that the pointer, a finger or the arrow keys move. Each panel has a least
+  and a largest share and may collapse. Save `sizes()` to bring the layout back.
+- **`HoverCard`** needs no state at all: it opens when the pointer rests on its anchor, or
+  after a long press, and closes when the pointer leaves.
+
+```rust
+use frus::{
+    CommandPalette, CommandPaletteState, ContextMenu, ContextMenuState, HoverCard, KeyStroke,
+    MenuItem, PaletteCommand, ResizablePanel, ResizablePanels, ResizablePanelsState, ShortcutKey,
+    State, StateContext, StatefulWidget, Text, Widget,
+};
+
+struct Editor;
+
+struct EditorState {
+    palette: CommandPaletteState,
+    menu: ContextMenuState,
+    panels: ResizablePanelsState,
+    saved: bool,
+}
+
+impl StatefulWidget for Editor {
+    type State = EditorState;
+    fn create_state(&self) -> EditorState {
+        EditorState {
+            palette: CommandPaletteState::closed(),
+            menu: ContextMenuState::closed(),
+            panels: ResizablePanelsState::new([0.3, 0.7]),
+            saved: false,
+        }
+    }
+}
+
+impl State for EditorState {
+    type Widget = Editor;
+
+    fn build(&self, cx: &StateContext<Self>) -> Box<dyn Widget> {
+        let save = cx.callback(|s: &mut Self| {
+            s.saved = true;
+            // A command or a row is one message: close what sent it.
+            s.palette = CommandPaletteState::closed();
+            s.menu = ContextMenuState::closed();
+        });
+        let files = HoverCard::new(Text::new("notes.md")).content(Text::new("Edited today"));
+        let page = ContextMenu::new(
+            Text::new(if self.saved { "Saved" } else { "Unsaved" }),
+            &self.menu,
+            cx.handler(|s: &mut Self, menu: ContextMenuState| s.menu = menu),
+        )
+        .item(MenuItem::new("Save", save.clone()).shortcut("Ctrl+S"));
+        let panels = ResizablePanels::horizontal(
+            &self.panels,
+            cx.handler(|s: &mut Self, panels: ResizablePanelsState| s.panels = panels),
+        )
+        .panel(ResizablePanel::new(files).min(0.2).collapsible(true))
+        .panel(ResizablePanel::new(page));
+        Box::new(
+            CommandPalette::new(
+                panels,
+                &self.palette,
+                cx.handler(|s: &mut Self, palette: CommandPaletteState| s.palette = palette),
+            )
+            .open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl())
+            .command(PaletteCommand::new("Save", save).group("File").shortcut("Ctrl+S")),
+        )
+    }
+}
+```
+
+Each of them takes its look from its own builders first, then from the theme
+(`theme.widgets.command_palette`, `context_menu`, `resizable_panels`, `hover_card`), and
+mirrors itself in right-to-left text.
+
 ## Tabs and drawers
 
 `TabBar` with a `TabBarView`, `NavigationBar`, `NavigationRail` and `NavigationDrawer` switch

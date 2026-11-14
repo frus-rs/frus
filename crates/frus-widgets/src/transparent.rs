@@ -681,6 +681,14 @@ macro_rules! forward_transparent {
                 self.inner.overlay_follows_anchor_width()
             }
 
+            fn overlay_at(&self) -> Option<frus_core::Point> {
+                self.inner.overlay_at()
+            }
+
+            fn hover_card(&self) -> Option<$crate::HoverCardTiming> {
+                self.inner.hover_card()
+            }
+
             fn anim_target(&self) -> Option<f32> {
                 self.inner.anim_target()
             }
@@ -939,6 +947,14 @@ macro_rules! forward_gesture_hooks {
 
         fn on_secondary_tap(&self) -> Option<Msg> {
             self.inner.on_secondary_tap()
+        }
+
+        fn on_secondary_tap_at(&self, at: frus_core::Point) -> Option<Msg> {
+            self.inner.on_secondary_tap_at(at)
+        }
+
+        fn on_long_press_at(&self, at: frus_core::Point) -> Option<Msg> {
+            self.inner.on_long_press_at(at)
         }
 
         fn pan_axis(&self) -> Option<$crate::PanAxis> {

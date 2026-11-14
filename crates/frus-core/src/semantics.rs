@@ -42,6 +42,12 @@ pub enum Role {
     ListItem,
     /// A progress bar (`value`).
     ProgressBar,
+    /// A window over the page that takes the reader's attention until it is closed: a
+    /// command palette, a dialog (milestone 809).
+    Dialog,
+    /// The handle between two panels that moves the boundary between them, with the
+    /// first panel's share as its range (milestone 809).
+    Splitter,
 }
 
 /// The checked state of a toggleable control (checkbox, switch, radio).
