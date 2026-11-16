@@ -561,6 +561,10 @@ macro_rules! forward_transparent {
                 self.inner.clips_to_box()
             }
 
+            fn marquee(&self) -> Option<$crate::marquee::MarqueeMotion> {
+                self.inner.marquee()
+            }
+
             fn hero_tag(&self) -> Option<u64> {
                 self.inner.hero_tag()
             }
