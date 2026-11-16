@@ -58,6 +58,8 @@ fn aria_role(role: Role) -> &'static str {
         // A focusable separator with a value is the splitter of the accessibility
         // specification's window-splitter pattern.
         Role::Splitter => "separator",
+        Role::Tree => "tree",
+        Role::TreeItem => "treeitem",
     }
 }
 
@@ -357,6 +359,20 @@ fn apply(el: &HtmlElement, sem: &SemanticsProperties) {
     match sem.toggled {
         Toggled::None => {
             element.remove_attribute("aria-checked").ok();
+            element.remove_attribute("aria-selected").ok();
+        }
+        // A tree's item is selected, not ticked (milestone 811).
+        toggled if sem.role == Role::TreeItem => {
+            element
+                .set_attribute(
+                    "aria-selected",
+                    if toggled == Toggled::True {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                )
+                .ok();
         }
         Toggled::False => {
             element.set_attribute("aria-checked", "false").ok();
@@ -436,6 +452,8 @@ mod tests {
         assert_eq!(aria_role(Role::CheckBox), "checkbox");
         assert_eq!(aria_role(Role::Slider), "slider");
         assert_eq!(aria_role(Role::ProgressBar), "progressbar");
+        assert_eq!(aria_role(Role::Tree), "tree");
+        assert_eq!(aria_role(Role::TreeItem), "treeitem");
         assert_eq!(aria_role(Role::TextInput), "textbox");
         assert_eq!(aria_role(Role::Dialog), "dialog");
         assert_eq!(aria_role(Role::Splitter), "separator");
