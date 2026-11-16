@@ -74,6 +74,12 @@ pub trait Localizations {
         "Close"
     }
 
+    /// What a reader hears on an Apple-style alert or action sheet as it opens
+    /// (`alertDialogLabel`).
+    fn alert_dialog_label(&self) -> &str {
+        "Alert"
+    }
+
     /// What a reader hears on the control that opens a side panel
     /// (`openAppDrawerTooltip`).
     ///
@@ -436,6 +442,10 @@ impl Localizations for French {
 
     fn close_button_label(&self) -> &str {
         "Fermer"
+    }
+
+    fn alert_dialog_label(&self) -> &str {
+        "Alerte"
     }
 
     fn open_drawer_label(&self) -> &str {

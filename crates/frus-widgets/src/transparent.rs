@@ -685,6 +685,10 @@ macro_rules! forward_transparent {
                 self.inner.overlay_at()
             }
 
+            fn overlay_presentation(&self) -> Option<$crate::OverlayPresentation> {
+                self.inner.overlay_presentation()
+            }
+
             fn hover_card(&self) -> Option<$crate::HoverCardTiming> {
                 self.inner.hover_card()
             }
@@ -707,6 +711,10 @@ macro_rules! forward_transparent {
 
             fn opacity_group(&self) -> Option<f32> {
                 self.inner.opacity_group()
+            }
+
+            fn pressed_opacity(&self) -> Option<f32> {
+                self.inner.pressed_opacity()
             }
 
             fn anim_color(&self) -> Option<frus_core::Color> {

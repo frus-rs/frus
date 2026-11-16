@@ -3023,6 +3023,7 @@ type Overlay<'a, Msg> = (
     bool,
     Option<frus_core::Color>,
     std::rc::Rc<Theme>,
+    Option<crate::OverlayPresentation>,
 );
 
 struct Builder<'a, Msg> {
@@ -3978,6 +3979,33 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             self.walk_node(widget, id, translation, clip, rects, index);
             self.apply_barrier(barrier, &base, id, own);
             return;
+        }
+
+        // A **press fade** (`Widget::pressed_opacity`, milestone 812): the widget's own fill
+        // and everything inside it dim together while it is held, by the press's progress,
+        // eased. At rest — the usual case — no layer at all.
+        if let Some(pressed) = widget.pressed_opacity() {
+            let held = self.runtime.input.status_for(id).interaction
+                == crate::interaction::Interaction::Pressed;
+            let progress = self
+                .runtime
+                .press_progress_or(id, if held { 1.0 } else { 0.0 });
+            let opacity = crate::cupertinobutton::pressed_fade(pressed, progress);
+            if opacity < 0.999 {
+                let start = self.scene.primitives().len();
+                self.walk_node(widget, id, translation, clip, rects, index);
+                let group = self.scene.split_off(start);
+                self.scene.push_primitive(Primitive::Layer {
+                    primitives: group,
+                    opacity,
+                    clip,
+                    clip_shape: ClipShape::Rect,
+                    transform: None,
+                    filter: LayerFilter::NONE,
+                    owner: id.as_u64(),
+                });
+                return;
+            }
         }
 
         // An opacity group: the subtree is painted normally, then its range of primitives is
@@ -5976,6 +6004,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     widget.overlay_follows_anchor_width(),
                     widget.overlay_scrim(&self.theme),
                     self.theme.clone(),
+                    widget.overlay_presentation(),
                 ));
             }
         } else {
@@ -6505,6 +6534,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             false,
             None,
             self.theme.clone(),
+            None,
         ));
     }
 
@@ -6625,6 +6655,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             false,
             None,
             self.theme.clone(),
+            None,
         ));
     }
 
@@ -6643,6 +6674,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             follows,
             scrim,
             theme,
+            presentation,
         )) = self.overlays.pop()
         {
             // The application's snack bar, already shown inside a scaffold's own layout —
@@ -6956,7 +6988,29 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             }
 
             let mut index = 0;
-            self.walk(content, oid, pos, window, &rects, &mut index);
+            // An entrance of its own (milestone 812): the content faded and scaled about its
+            // centre by the overlay's progress, as one layer. Shown whole, no layer at all.
+            let (opacity, scale) = presentation.map_or((1.0, 1.0), |p| p.at(progress));
+            if opacity < 0.999 || (scale - 1.0).abs() > 1e-4 {
+                let centre = Point::new(pos.0 + size.width * 0.5, pos.1 + size.height * 0.5);
+                let matrix = Affine::scale(scale, scale).about(centre);
+                let p0 = self.scene.primitives().len();
+                let base = self.xform_base();
+                self.walk(content, oid, pos, window, &rects, &mut index);
+                let group = self.scene.split_off(p0);
+                self.scene.push_primitive(Primitive::Layer {
+                    primitives: group,
+                    opacity: opacity.max(0.0),
+                    clip: window,
+                    clip_shape: ClipShape::Rect,
+                    transform: ((scale - 1.0).abs() > 1e-4).then(|| LayerTransform::new(matrix)),
+                    filter: LayerFilter::NONE,
+                    owner: oid.as_u64(),
+                });
+                self.transform_interaction_registries(&base, matrix);
+            } else {
+                self.walk(content, oid, pos, window, &rects, &mut index);
+            }
             self.theme = outer;
         }
     }

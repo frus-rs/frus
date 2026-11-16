@@ -14,6 +14,7 @@ mod board;
 mod browser;
 mod camera;
 mod charts;
+mod cupertino;
 mod data;
 mod grid;
 mod journal;
@@ -35,6 +36,7 @@ pub(crate) use board::*;
 pub(crate) use browser::*;
 pub(crate) use camera::*;
 pub(crate) use charts::*;
+pub(crate) use cupertino::*;
 pub(crate) use data::*;
 pub(crate) use grid::*;
 pub(crate) use journal::*;
@@ -95,6 +97,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
         GoRoute::new("shop", |_, _| ShopPage.into_widget()),
         GoRoute::new("overlays", |_, _| OverlaysPage.into_widget()),
+        GoRoute::new("cupertino", |_, _| CupertinoPage.into_widget()),
         task,
     ])])
 }
