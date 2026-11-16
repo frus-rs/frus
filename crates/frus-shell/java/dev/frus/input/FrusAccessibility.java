@@ -58,6 +58,8 @@ public final class FrusAccessibility extends View {
     /** {@code android.R.id.accessibilityActionSetProgress}. */
     private static final int ACTION_SET_PROGRESS = 0x0102003d;
     private static final int NO_FOCUS = Integer.MIN_VALUE;
+    /** The id of a row's first named action (milestone 810); the native side's CUSTOM_BASE. */
+    private static final int CUSTOM_BASE = 0x7e000000;
     /** How long content changes are gathered into one event, as views do. */
     private static final long CONTENT_CHANGE_DELAY_MS = 100;
 
@@ -74,6 +76,8 @@ public final class FrusAccessibility extends View {
         final String[] texts;
         final String[] descriptions;
         final String[] hints;
+        /** Each row's named actions, one line each, or null (milestone 810). */
+        final String[] customs;
         final float[] ranges;
         final int[] scrolls;
         /** The native view each row stands for (milestone 794), or -1. */
@@ -82,7 +86,7 @@ public final class FrusAccessibility extends View {
 
         Tree(int[] ids, int[] parents, int[] bounds, int[] flags, int[] actions,
                 String[] classes, String[] texts, String[] descriptions, String[] hints,
-                float[] ranges, int[] scrolls, int[] embeds) {
+                String[] customs, float[] ranges, int[] scrolls, int[] embeds) {
             this.ids = ids;
             this.parents = parents;
             this.bounds = bounds;
@@ -92,6 +96,7 @@ public final class FrusAccessibility extends View {
             this.texts = texts;
             this.descriptions = descriptions;
             this.hints = hints;
+            this.customs = customs;
             this.ranges = ranges;
             this.scrolls = scrolls;
             this.embeds = embeds;
@@ -107,7 +112,7 @@ public final class FrusAccessibility extends View {
 
     private static final Tree EMPTY = new Tree(new int[0], new int[0], new int[0], new int[0],
             new int[0], new String[0], new String[0], new String[0], new String[0],
-            new float[0], new int[0], new int[0]);
+            new String[0], new float[0], new int[0], new int[0]);
 
     /** The tree the screen reader reads; replaced only on the UI thread. */
     private Tree tree = EMPTY;
@@ -150,14 +155,15 @@ public final class FrusAccessibility extends View {
     /** A new tree, the events that say what changed, and words to read out ({@code null} for none). */
     public static void publish(int[] ids, int[] parents, int[] bounds, int[] flags,
             int[] actions, String[] classes, String[] texts, String[] descriptions,
-            String[] hints, float[] ranges, int[] scrolls, int[] embeds, final int[] events,
+            String[] hints, String[] customs, float[] ranges, int[] scrolls, int[] embeds,
+            final int[] events,
             final String[] eventTexts, final String announce) {
         final FrusAccessibility view = instance;
         if (view == null) {
             return;
         }
         final Tree next = new Tree(ids, parents, bounds, flags, actions, classes, texts,
-                descriptions, hints, ranges, scrolls, embeds);
+                descriptions, hints, customs, ranges, scrolls, embeds);
         view.post(new Runnable() {
             @Override
             public void run() {
@@ -409,6 +415,14 @@ public final class FrusAccessibility extends View {
             if (t.actions[i] != 0) {
                 info.addAction(t.actions[i]);
             }
+            if (t.customs[i] != null && Build.VERSION.SDK_INT >= 21) {
+                // Named actions (milestone 810): TalkBack lists them in its actions menu.
+                String[] names = t.customs[i].split("\n");
+                for (int k = 0; k < names.length; k++) {
+                    info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                            CUSTOM_BASE + k, names[k]));
+                }
+            }
             boolean focused = accessibilityFocus == id;
             info.setAccessibilityFocused(focused);
             info.addAction(focused
@@ -473,6 +487,11 @@ public final class FrusAccessibility extends View {
                             AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE));
                     return true;
                 default:
+                    if (action >= CUSTOM_BASE && t.customs[i] != null
+                            && action - CUSTOM_BASE < t.customs[i].split("\n").length) {
+                        nativePerform(id, action, null, 0f);
+                        return true;
+                    }
                     if ((t.actions[i] & action) == 0 || Integer.bitCount(action) != 1) {
                         return false;
                     }

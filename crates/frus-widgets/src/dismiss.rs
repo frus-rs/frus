@@ -152,6 +152,78 @@ pub enum DismissPhase {
     Fly,
     /// Out of sight: the box is shrinking, and the message follows.
     Collapse,
+    /// A row of actions (milestone 810): released, gliding to where it rests — open on its
+    /// actions, or closed.
+    Settle,
+    /// A row of actions resting **open**, its actions showing.
+    Open,
+}
+
+/// How a [`SwipeActions`](crate::SwipeActions) row reveals its actions rather than leaving
+/// (milestone 810). The sides are **physical**: the row has resolved its reading direction
+/// already.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct RevealSpec {
+    /// The width of the actions on the left, uncovered by a swipe to the right. `0` for
+    /// none, which refuses that swipe.
+    pub left: f32,
+    /// The width of the actions on the right, uncovered by a swipe to the left.
+    pub right: f32,
+    /// A swipe to the right all the way performs the left side's primary action.
+    pub full_left: bool,
+    /// A swipe to the left all the way performs the right side's primary action.
+    pub full_right: bool,
+    /// How far, as a share of the row, a swipe must go to be a full one.
+    pub full_threshold: f32,
+    /// The rows of which only one is open at a time.
+    pub group: Option<u64>,
+}
+
+impl RevealSpec {
+    /// The share of a row `extent` wide the actions on the side `sign` uncovers take.
+    fn panel(&self, sign: f32, extent: f32) -> f32 {
+        let px = if sign > 0.0 { self.left } else { self.right };
+        (px / extent.max(1.0)).clamp(0.0, 1.0)
+    }
+
+    /// How far the row may travel towards `sign`: the whole row for a side that swipes in
+    /// full, its actions' width for one that does not, nothing for a side with none.
+    fn reach(&self, sign: f32, extent: f32) -> f32 {
+        let panel = self.panel(sign, extent);
+        let full = if sign > 0.0 {
+            self.full_left
+        } else {
+            self.full_right
+        };
+        if panel <= 0.0 {
+            0.0
+        } else if full {
+            1.0
+        } else {
+            panel
+        }
+    }
+}
+
+/// What the keyboard asks of a row of actions (milestone 810), carried out on the next
+/// frame.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) enum RevealRequest {
+    /// Open on the actions to the left (`true`) or to the right.
+    Open(bool),
+    /// Close.
+    Close,
+}
+
+thread_local! {
+    static REVEAL_REQUESTS: std::cell::RefCell<Vec<(WidgetId, RevealRequest)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Asks row `id` to open or close on the next frame.
+#[inline(never)]
+pub(crate) fn request_reveal(id: WidgetId, request: RevealRequest) {
+    REVEAL_REQUESTS.with(|r| r.borrow_mut().push((id, request)));
 }
 
 /// The retained state of one dismissible item.
@@ -168,6 +240,12 @@ pub struct DismissState {
     elapsed: f32,
     /// The way it went, once that is settled.
     direction: Option<DismissDirection>,
+    /// Where a settling row of actions comes to rest.
+    target: f32,
+    /// A full swipe's action, told on the first frame of the settle.
+    fire: Option<DismissDirection>,
+    /// The group of rows of which only one is open.
+    group: Option<u64>,
 }
 
 impl Default for DismissState {
@@ -179,6 +257,9 @@ impl Default for DismissState {
             from: 0.0,
             elapsed: 0.0,
             direction: None,
+            target: 0.0,
+            fire: None,
+            group: None,
         }
     }
 }
@@ -296,7 +377,102 @@ impl DismissState {
                 }
                 (true, None)
             }
+            DismissPhase::Settle => {
+                // A full swipe's action goes the moment it is let go of; the row closing
+                // behind it is only the picture catching up.
+                let fired = self.fire.take();
+                self.elapsed += dt;
+                let t = (self.elapsed / MOVEMENT_TIME).clamp(0.0, 1.0);
+                let eased = 1.0 - (1.0 - t).powi(3);
+                self.progress = self.from + (self.target - self.from) * eased;
+                if t >= 1.0 {
+                    self.progress = self.target;
+                    self.phase = if self.target == 0.0 {
+                        DismissPhase::Restore
+                    } else {
+                        DismissPhase::Open
+                    };
+                }
+                (t < 1.0, fired)
+            }
+            DismissPhase::Open => (false, None),
         }
+    }
+
+    /// `true` while a row of actions is open or on its way to opening.
+    pub fn is_open(&self) -> bool {
+        match self.phase {
+            DismissPhase::Open => true,
+            DismissPhase::Settle => self.target != 0.0,
+            _ => false,
+        }
+    }
+
+    /// A row of actions moved by `delta` px: picked up wherever it was — open, settling —
+    /// and kept within what its sides reveal.
+    fn reveal_drag(&mut self, delta: f32, extent: f32, reveal: &RevealSpec) {
+        if extent <= 0.0 {
+            return;
+        }
+        self.phase = DismissPhase::Drag;
+        self.fire = None;
+        self.group = reveal.group;
+        let next = self.progress + delta / extent;
+        self.progress = next.clamp(-reveal.reach(-1.0, extent), reveal.reach(1.0, extent));
+    }
+
+    /// A row of actions let go of. A swipe past the full-swipe line performs the primary
+    /// action of the side it uncovered and closes; a fling or a swipe past half the actions
+    /// opens on them; anything else closes. A cancelled gesture closes.
+    fn reveal_release(
+        &mut self,
+        velocity: f32,
+        cross: f32,
+        extent: f32,
+        reveal: &RevealSpec,
+        cancelled: bool,
+    ) {
+        if self.phase != DismissPhase::Drag {
+            return;
+        }
+        let p = self.progress;
+        let sign = p.signum();
+        let panel = reveal.panel(sign, extent);
+        let full = if p > 0.0 {
+            reveal.full_left
+        } else {
+            reveal.full_right
+        };
+        let along = velocity.abs() - cross.abs() >= MIN_FLING_VELOCITY_DELTA
+            && velocity.abs() >= MIN_FLING_VELOCITY;
+        let opening = along && velocity.signum() == sign;
+        let closing = along && velocity.signum() != sign;
+        self.fire = None;
+        let target = if cancelled || p == 0.0 {
+            0.0
+        } else if full && p.abs() >= reveal.full_threshold {
+            self.fire = Some(if p > 0.0 {
+                DismissDirection::ToEnd
+            } else {
+                DismissDirection::ToStart
+            });
+            0.0
+        } else if closing {
+            0.0
+        } else if opening || p.abs() >= panel * 0.5 {
+            sign * panel
+        } else {
+            0.0
+        };
+        self.settle_to(target);
+    }
+
+    /// Glides to `target` from wherever the row is.
+    fn settle_to(&mut self, target: f32) {
+        self.phase = DismissPhase::Settle;
+        self.from = self.progress;
+        self.target = target;
+        self.elapsed = 0.0;
     }
 
     /// `true` once there is nothing left to show or animate.
@@ -313,6 +489,9 @@ pub struct DismissSpec {
     pub axis: DismissAxis,
     /// Fraction of the extent a drag must cover to dismiss on release.
     pub threshold: f32,
+    /// Reveal actions and rest open rather than leave (milestone 810): a
+    /// [`SwipeActions`](crate::SwipeActions) row.
+    pub reveal: Option<RevealSpec>,
 }
 
 impl Default for DismissSpec {
@@ -320,6 +499,7 @@ impl Default for DismissSpec {
         Self {
             axis: DismissAxis::Horizontal,
             threshold: DISMISS_THRESHOLD,
+            reveal: None,
         }
     }
 }
@@ -524,15 +704,42 @@ pub fn revealed_strip(rect: Rect, progress: f32) -> Rect {
 
 /// Advances every dismissible of the frame by `dt`, dropping those that have finished.
 /// Returns `(still animating, the items whose gap has just closed)`.
+#[inline(never)]
 pub(crate) fn advance_all(
     states: &mut std::collections::HashMap<WidgetId, DismissState>,
     items: &[Dismissable],
     dt: f32,
 ) -> (bool, Vec<(WidgetId, DismissDirection)>) {
-    if states.is_empty() {
-        return (false, Vec::new());
-    }
+    let requests = REVEAL_REQUESTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
     let mut animating = false;
+    for (id, request) in requests {
+        let Some(item) = items.iter().find(|i| i.id == id) else {
+            continue;
+        };
+        let Some(reveal) = item.spec.reveal else {
+            continue;
+        };
+        let extent = item.extent();
+        if let RevealRequest::Open(_) = request {
+            close_group(states, id, reveal.group);
+        }
+        let state = states.entry(id).or_default();
+        state.group = reveal.group;
+        let target = match request {
+            RevealRequest::Open(left) => {
+                let sign = if left { 1.0 } else { -1.0 };
+                sign * reveal.panel(sign, extent)
+            }
+            RevealRequest::Close => 0.0,
+        };
+        if state.progress != target {
+            state.settle_to(target);
+            animating = true;
+        }
+    }
+    if states.is_empty() {
+        return (animating, Vec::new());
+    }
     let mut finished = Vec::new();
     states.retain(|id, state| {
         // An item that has left the tree keeps no claim on the frame — except while it
@@ -574,6 +781,97 @@ pub(crate) fn release_of(
     states
         .get_mut(&id)
         .and_then(|s| s.release(velocity, cross, axis, threshold))
+}
+
+/// Closes every open row of `group` but `keep`: only one row of a group is open at a time.
+fn close_group(
+    states: &mut std::collections::HashMap<WidgetId, DismissState>,
+    keep: WidgetId,
+    group: Option<u64>,
+) {
+    let Some(group) = group else {
+        return;
+    };
+    for (id, state) in states.iter_mut() {
+        if *id != keep && state.group == Some(group) && state.is_open() {
+            state.settle_to(0.0);
+        }
+    }
+}
+
+/// Moves item `item` by `delta` px along its axis: a row of actions revealing them, any
+/// other dismissible sliding away (milestone 810).
+pub(crate) fn swipe_drag(
+    states: &mut std::collections::HashMap<WidgetId, DismissState>,
+    item: &Dismissable,
+    delta: f32,
+) {
+    match item.spec.reveal {
+        Some(reveal) => {
+            let starting = states
+                .get(&item.id)
+                .is_none_or(|s| s.phase != DismissPhase::Drag);
+            if starting {
+                close_group(states, item.id, reveal.group);
+            }
+            states
+                .entry(item.id)
+                .or_default()
+                .reveal_drag(delta, item.extent(), &reveal);
+        }
+        None => drag_into(states, item.id, delta, item.extent(), item.spec.axis),
+    }
+}
+
+/// Lets go of item `item`, at `velocity` px/s along its axis and `cross` across it.
+/// `cancelled` for a gesture the platform took back: it never dismisses or fires.
+pub(crate) fn swipe_release(
+    states: &mut std::collections::HashMap<WidgetId, DismissState>,
+    item: &Dismissable,
+    velocity: f32,
+    cross: f32,
+    cancelled: bool,
+) {
+    match item.spec.reveal {
+        Some(reveal) => {
+            if let Some(state) = states.get_mut(&item.id) {
+                state.reveal_release(velocity, cross, item.extent(), &reveal, cancelled);
+            }
+        }
+        None => {
+            let threshold = if cancelled {
+                f32::INFINITY
+            } else {
+                item.spec.threshold
+            };
+            let (velocity, cross) = if cancelled {
+                (0.0, 0.0)
+            } else {
+                (velocity, cross)
+            };
+            release_of(states, item.id, velocity, cross, item.spec.axis, threshold);
+        }
+    }
+}
+
+/// The rows of actions open, or opening.
+pub(crate) fn open_rows(
+    states: &std::collections::HashMap<WidgetId, DismissState>,
+) -> Vec<WidgetId> {
+    states
+        .iter()
+        .filter(|(_, s)| s.is_open())
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+/// Closes every open row of actions.
+pub(crate) fn close_all(states: &mut std::collections::HashMap<WidgetId, DismissState>) {
+    for state in states.values_mut() {
+        if state.is_open() {
+            state.settle_to(0.0);
+        }
+    }
 }
 
 #[cfg(test)]
