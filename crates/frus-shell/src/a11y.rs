@@ -55,6 +55,8 @@ fn to_ak_role(role: Role) -> AkRole {
         Role::ProgressBar => AkRole::ProgressIndicator,
         Role::Dialog => AkRole::Dialog,
         Role::Splitter => AkRole::Splitter,
+        Role::Tree => AkRole::Tree,
+        Role::TreeItem => AkRole::TreeItem,
     }
 }
 
@@ -96,6 +98,8 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
     }
     match sem.toggled {
         Toggled::None => {}
+        // A tree's item is selected, not ticked (milestone 811).
+        toggled if sem.role == Role::TreeItem => node.set_selected(toggled == Toggled::True),
         Toggled::False => node.set_toggled(AkToggled::False),
         Toggled::True => node.set_toggled(AkToggled::True),
         Toggled::Mixed => node.set_toggled(AkToggled::Mixed),
@@ -401,6 +405,25 @@ mod tests {
         assert_eq!(to_ak_role(Role::ProgressBar), AkRole::ProgressIndicator);
         assert_eq!(to_ak_role(Role::Dialog), AkRole::Dialog);
         assert_eq!(to_ak_role(Role::Splitter), AkRole::Splitter);
+        assert_eq!(to_ak_role(Role::Tree), AkRole::Tree);
+        assert_eq!(to_ak_role(Role::TreeItem), AkRole::TreeItem);
+    }
+
+    /// **A tree's item is selected, not ticked**, and says whether it is open (milestone
+    /// 811).
+    #[test]
+    fn a_tree_item_is_selected_and_expanded() {
+        let item = to_ak_node(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            &sem(Role::TreeItem)
+                .label("src")
+                .toggled(true)
+                .expanded(false),
+        );
+        assert_eq!(item.role(), AkRole::TreeItem);
+        assert_eq!(item.is_selected(), Some(true));
+        assert_eq!(item.toggled(), None);
+        assert_eq!(item.is_expanded(), Some(false));
     }
 
     #[test]

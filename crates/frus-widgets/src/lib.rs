@@ -82,6 +82,7 @@ mod editing;
 mod expanded;
 mod expansionpanel;
 mod fab;
+mod filetree;
 mod filters;
 mod fittedbox;
 mod flex;
@@ -132,6 +133,7 @@ mod hovercard;
 mod keepalive;
 mod keyboarddismiss;
 mod keyed;
+mod kpicard;
 mod layoutbuilder;
 mod lazy;
 pub mod licenses;
@@ -147,6 +149,7 @@ pub mod locale;
 pub mod localizations;
 #[cfg(feature = "lottie")]
 mod lottie;
+mod marquee;
 mod media;
 mod mediascope;
 mod menu;
@@ -189,6 +192,7 @@ mod resizable;
 mod responsive;
 mod restoration;
 mod richtext;
+mod rollingdigits;
 mod rotatedbox;
 mod router;
 mod rowcolumn;
@@ -211,10 +215,12 @@ mod shadowprobe;
 mod shapes;
 mod sheet;
 mod shortcuts;
+mod sidebar;
 mod skeleton;
 mod slider;
 mod slidershape;
 mod spacer;
+mod sparkline;
 mod spinner;
 mod stack;
 mod stepper;
@@ -426,6 +432,9 @@ pub use expandrail::{
 pub use expansionpanel::{ExpansionPanel, ExpansionPanelList};
 pub use fab::{FabSize, FloatingActionButton};
 pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
+pub use filetree::{
+    FileNode, FileNodeKind, FileTree, FileTreeTheme, FILE_TREE_INDENT, FILE_TREE_ROW_HEIGHT,
+};
 pub use filters::{BackdropFilter, BackdropGroup, ColorFiltered, ImageFiltered, ShaderMask};
 pub use fittedbox::FittedBox;
 pub use flex::{Flex, ListBody, Wrap};
@@ -477,6 +486,7 @@ pub use kbd::Kbd;
 pub use keepalive::KeepAlive;
 pub use keyboarddismiss::{KeyboardDismissBehavior, TapOutside};
 pub use keyed::{ChildKey, Keyed};
+pub use kpicard::{KpiCard, KpiCardTheme, KpiTrend};
 pub use layoutbuilder::LayoutBuilder;
 pub use licenses::{AboutDialog, AboutListTile, LicenseNotice, LicensePage, Package};
 pub use list::{ListView, VirtualList};
@@ -497,6 +507,9 @@ pub use locale::Locale;
 pub use localizations::{English, French, Localizations};
 #[cfg(feature = "lottie")]
 pub use lottie::Lottie;
+pub use marquee::{
+    Marquee, MarqueeMotion, MarqueeTheme, MARQUEE_GAP, MARQUEE_PAUSE, MARQUEE_VELOCITY,
+};
 pub use media::{
     Accessibility, AccessibilityOverrides, Brightness, Edges, MediaQuery, SurfaceGuard,
 };
@@ -571,6 +584,7 @@ pub use resizable::{ResizablePanel, ResizablePanels, ResizablePanelsState, Resiz
 pub use responsive::{responsive, Responsive};
 pub use restoration::{restoration_scope, RestorableValue, Restoration, RestorationBucket};
 pub use richtext::RichText;
+pub use rollingdigits::{RollingDigits, RollingDigitsTheme};
 pub use rotatedbox::RotatedBox;
 pub use router::{
     GoRoute, GoRouter, GoRouterState, NavigationShell, PopResult, RouteChange, RouteChangeKind,
@@ -617,6 +631,10 @@ pub use shortcuts::{
     ActionListener, Actions, CallbackShortcuts, FocusableActionDetector, Intent, KeyStroke,
     KeyboardListener, ShortcutKey, Shortcuts,
 };
+pub use sidebar::{
+    Sidebar, SidebarItem, SidebarTheme, SIDEBAR_BREAKPOINT, SIDEBAR_COLLAPSED_WIDTH,
+    SIDEBAR_EXPANDED_WIDTH,
+};
 pub use skeleton::Skeleton;
 pub use slider::{RangeSlider, ShowValueIndicator, Slider, SliderInteraction};
 pub use slidershape::{
@@ -632,6 +650,7 @@ pub use sliver::{
     SliverPersistentHeader, SliverToBoxAdapter, DEFAULT_CACHE_EXTENT,
 };
 pub use spacer::Spacer;
+pub use sparkline::{Sparkline, SparklineTheme, SPARKLINE_HEIGHT};
 pub use spinner::CircularProgressIndicator;
 pub use stack::{Clip, IndexedStack, Stack, StackFit};
 pub use stepper::Stepper;

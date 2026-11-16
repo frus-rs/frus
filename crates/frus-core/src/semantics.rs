@@ -48,6 +48,11 @@ pub enum Role {
     /// The handle between two panels that moves the boundary between them, with the
     /// first panel's share as its range (milestone 809).
     Splitter,
+    /// A hierarchy of items that open and close: a file explorer, an outline.
+    Tree,
+    /// An item of a [`Tree`](Role::Tree): its `expanded` state says whether it is open, and
+    /// `toggled` whether it is selected.
+    TreeItem,
 }
 
 /// The checked state of a toggleable control (checkbox, switch, radio).

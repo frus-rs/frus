@@ -130,6 +130,18 @@ pub struct WidgetThemes {
     pub nav_rail: NavRailTheme,
     /// Defaults for [`ExpandableNavigationRail`](crate::ExpandableNavigationRail).
     pub expandable_rail: crate::ExpandableRailTheme,
+    /// Defaults for [`Marquee`](crate::Marquee).
+    pub marquee: crate::MarqueeTheme,
+    /// Defaults for [`RollingDigits`](crate::RollingDigits).
+    pub rolling_digits: crate::RollingDigitsTheme,
+    /// Defaults for [`KpiCard`](crate::KpiCard).
+    pub kpi_card: crate::KpiCardTheme,
+    /// Defaults for [`Sparkline`](crate::Sparkline).
+    pub sparkline: crate::SparklineTheme,
+    /// Defaults for [`FileTree`](crate::FileTree).
+    pub file_tree: crate::FileTreeTheme,
+    /// Defaults for [`Sidebar`](crate::Sidebar).
+    pub sidebar: crate::SidebarTheme,
     /// Defaults for [`GlassSurface`](crate::GlassSurface).
     pub glass: crate::GlassTheme,
     /// Defaults for [`NavigationDrawer`](crate::NavigationDrawer).

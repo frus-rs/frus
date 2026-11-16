@@ -15,6 +15,7 @@ mod browser;
 mod camera;
 mod charts;
 mod data;
+mod display;
 mod grid;
 mod inputs;
 mod journal;
@@ -37,6 +38,7 @@ pub(crate) use browser::*;
 pub(crate) use camera::*;
 pub(crate) use charts::*;
 pub(crate) use data::*;
+pub(crate) use display::*;
 pub(crate) use grid::*;
 pub(crate) use inputs::*;
 pub(crate) use journal::*;
@@ -102,6 +104,7 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("empty", |_, _| EmptyPage.into_widget()),
         GoRoute::new("swipe", |_, _| SwipePage.into_widget()),
         GoRoute::new("wheel", |_, _| WheelPage.into_widget()),
+        GoRoute::new("display", |_, _| DisplayPage.into_widget()),
         task,
     ])])
 }

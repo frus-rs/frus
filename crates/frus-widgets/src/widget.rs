@@ -1140,6 +1140,16 @@ pub trait Widget<Msg = crate::callback::Callback> {
         false
     }
 
+    /// If the child of the box this widget's
+    /// [`constraints_transform`](Self::constraints_transform) makes **scrolls by itself
+    /// when it is wider than the box** — a [`crate::Marquee`] — how it moves (milestone
+    /// 811). The walk slides the child along with the clock, draws the second child (a
+    /// copy) a gap behind it so the loop has no seam, and asks for frames only while the
+    /// child overflows and motion is allowed. `None` — the default — and nothing moves.
+    fn marquee(&self) -> Option<crate::marquee::MarqueeMotion> {
+        None
+    }
+
     /// If the widget builds its content **from its actual box**, returns the
     /// `size → widget` factory. The content is built on the fly: no retained state
     /// and no overlay (like a virtualised list item).
@@ -2472,6 +2482,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn clips_to_box(&self) -> bool {
         (**self).clips_to_box()
+    }
+    fn marquee(&self) -> Option<crate::marquee::MarqueeMotion> {
+        (**self).marquee()
     }
     fn hero_tag(&self) -> Option<u64> {
         (**self).hero_tag()

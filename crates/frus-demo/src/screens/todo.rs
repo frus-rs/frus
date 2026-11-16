@@ -677,6 +677,7 @@ impl HomeState {
                         link("Empty state →", "/empty"),
                         link("Swipe actions →", "/swipe"),
                         link("Wheel picker →", "/wheel"),
+                        link("Display widgets →", "/display"),
                     ]
                     .gap(12.0),
                 ),

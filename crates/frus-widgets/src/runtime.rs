@@ -891,9 +891,33 @@ pub struct Runtime {
     /// Where each open hover card was placed, by the card's own id: the pointer on the card
     /// keeps it open, and the next frame's walk needs to know where it was.
     pub(crate) card_rects: RefCell<HashMap<WidgetId, Rect>>,
+    /// When each scrolling [`Marquee`](crate::Marquee) started, and when it was last drawn
+    /// (milestone 811): a marquee runs from its own start, with its pause, rather than
+    /// from wherever the application's clock happens to be.
+    pub(crate) marquees: RefCell<HashMap<WidgetId, (f32, f32)>>,
 }
 
 impl Runtime {
+    /// How long the marquee `id` has been scrolling, in seconds, as of this frame.
+    ///
+    /// A marquee not drawn for more than a second — gone from the screen, or still because
+    /// it fitted — starts again from its beginning; the entries of those are forgotten here,
+    /// so the table holds only what is moving.
+    pub(crate) fn marquee_elapsed(&self, id: WidgetId) -> f32 {
+        let now = self.time;
+        let mut marquees = self.marquees.borrow_mut();
+        let entry = marquees.entry(id).or_insert((now, now));
+        if now - entry.1 > 1.0 || now < entry.0 {
+            *entry = (now, now);
+        }
+        entry.1 = now;
+        let elapsed = now - entry.0;
+        if marquees.len() > 64 {
+            marquees.retain(|_, (_, seen)| now - *seen <= 1.0);
+        }
+        elapsed
+    }
+
     /// Whether the focus is shown now: [`Traditional`](crate::FocusHighlightMode::Traditional)
     /// after a key, [`Touch`](crate::FocusHighlightMode::Touch) after a touch or a click.
     pub fn focus_highlight_mode(&self) -> crate::FocusHighlightMode {
