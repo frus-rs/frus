@@ -29,6 +29,23 @@ any release may break.
   scales into place). A new localised entry, `Localizations::alert_dialog_label`. The demo
   has an "Apple-style widgets" screen.
 
+- **Display widgets** (J811). `Marquee`: text, or any child, that scrolls sideways in a loop
+  when it does not fit — still and free when it fits, waiting at the start of each lap,
+  followed by a copy so the loop has no seam, held still under reduced motion; a new walk hook
+  (`Widget::marquee`) moves it with the clock without rebuilding anything. `RollingDigits`: a
+  number whose digits roll like an odometer's wheels to each new value, on the theme's motion
+  tokens, in cells of one width, with grouping, decimals, prefix and suffix; instant under
+  reduced motion. `KpiCard`: label, value (text, rolling digits or any widget), change coloured
+  by the scheme's success and error colours (`lower_is_better` swaps them), an optional
+  `Sparkline` and slots for every part; read as one element. `FileTree`: folders and files
+  with lazy children (a loading row until they come), chevron to open, row to select, Right and
+  Left to open and close, rows read as tree items with their expanded and selected state.
+  `Sidebar`: side navigation in groups that folds into an icon rail with tooltips, its width
+  animated; with a body, a drawer with a scrim on a narrow window, closed by Back. Every colour,
+  size and timing has a `theme.widgets` entry. New semantic roles `Role::Tree` and
+  `Role::TreeItem`, mapped for AccessKit, ARIA and Android. The demo has a "Display widgets"
+  screen.
+
 - **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
   (J809). A command palette over the screen, opened by a key the application chooses (its
   rows are `PaletteCommand`s, a name that leaves `Command` to effects): fuzzy

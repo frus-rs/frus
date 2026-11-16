@@ -237,7 +237,8 @@ impl VirtualIds {
 /// `EditText` "edit box", an `ActionBar$Tab` "tab".
 fn class_name(role: Role) -> &'static str {
     match role {
-        Role::None | Role::ListItem | Role::Dialog => "android.view.View",
+        Role::None | Role::ListItem | Role::Dialog | Role::TreeItem => "android.view.View",
+        Role::Tree => "android.widget.ListView",
         Role::Label | Role::Heading => "android.widget.TextView",
         Role::Button | Role::Link => "android.widget.Button",
         Role::CheckBox => "android.widget.CheckBox",
@@ -344,8 +345,8 @@ fn to_row(
     }
     match (sem.role, sem.toggled) {
         (_, Toggled::None) => {}
-        // A tab is the selected one, not a ticked one.
-        (Role::Tab, toggled) => {
+        // A tab, or a tree's item, is the selected one, not a ticked one.
+        (Role::Tab | Role::TreeItem, toggled) => {
             if toggled == Toggled::True {
                 flags |= flag::SELECTED;
             }
