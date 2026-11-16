@@ -8,11 +8,26 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 809 so far, each documenting the objective, the alternatives
+> record — one per step, 813 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The framework's own words in German, Spanish, Japanese, Thai and Vietnamese** (J813). The
+  built-in tables now cover seven languages, and an application that lists one in its supported
+  locales gets it with no table of its own: the shell installs
+  `localizations::for_locale(resolved)` when `Application::localizations` answers `None`
+  (`es-MX` gets Spanish, a language frus has no words in gets English). Each table carries the
+  calendar's first day, the order a date is typed in, how a month and year, a day of a month and
+  a whole date are written, digit grouping and whether the clock has twenty-four hours. New
+  entries, all seven languages: the selection bar's Cut, Copy, Paste and Select all (they were
+  English constants; `EditAction::label` now returns a `String` and `ToolbarItem::label` a
+  `Cow<str>`, so tell built-in items apart with `edit_action`), an app bar's overflow button, a
+  chip's remove cross, the licence page's button and counts, `date_input_format` (the order a
+  typed date is read in, which the hint's letters cannot say in every language), `month_year`,
+  `short_month_day`, `long_date` and `uses_24_hour_clock`. `parse_date` and `format_date` accept
+  `.` and `-` patterns. Japanese and Thai need a font with their letters on the web; desktop and
+  Android draw them with the system's fonts.
 - **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
   (J809). A command palette over the screen, opened by a key the application chooses (its
   rows are `PaletteCommand`s, a name that leaves `Command` to effects): fuzzy

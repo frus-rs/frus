@@ -487,7 +487,9 @@ pub use local_task::{
     local_tasks, run_local_tasks, set_local_wake, spawn_local, TaskHandle, TaskScope,
 };
 pub use locale::Locale;
-pub use localizations::{English, French, Localizations};
+pub use localizations::{
+    English, French, German, Japanese, Localizations, Spanish, Thai, Vietnamese,
+};
 #[cfg(feature = "lottie")]
 pub use lottie::Lottie;
 pub use media::{

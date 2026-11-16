@@ -481,14 +481,7 @@ impl<Msg: Clone + 'static> DatePicker<Msg> {
                     .on_press(on_nav(-1)),
             )
             .child(Flex::row().flex(1.0))
-            .child(
-                Text::new(format!(
-                    "{} {}",
-                    crate::localizations::of().months()[(month - 1) as usize],
-                    year
-                ))
-                .size(16.0),
-            )
+            .child(Text::new(crate::localizations::of().month_year(month, year)).size(16.0))
             .child(Flex::row().flex(1.0))
             .child(
                 crate::IconButton::new(crate::icons::Icons::CHEVRON_RIGHT)

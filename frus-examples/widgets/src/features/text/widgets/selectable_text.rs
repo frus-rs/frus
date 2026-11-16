@@ -62,7 +62,7 @@ pub fn example() -> Box<dyn Widget> {
                 .selection_toolbar(|_, items: Vec<ToolbarItem>| {
                     items
                         .into_iter()
-                        .filter(|item| item.label() == "Copy")
+                        .filter(|item| item.edit_action() == Some(frus::EditAction::Copy))
                         .collect()
                 }),
         )),

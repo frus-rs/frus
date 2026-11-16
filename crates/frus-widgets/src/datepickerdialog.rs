@@ -199,18 +199,24 @@ pub fn month_lead_cells(year: i32, month: u32, first_day_of_week: usize) -> usiz
     (first as isize - first_day_of_week as isize).rem_euclid(7) as usize
 }
 
-/// Reads a typed date in the order of `pattern` (`mm/dd/yyyy`, `dd/mm/yyyy`, or the
-/// locale's own letters: `j` and `a` are read as day and year). `/`, `-` and `.` all split.
+/// Reads a typed date in the order of `pattern` (`mm/dd/yyyy`, `dd.mm.yyyy`,
+/// `yyyy/mm/dd` — what [`Localizations::date_input_format`] answers; French letters, `j` and
+/// `a`, are read as day and year too). `/`, `-` and `.` all split, in the text and in the
+/// pattern.
 ///
 /// ```
 /// use frus_widgets::{parse_date, CalendarDate};
 /// assert_eq!(parse_date("8/17/2026", "mm/dd/yyyy"), Some(CalendarDate::new(2026, 8, 17)));
 /// assert_eq!(parse_date("17.08.2026", "jj/mm/aaaa"), Some(CalendarDate::new(2026, 8, 17)));
+/// assert_eq!(parse_date("17.8.2026", "dd.mm.yyyy"), Some(CalendarDate::new(2026, 8, 17)));
+/// assert_eq!(parse_date("2026/8/17", "yyyy/mm/dd"), Some(CalendarDate::new(2026, 8, 17)));
 /// assert_eq!(parse_date("2/30/2026", "mm/dd/yyyy"), None);
 /// ```
+///
+/// [`Localizations::date_input_format`]: crate::Localizations::date_input_format
 pub fn parse_date(text: &str, pattern: &str) -> Option<CalendarDate> {
     let order: Vec<char> = pattern
-        .split('/')
+        .split(DATE_SEPARATORS)
         .filter_map(|p| p.chars().next())
         .map(|c| match c.to_ascii_lowercase() {
             'j' | 't' => 'd',
@@ -244,24 +250,32 @@ pub fn parse_date(text: &str, pattern: &str) -> Option<CalendarDate> {
     CalendarDate::is_valid(y, m, d).then(|| CalendarDate::new(y, m, d))
 }
 
-/// Writes a date in the order of `pattern`, zero-padded.
+/// Writes a date in the order of `pattern`, zero-padded, with the pattern's own separator.
 ///
 /// ```
 /// use frus_widgets::{format_date, CalendarDate};
 /// assert_eq!(format_date(CalendarDate::new(2026, 8, 7), "mm/dd/yyyy"), "08/07/2026");
 /// assert_eq!(format_date(CalendarDate::new(2026, 8, 7), "jj/mm/aaaa"), "07/08/2026");
+/// assert_eq!(format_date(CalendarDate::new(2026, 8, 7), "dd.mm.yyyy"), "07.08.2026");
 /// ```
 pub fn format_date(date: CalendarDate, pattern: &str) -> String {
+    let separator = pattern
+        .chars()
+        .find(|c| DATE_SEPARATORS.contains(c))
+        .unwrap_or('/');
     pattern
-        .split('/')
+        .split(DATE_SEPARATORS)
         .map(|p| match p.chars().next().map(|c| c.to_ascii_lowercase()) {
             Some('y' | 'a') => format!("{:04}", date.year),
             Some('m') => format!("{:02}", date.month),
             _ => format!("{:02}", date.day),
         })
         .collect::<Vec<_>>()
-        .join("/")
+        .join(separator.encode_utf8(&mut [0; 4]))
 }
+
+/// What splits a date's day, month and year, typed or in a pattern.
+const DATE_SEPARATORS: [char; 3] = ['/', '-', '.'];
 
 // ---------------------------------------------------------------------------------------
 // The model
@@ -362,7 +376,7 @@ impl DatePickerModel {
         let (first, last) = (first.min(last), first.max(last));
         let today = CalendarDate::today();
         let open = initial.unwrap_or(today).clamp_to(first, last);
-        let pattern = crate::localizations::of().date_input_pattern().to_string();
+        let pattern = crate::localizations::of().date_input_format().to_string();
         Self {
             mode: DatePickerMode::Calendar,
             range: false,
@@ -394,7 +408,7 @@ impl DatePickerModel {
         let mut m = Self::single(start, first, last);
         m.range = true;
         m.end = end.map(|d| d.clamp_to(m.first, m.last));
-        let pattern = crate::localizations::of().date_input_pattern().to_string();
+        let pattern = crate::localizations::of().date_input_format().to_string();
         m.input_end = m.end.map(|d| format_date(d, &pattern)).unwrap_or_default();
         m
     }
@@ -425,7 +439,7 @@ impl DatePickerModel {
             return;
         }
         self.cursor = date;
-        let pattern = crate::localizations::of().date_input_pattern().to_string();
+        let pattern = crate::localizations::of().date_input_format().to_string();
         if !self.range {
             self.selected = Some(date);
             self.input = format_date(date, &pattern);
@@ -447,7 +461,7 @@ impl DatePickerModel {
 
     fn read(&self, text: &str) -> Result<CalendarDate, String> {
         let l10n = crate::localizations::of();
-        match parse_date(text, l10n.date_input_pattern()) {
+        match parse_date(text, l10n.date_input_format()) {
             None => Err(l10n.invalid_date_label().to_string()),
             Some(d) if !self.allows(d) => Err(l10n.date_out_of_range_label().to_string()),
             Some(d) => Ok(d),
@@ -973,17 +987,9 @@ fn panel<Msg: Clone + 'static>(
         headline_style.color = Some(theme.scheme.on_surface_variant);
     }
     let say = |d: CalendarDate| l10n.medium_date(d.weekday(), d.month, d.day);
-    // A range's ends without their weekdays, in the order the locale writes a date:
-    // "Nov 3", "3 nov.".
-    let month_first = l10n.date_input_pattern().starts_with('m');
-    let short = |d: CalendarDate| {
-        let m = l10n.short_months()[(d.month - 1) as usize];
-        if month_first {
-            format!("{m} {}", d.day)
-        } else {
-            format!("{} {m}", d.day)
-        }
-    };
+    // A range's ends without their weekdays, as the language writes a day of a month:
+    // "Nov 3", "3 nov.", "11月3日".
+    let short = |d: CalendarDate| l10n.short_month_day(d.month, d.day);
     let headline = match (model.range, model.selected, model.end) {
         (false, Some(d), _) => say(d),
         (false, None, _) => help.to_string(),
@@ -1056,7 +1062,7 @@ fn controls<Msg: Clone + 'static>(
 ) -> Flex<Msg> {
     let l10n = crate::localizations::of();
     let (y, m) = model.shown;
-    let label = format!("{} {}", l10n.months()[(m - 1) as usize], y);
+    let label = l10n.month_year(m, y);
     let years = crate::Button::new(label)
         .variant(crate::button::Variant::Text)
         .icon(crate::Icon::new(if model.years {

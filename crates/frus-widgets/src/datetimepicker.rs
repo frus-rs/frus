@@ -59,8 +59,8 @@ impl<Msg: Clone + 'static> DateTimePicker<Msg> {
         let mut children: Vec<Box<dyn Widget<Msg>>> = Vec::new();
         if let Some(day) = day {
             let summary = format!(
-                "{} {day}, {year}  {hour:02}:{minute:02}",
-                crate::localizations::of().months()[(month - 1) as usize]
+                "{}  {hour:02}:{minute:02}",
+                crate::localizations::of().long_date(year, month, day)
             );
             children.push(Box::new(Text::new(summary).size(16.0)));
         }
