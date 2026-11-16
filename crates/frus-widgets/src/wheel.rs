@@ -735,7 +735,10 @@ mod tests {
                 "an echoed value never pulls the wheel back under the finger (row {selected})"
             );
         }
-        assert_eq!(selected, 15, "the application was told of each row on the way");
+        assert_eq!(
+            selected, 15,
+            "the application was told of each row on the way"
+        );
 
         // The finger lets go with a flick onwards: one more row, and it stays there.
         runtime.release_scroll(first.id);
@@ -747,7 +750,10 @@ mod tests {
             }
         }
         let rest = runtime.scroll.get(&first.id).copied().expect("an offset").1;
-        assert_eq!(selected, 16, "the flick turned one row on: {passed} changes");
+        assert_eq!(
+            selected, 16,
+            "the flick turned one row on: {passed} changes"
+        );
         assert!(
             (rest - first.page.expect("paged").offset_of(16)).abs() < 0.5,
             "and the wheel rests on it: {rest}"

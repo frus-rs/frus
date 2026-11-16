@@ -414,7 +414,13 @@ fn build<Msg: Clone + 'static>(p: Parts<Msg>) -> Box<dyn Widget<Msg>> {
         .right(0.0)
         .top((height - extent) / 2.0)
         .height(extent);
-        let mut stack = Stack::new().height(height).layer(band).layer(row);
+        // The stack takes the room it is given: a row of expanded columns has no width of
+        // its own, so a stack sized by it came out zero wide, and every wheel with it.
+        let mut stack = Stack::new()
+            .fit(crate::StackFit::Expand)
+            .height(height)
+            .layer(band)
+            .layer(row);
         if let Some(width) = p.width {
             stack = stack.width(width);
         }
