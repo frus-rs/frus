@@ -96,3 +96,14 @@ The hook is forwarded like the other structural hooks: every transparent wrapper
 - The existing Apple-style dialog tests keep the alert's 45-pixel buttons and the sheet's
   8-pixel edges without their workarounds.
 - The whole workspace's tests, clippy on the host, Android and the web, and the goldens.
+
+### Two goldens changed, and they were wrong before
+
+`m3_rail_collapsed` (the expandable navigation rail, collapsed) failed. The old golden recorded
+the bug itself: each collapsed item went through the expanding rail's own `BoxedItem` adapter,
+so its 6-pixel padding above and below was applied twice. Each item was 80 pixels instead of 68,
+and the last one ran 12 pixels past the rail, with the overflow stripes in the picture. With the
+adapter gone the items are 32 (the indicator) + 4 + the label + 6 + 6, and nothing overflows.
+`m3_rail_expanded` behind it (the same test, which the first failure had hidden) had the
+same fault across: the item row's 20-pixel side padding was applied twice, so the pill started
+40 pixels in instead of 20. Both renderings were accepted.

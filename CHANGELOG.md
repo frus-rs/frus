@@ -62,6 +62,9 @@ any release may break.
   45-pixel button in an expanded slot of a row keeps its 45 pixels. New: the structural hook
   `Widget::fills_flex_share` (forwarded by transparent wrappers) and
   `frus_layout::Layout::clear_min`. The two workarounds in the Apple-style dialogs are gone.
+  A collapsed `ExpandableNavigationRail` padded each item twice the same way (80 pixels instead
+  of 68, overflowing the rail) and set an expanded one's items 40 pixels in instead of 20;
+  two goldens were regenerated.
 
 - **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
   next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for
