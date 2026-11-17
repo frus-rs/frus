@@ -142,7 +142,7 @@ impl<Msg> CupertinoSwitch<Msg> {
         self
     }
 
-    fn live(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         self.enabled && self.on_toggle.is_some()
     }
 
@@ -221,7 +221,7 @@ impl<Msg> Widget<Msg> for CupertinoSwitch<Msg> {
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
         let o = status.opacity * if self.enabled { 1.0 } else { DISABLED_OPACITY };
         let place = self.place(&status);
-        let stretch = if self.live() {
+        let stretch = if self.is_enabled() {
             status.press_progress
         } else {
             0.0
@@ -238,7 +238,7 @@ impl<Msg> Widget<Msg> for CupertinoSwitch<Msg> {
             0.0,
             Color::TRANSPARENT,
         );
-        if self.live() && status.focus_progress > 0.0 {
+        if self.is_enabled() && status.focus_progress > 0.0 {
             let ring = self.focus_color.unwrap_or_else(|| {
                 crate::cupertinobutton::focus_ring_color(self.active_track(theme))
             });
@@ -294,7 +294,7 @@ impl<Msg> Widget<Msg> for CupertinoSwitch<Msg> {
     }
 
     fn pan_axis(&self) -> Option<crate::PanAxis> {
-        self.live().then_some(crate::PanAxis::Horizontal)
+        self.is_enabled().then_some(crate::PanAxis::Horizontal)
     }
 
     /// The thumb follows the finger along the track's inner length, the other way in
@@ -320,13 +320,13 @@ impl<Msg> Widget<Msg> for CupertinoSwitch<Msg> {
     }
 
     fn focusable(&self) -> bool {
-        self.live()
+        self.is_enabled()
     }
 
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         let semantics =
             frus_core::SemanticsProperties::new(frus_core::Role::Switch).toggled(self.on);
-        Some(if self.live() {
+        Some(if self.is_enabled() {
             semantics.clickable()
         } else {
             semantics.disabled(true)

@@ -37,7 +37,8 @@ pub const CUPERTINO_TAB_BAR_BORDER: CupertinoDynamicColor = CupertinoDynamicColo
 pub struct CupertinoTabBarItem {
     icon: IconData,
     active_icon: Option<IconData>,
-    label: Option<String>,
+    label: String,
+    shows_label: bool,
 }
 
 impl CupertinoTabBarItem {
@@ -46,17 +47,19 @@ impl CupertinoTabBarItem {
         Self {
             icon,
             active_icon: None,
-            label: Some(label.into()),
+            label: label.into(),
+            shows_label: true,
         }
     }
 
-    /// A tab with an icon and no label. Name it with [`label`](Self::label) all the same,
-    /// or a screen reader has nothing to say for it.
-    pub fn icon_only(icon: IconData) -> Self {
+    /// A tab with an icon and no label on show. `name` is not drawn; it is what a screen
+    /// reader says for the tab.
+    pub fn icon_only(icon: IconData, name: impl Into<String>) -> Self {
         Self {
             icon,
             active_icon: None,
-            label: None,
+            label: name.into(),
+            shows_label: false,
         }
     }
 
@@ -256,18 +259,15 @@ fn build<Msg: Clone + 'static>(p: Parts<Msg>, theme: &Theme) -> Box<dyn Widget<M
             .child(crate::Expanded::new(crate::Center::new(
                 crate::Icon::new(icon).size(p.icon_size).color(colour),
             )));
-        if let Some(label) = &item.label {
+        if item.shows_label {
             column = column.child(crate::ExcludeSemantics::new(
-                crate::Text::styled(label.clone(), label_style.color(colour))
+                crate::Text::styled(item.label.clone(), label_style.color(colour))
                     .no_wrap()
                     .ellipsis(),
             ));
         }
         let position = crate::localizations::of().tab_label(index + 1, count);
-        let said = match &item.label {
-            Some(label) => format!("{label}, {position}"),
-            None => position,
-        };
+        let said = format!("{}, {position}", item.label);
         let semantics = frus_core::SemanticsProperties::new(frus_core::Role::Tab)
             .label(said)
             .toggled(selected)
@@ -441,5 +441,33 @@ mod tests {
         let ui = lay(two(), &Theme::light().rtl());
         let id = ui.hit(Point::new(240.0, 420.0)).expect("a tab");
         assert_eq!(ui.msg_for(id), Some(Msg::Tab(0)));
+    }
+
+    /// **An icon-only tab draws no label and is still named to a screen reader.**
+    #[test]
+    fn an_icon_only_tab_is_named_but_not_labelled() {
+        let theme = Theme::light();
+        let bar = CupertinoTabBar::new(0, Msg::Tab)
+            .item(CupertinoTabBarItem::icon_only(Icons::HOME, "Home"))
+            .item(CupertinoTabBarItem::new(Icons::SETTINGS, "Settings"));
+        let ui = lay(bar, &theme);
+        let texts: Vec<String> = ui
+            .scene()
+            .all()
+            .into_iter()
+            .filter_map(|p| match p {
+                Primitive::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!texts.iter().any(|t| t == "Home"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Settings"), "{texts:?}");
+        let names: Vec<_> = ui
+            .semantics()
+            .iter()
+            .filter(|(_, _, s)| s.role == frus_core::Role::Tab)
+            .map(|(_, _, s)| s.label.clone())
+            .collect();
+        assert_eq!(names[0].as_deref(), Some("Home, Tab 1 of 2"));
     }
 }
