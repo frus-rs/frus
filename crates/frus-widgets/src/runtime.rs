@@ -2058,7 +2058,19 @@ impl Runtime {
             } else {
                 (area.metrics_y(current.1), velocity.1)
             };
-            let motion = physics.page_ballistic(metrics, velocity, snap.extent);
+            // A region of rows that **coasts** (a wheel, milestone 814) is the exception: its
+            // release speed says how far, so it is filtered like any fling's — a release too
+            // slow to be one goes back to the nearest row rather than on to the next.
+            let motion = if snap.coasting {
+                let velocity = if velocity.abs() >= physics.min_fling_velocity() {
+                    velocity
+                } else {
+                    0.0
+                };
+                physics.item_ballistic(metrics, velocity, snap.extent)
+            } else {
+                physics.page_ballistic(metrics, velocity, snap.extent)
+            };
             if motion.is_none() {
                 return false;
             }
@@ -3060,6 +3072,7 @@ mod tests {
             refresh: None,
             page: Some(crate::PageSnap {
                 snapping: true,
+                coasting: false,
                 extent: 300.0,
                 count: 3,
                 requested,

@@ -499,6 +499,11 @@ impl State for WheelState {
                 ))
                 .size(18.0)
                 .color(theme.on_surface),
+            )
+            .child(
+                text("Flick a wheel hard: it spins through many values and settles on one.")
+                    .size(13.0)
+                    .color(theme.scheme.on_surface_variant),
             );
         page(cx.router(), "Wheel picker", &theme, body)
     }
