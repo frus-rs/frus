@@ -127,10 +127,21 @@ nothing now means "the framework's words for the resolved language".
   `install_ambient`: `es-MX` → Spanish, `ja-JP` → Japanese, an application language frus has no
   words for → English.
 - The style guide's example is a doctest.
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, the Android
+  (`aarch64-linux-android`) and wasm32 clippy runs, and `cargo test --workspace --exclude
+  frus-gpu --exclude frus-test` all pass (toolchain 1.100). The goldens were not run (see
+  *Not done*).
 
 ## Size
 
-RESULTS_SIZE
+**Not measured.** The Android release build of `frus-hello` against `ci/size-budget.toml` was
+skipped: the build machine's system drive was full when this milestone was checked, and the
+CI `size` job is the measurement of record. An estimate: the five tables are about 330
+strings, most under 40 bytes, plus some 70 small functions each, in the order of 30 kB of a
+13.8 MB library — against a budget of 14.5 MB. The tables are linked whether or not the
+application uses them, because the shell's `for_locale` reaches all of them; if the CI job
+shows more than that, the place to cut is a cargo feature around the five tables, with
+`for_locale` answering English without it.
 
 ## Not done
 
@@ -140,6 +151,10 @@ RESULTS_SIZE
 - **No regional variants**: one Spanish table (Spain's wording) for `es-MX` and `es-419`, one
   German for `de-AT` and `de-CH`.
 - **No Thai digits, no Buddhist era**, deliberately (see *Decisions*).
+- **Goldens not run.** The machine's system drive was full, which WSL (where the goldens run)
+  needs. The English output of every rewired widget is unchanged by construction (the English
+  defaults write the same strings as the code they replace), so no golden should move, but
+  that was not checked.
 - **Not seen on a device or in a browser.** The words were checked through the scene and the
   accessibility tree in tests; Japanese and Thai rendering through the system fonts is
   milestone 784's path and was not re-checked on a phone here.
