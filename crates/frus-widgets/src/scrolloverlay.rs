@@ -57,7 +57,10 @@
 use frus_core::{Rect, Scene, Size};
 use frus_layout::Style;
 
+use std::rc::Rc;
+
 use crate::interaction::Status;
+use crate::nested::{nested_box, Unmargined};
 use crate::theme::Theme;
 use crate::widget::Widget;
 
@@ -77,11 +80,14 @@ pub type OverlayBuilder<Msg> = dyn Fn((f32, f32), Size) -> Box<dyn Widget<Msg>>;
 pub struct ScrollOverlay<Msg = crate::callback::Callback> {
     /// The scroll region, as the one-element slice [`Widget::children`] hands back.
     body: Vec<Box<dyn Widget<Msg>>>,
+    /// The body itself, for its box: the node in `body` holds it without its margin,
+    /// which the overlay leaves around itself (milestone 817).
+    own: Rc<dyn Widget<Msg>>,
     /// `(offset, box) → overlay`, run once per frame the region moves.
     build: Box<OverlayBuilder<Msg>>,
 }
 
-impl<Msg> ScrollOverlay<Msg> {
+impl<Msg: 'static> ScrollOverlay<Msg> {
     /// Draws `build(offset)` over `body`, a scroll region.
     ///
     /// The offset is `(x, y)`, measured from the end each axis starts at — the same
@@ -95,8 +101,10 @@ impl<Msg> ScrollOverlay<Msg> {
         body: impl Widget<Msg> + 'static,
         build: impl Fn((f32, f32), Size) -> W + 'static,
     ) -> Self {
+        let (own, node) = Unmargined::split(Box::new(body));
         Self {
-            body: vec![Box::new(body)],
+            body: vec![node],
+            own,
             build: Box::new(move |offset, size| {
                 Box::new(build(offset, size)) as Box<dyn Widget<Msg>>
             }),
@@ -105,7 +113,7 @@ impl<Msg> ScrollOverlay<Msg> {
 
     /// The body, for the walk that needs it before the children slice is handed out.
     fn inner(&self) -> &dyn Widget<Msg> {
-        self.body[0].as_ref()
+        self.own.as_ref()
     }
 }
 
@@ -114,12 +122,14 @@ impl<Msg: 'static> Widget<Msg> for ScrollOverlay<Msg> {
     /// is what decides the shape: a wrapper with a box of its own would put the region
     /// somewhere other than where the caller placed it, and the overlay would be over the
     /// wrong rectangle.
+    ///
+    /// The box, not the inside of it: the body pads itself (milestone 817).
     fn style(&self) -> Style {
-        self.inner().style()
+        nested_box(self.inner().style())
     }
 
     fn style_themed(&self, theme: &Theme) -> Style {
-        self.inner().style_themed(theme)
+        nested_box(self.inner().style_themed(theme))
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {

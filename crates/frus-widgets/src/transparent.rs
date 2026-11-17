@@ -61,6 +61,7 @@ macro_rules! forward_transparent {
     ($ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
+            $crate::transparent::forward_flex_hook!();
             $crate::transparent::forward_expand_hook!();
             $crate::transparent::forward_gesture_hooks!();
             $crate::transparent::forward_hover_hooks!();
@@ -73,6 +74,7 @@ macro_rules! forward_transparent {
     (gestures $ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
+            $crate::transparent::forward_flex_hook!();
             $crate::transparent::forward_expand_hook!();
             $crate::transparent::forward_hover_hooks!();
             $crate::transparent::forward_listener_hooks!();
@@ -83,6 +85,7 @@ macro_rules! forward_transparent {
     (hover $ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
+            $crate::transparent::forward_flex_hook!();
             $crate::transparent::forward_expand_hook!();
             $crate::transparent::forward_gesture_hooks!();
             $crate::transparent::forward_listener_hooks!();
@@ -93,6 +96,7 @@ macro_rules! forward_transparent {
     (listener $ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
+            $crate::transparent::forward_flex_hook!();
             $crate::transparent::forward_expand_hook!();
             $crate::transparent::forward_gesture_hooks!();
             $crate::transparent::forward_hover_hooks!();
@@ -103,6 +107,18 @@ macro_rules! forward_transparent {
     (expand $ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
+            $crate::transparent::forward_flex_hook!();
+            $crate::transparent::forward_gesture_hooks!();
+            $crate::transparent::forward_hover_hooks!();
+            $crate::transparent::forward_listener_hooks!();
+        });
+    };
+    // A wrapper that **is a flexible child** — `Expanded` and `Flexible` (milestone 817) —
+    // states `fills_flex_share` itself.
+    (flex $ty:ident { $($extra:item)* }) => {
+        $crate::transparent::forward_transparent!(@body $ty {
+            $($extra)*
+            $crate::transparent::forward_expand_hook!();
             $crate::transparent::forward_gesture_hooks!();
             $crate::transparent::forward_hover_hooks!();
             $crate::transparent::forward_listener_hooks!();
@@ -1017,8 +1033,16 @@ macro_rules! forward_hover_hooks {
     };
 }
 
-/// The two listener hooks, forwarded to `inner` — what every transparent wrapper but a
-/// [`crate::Listener`] does with them.
+/// The flexible-child hook, forwarded to `inner` — what every transparent wrapper but an
+/// [`crate::Expanded`] or a [`crate::Flexible`] does with it.
+macro_rules! forward_flex_hook {
+    () => {
+        fn fills_flex_share(&self) -> bool {
+            self.inner.fills_flex_share()
+        }
+    };
+}
+
 macro_rules! forward_expand_hook {
     () => {
         fn expand(
@@ -1034,6 +1058,8 @@ macro_rules! forward_expand_hook {
     };
 }
 
+/// The two listener hooks, forwarded to `inner` — what every transparent wrapper but a
+/// [`crate::Listener`] does with them.
 macro_rules! forward_listener_hooks {
     () => {
         fn pointer_listener(&self) -> bool {
@@ -1047,6 +1073,7 @@ macro_rules! forward_listener_hooks {
 }
 
 pub(crate) use forward_expand_hook;
+pub(crate) use forward_flex_hook;
 pub(crate) use forward_gesture_hooks;
 pub(crate) use forward_hover_hooks;
 pub(crate) use forward_listener_hooks;

@@ -250,10 +250,8 @@ pub(crate) fn big_title<Msg: Clone + 'static>(
         overflow: Some(frus_core::TextOverflow::Ellipsis),
         ..crate::DefaultTextStyle::from_text_style(style)
     };
-    let dressed = crate::Themed::tweak(
-        move |t| t.widgets.text = t.widgets.text.merge(words),
-        BoxedTitle(title),
-    );
+    let dressed =
+        crate::Themed::tweak(move |t| t.widgets.text = t.widgets.text.merge(words), title);
     // The title stands `bottom` above the band's bottom edge and may reach up past the
     // band's top, into the toolbar's room (a medium bar's 48 band is shorter than a
     // headline line and the 20 under it; a collapsing band ends shorter than the line).
@@ -272,25 +270,6 @@ pub(crate) fn big_title<Msg: Clone + 'static>(
                 .natural_height()
                 .alignment(align),
         )
-}
-
-/// A boxed title as a widget, the box being the title's.
-struct BoxedTitle<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for BoxedTitle<Msg> {
-    fn style(&self) -> frus_layout::Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> frus_layout::Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: crate::interaction::Status, _: &Theme, _: &mut frus_core::Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
-    }
 }
 
 impl<Msg: Clone + 'static> Default for AppBar<Msg> {
@@ -887,7 +866,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
                 theme.direction.is_rtl(),
             );
             parts.bottom = Some(match parts.bottom.take() {
-                Some(bottom) => Box::new(Flex::column().child(band).child(BoxedTitle(bottom))),
+                Some(bottom) => Box::new(Flex::column().child(band).child(bottom)),
                 None => Box::new(band),
             });
         }

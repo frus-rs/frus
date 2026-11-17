@@ -449,6 +449,9 @@ pub struct CommandPalette<Msg = crate::callback::Callback> {
     bindings: Vec<(KeyStroke, Msg)>,
     /// `[page]`, or `[page, palette]` while it is open.
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// The child itself, for its box: `children[0]` holds it without its margin, which
+    /// this leaves around itself (milestone 817).
+    own: Option<std::rc::Rc<dyn Widget<Msg>>>,
 }
 
 impl<Msg: Clone + 'static> CommandPalette<Msg> {
@@ -460,6 +463,7 @@ impl<Msg: Clone + 'static> CommandPalette<Msg> {
         on_change: impl Fn(CommandPaletteState) -> R1 + 'static,
     ) -> Self {
         let on_change = crate::callback::handler1(on_change);
+        let (own, node) = crate::nested::Unmargined::split(Box::new(page));
         Self {
             state: state.clone(),
             on_change: Rc::new(on_change),
@@ -474,7 +478,8 @@ impl<Msg: Clone + 'static> CommandPalette<Msg> {
             surface: SurfaceStyle::default(),
             list: ListStyle::default(),
             bindings: Vec::new(),
-            children: vec![Box::new(page)],
+            children: vec![node],
+            own: Some(own),
         }
     }
 
@@ -832,13 +837,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for CommandPalette<Msg> {
     /// The palette is not a box round its page: it is the page, with something that may float
     /// over it.
     fn style_themed(&self, theme: &Theme) -> Style {
-        match self.children.first() {
-            Some(page) => Style {
-                padding: Insets::ZERO,
-                ..page.style_themed(theme)
-            },
-            None => Style::default(),
-        }
+        // And the margin is left once, by this: the child is held without it.
+        self.own
+            .as_ref()
+            .map(|c| crate::nested::nested_box(c.style_themed(theme)))
+            .unwrap_or_default()
     }
 
     fn fill_axes(&self, theme: &Theme) -> crate::widget::FillAxes {

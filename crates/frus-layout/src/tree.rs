@@ -290,6 +290,22 @@ impl<'a, T> Layout<'a, T> {
         self.tree.set_style(node, style).expect("setting a style");
     }
 
+    /// Lifts a node's **least size on one axis**, after it has been built: the floor of a
+    /// child whose size along its parent's line is exactly its share of what is left.
+    ///
+    /// Only the parent can say so, since only the parent knows which axis is its line;
+    /// across the line the child's own floor stands.
+    pub fn clear_min(&mut self, node: NodeId, horizontal: bool) {
+        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let floor = if horizontal {
+            &mut style.min_size.width
+        } else {
+            &mut style.min_size.height
+        };
+        *floor = taffy::style_helpers::length(0.0_f32);
+        self.tree.set_style(node, style).expect("setting a style");
+    }
+
     /// Makes the **root** of a layout fill one axis of whatever room it is computed in.
     ///
     /// A root has no parent to grow into, so the flex machinery `fill_parent` uses has

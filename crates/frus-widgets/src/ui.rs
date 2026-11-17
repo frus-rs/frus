@@ -2823,6 +2823,17 @@ fn build_layout_scoped<'a, Msg>(
                 layout.allow_shrink(*node);
             }
         }
+        // A **tight** flexible child is handed exactly its share along the line, and a
+        // least size of its own gives way to it there; across the line it stands. Only
+        // this box knows which axis is the line (milestone 817).
+        if !style.overlap && style.grid_columns.is_none() {
+            let horizontal = style.flex_direction.is_horizontal();
+            for (child, node) in children.iter().zip(&child_ids) {
+                if child.fills_flex_share() {
+                    layout.clear_min(*node, horizontal);
+                }
+            }
+        }
         // A grid's tiles are all the same shape. The ratio is the *container's*, since a
         // tile cannot know how wide its column came out, and the reference says the same:
         // a grid's delegate hands every child a tight box derived from the track, square

@@ -58,6 +58,9 @@ const RADIUS: f32 = 4.0;
 pub struct Tooltip<Msg = crate::callback::Callback> {
     /// `[child]`, or `[child, bubble]` when there is something to show.
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// The child itself, for its box: `children[0]` holds it without its margin, which
+    /// this leaves around itself (milestone 817).
+    own: Option<std::rc::Rc<dyn Widget<Msg>>>,
     message: String,
     enabled: bool,
     background: Option<Color>,
@@ -78,6 +81,7 @@ impl<Msg: Clone + 'static> Tooltip<Msg> {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             children: Vec::new(),
+            own: None,
             message: message.into(),
             enabled: true,
             background: None,
@@ -93,10 +97,12 @@ impl<Msg: Clone + 'static> Tooltip<Msg> {
     /// The widget the tooltip describes.
     #[must_use]
     pub fn child(mut self, child: impl Widget<Msg> + 'static) -> Self {
+        let (own, node) = crate::nested::Unmargined::split(Box::new(child));
+        self.own = Some(own);
         if self.children.is_empty() {
-            self.children.push(Box::new(child));
+            self.children.push(node);
         } else {
-            self.children[0] = Box::new(child);
+            self.children[0] = node;
         }
         self.rebuild();
         self
@@ -208,13 +214,11 @@ impl<Msg: Clone> Widget<Msg> for Tooltip<Msg> {
         // Everything but the padding, which is the child's own: the child is a node
         // inside this one, and a padding said twice squeezes it by its own room — a
         // button's 24 px either side, since buttons lay out their content (milestone 632).
-        match self.children.first() {
-            Some(child) => Style {
-                padding: frus_core::Insets::ZERO,
-                ..child.style_themed(theme)
-            },
-            None => Style::default(),
-        }
+        // And the margin is left once, by this: the child is held without it.
+        self.own
+            .as_ref()
+            .map(|c| crate::nested::nested_box(c.style_themed(theme)))
+            .unwrap_or_default()
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
@@ -550,5 +554,51 @@ mod tests {
             &Theme::default(),
         );
         assert!(!ui.scene().primitives().is_empty(), "the child is drawn");
+    }
+
+    /// A tooltip takes its child's box, and the child's **margin and padding** come out
+    /// once, as without the tooltip: the margin used to be left twice (milestone 817).
+    #[test]
+    fn a_tooltip_leaves_its_child_s_margin_and_padding_once() {
+        use frus_core::{Color, Rect};
+        // Spaced by 6 around and padded by 4 inside: the red square lands at 10.
+        let spaced = || {
+            Container::<()>::new().margin(6.0).padding(4.0).child(
+                Container::<()>::new()
+                    .width(20.0)
+                    .height(20.0)
+                    .color(Color::rgb(1.0, 0.0, 0.0)),
+            )
+        };
+        let rects = |first: Box<dyn Widget<()>>| {
+            let column: crate::Column<()> = crate::Column::new()
+                .main_axis_size(crate::MainAxisSize::Min)
+                .cross_axis_alignment(frus_layout::Align::Start)
+                .child(first)
+                .child(
+                    Container::<()>::new()
+                        .width(10.0)
+                        .height(10.0)
+                        .color(Color::rgb(0.0, 0.0, 1.0)),
+                );
+            let ui = build_ui(
+                &column,
+                Size::new(300.0, 200.0),
+                &Runtime::default(),
+                &Theme::default(),
+            );
+            ui.scene()
+                .primitives()
+                .iter()
+                .filter_map(|p| match p {
+                    Primitive::Rect { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .collect::<Vec<Rect>>()
+        };
+        let bare = rects(Box::new(spaced()));
+        let wrapped = rects(Box::new(Tooltip::<()>::new("hint").child(spaced())));
+        assert_eq!(bare[0], Rect::new(10.0, 10.0, 20.0, 20.0));
+        assert_eq!(wrapped, bare, "the boxes, as without the tooltip");
     }
 }

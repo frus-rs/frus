@@ -123,6 +123,11 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         }
     }
 
+    /// Forwarded: whichever variant is shown is the flexible child (milestone 817).
+    fn fills_flex_share(&self) -> bool {
+        self.inner.as_ref().is_some_and(|w| w.fills_flex_share())
+    }
+
     fn switches(&self) -> bool {
         self.inner.as_ref().is_some_and(|w| w.switches())
     }

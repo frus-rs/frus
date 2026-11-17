@@ -373,26 +373,7 @@ impl<Msg: Clone + 'static> KpiCard<Msg> {
             ),
             None => Box::new(card),
         };
-        Box::new(crate::Semantics::merge(BoxedCard(card)))
-    }
-}
-
-/// A boxed subtree as a widget.
-struct BoxedCard<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for BoxedCard<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
+        Box::new(crate::Semantics::merge(card))
     }
 }
 

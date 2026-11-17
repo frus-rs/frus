@@ -160,6 +160,9 @@ crate::composite::composite_widget!(RichTooltip);
 struct Host<Msg> {
     /// `[anchor]` or `[anchor, card]`.
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// The child itself, for its box: `children[0]` holds it without its margin, which
+    /// this leaves around itself (milestone 817).
+    own: Option<std::rc::Rc<dyn Widget<Msg>>>,
     pinned: bool,
     on_dismiss: Option<Msg>,
     said: Option<String>,
@@ -173,13 +176,11 @@ impl<Msg: Clone> Widget<Msg> for Host<Msg> {
     /// It is whatever its anchor is, with something floating over it — as the plain
     /// tooltip is.
     fn style_themed(&self, theme: &Theme) -> Style {
-        match self.children.first() {
-            Some(child) => Style {
-                padding: Insets::ZERO,
-                ..child.style_themed(theme)
-            },
-            None => Style::default(),
-        }
+        // And the margin is left once, by this: the child is held without it.
+        self.own
+            .as_ref()
+            .map(|c| crate::nested::nested_box(c.style_themed(theme)))
+            .unwrap_or_default()
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
@@ -295,12 +296,14 @@ fn build<Msg: Clone + 'static>(mut p: Parts<Msg>) -> Box<dyn Widget<Msg>> {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let mut children = vec![anchor];
+        let (own, node) = crate::nested::Unmargined::split(anchor);
+        let mut children = vec![node];
         if shows {
             children.push(Box::new(card) as Box<dyn Widget<Msg>>);
         }
         Box::new(Host {
             children,
+            own: Some(own),
             pinned,
             on_dismiss,
             said: (!said.is_empty()).then_some(said),

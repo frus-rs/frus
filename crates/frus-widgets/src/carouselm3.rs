@@ -711,7 +711,7 @@ impl<Msg: Clone + 'static> Carousel<Msg> {
                     } else {
                         (ShortcutKey::Left, ShortcutKey::Right)
                     };
-                    let focus = crate::Focus::new(BoxedChild(root));
+                    let focus = crate::Focus::new(root);
                     root = Box::new(
                         crate::CallbackShortcuts::new(focus)
                             .bind(KeyStroke::new(back), on(i.saturating_sub(1)))
@@ -722,7 +722,7 @@ impl<Msg: Clone + 'static> Carousel<Msg> {
                 }
                 let mut sem = crate::Semantics::new(
                     frus_core::SemanticsProperties::new(frus_core::Role::None),
-                    BoxedChild(root),
+                    root,
                 );
                 if let Some(label) = label {
                     sem = sem.label(label);
@@ -731,25 +731,6 @@ impl<Msg: Clone + 'static> Carousel<Msg> {
             })
         });
         Box::new(layout.flex(1.0))
-    }
-}
-
-/// A boxed widget as a widget: a pass-through with the child's box.
-struct BoxedChild<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for BoxedChild<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
     }
 }
 
@@ -805,7 +786,7 @@ impl<Msg: Clone + 'static> Overlay<Msg> {
                 (content_len, cross)
             };
             // The content keeps the full item's size; the mask around it narrows.
-            let content = crate::OverflowBox::new(BoxedChild((self.build)(item.index)))
+            let content = crate::OverflowBox::new((self.build)(item.index))
                 .width(cw)
                 .height(ch);
             let mut surface = crate::Container::new()
@@ -829,17 +810,11 @@ impl<Msg: Clone + 'static> Overlay<Msg> {
                 None => Box::new(surface),
             };
             let placed = if self.vertical {
-                crate::Positioned::new(BoxedChild(body))
-                    .top(start)
-                    .left(pad)
+                crate::Positioned::new(body).top(start).left(pad)
             } else if self.rtl {
-                crate::Positioned::new(BoxedChild(body))
-                    .right(start)
-                    .top(pad)
+                crate::Positioned::new(body).right(start).top(pad)
             } else {
-                crate::Positioned::new(BoxedChild(body))
-                    .left(start)
-                    .top(pad)
+                crate::Positioned::new(body).left(start).top(pad)
             };
             stack = stack.layer(placed);
         }

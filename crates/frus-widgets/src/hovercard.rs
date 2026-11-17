@@ -515,6 +515,9 @@ impl HoverCardTheme {
 pub struct HoverCard<Msg = crate::callback::Callback> {
     /// `[anchor]`, or `[anchor, card]` once there is content.
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// The child itself, for its box: `children[0]` holds it without its margin, which
+    /// this leaves around itself (milestone 817).
+    own: Option<std::rc::Rc<dyn Widget<Msg>>>,
     content: Option<Rc<dyn Widget<Msg>>>,
     style: SurfaceStyle,
     gap: Option<f32>,
@@ -528,8 +531,10 @@ impl<Msg: Clone + 'static> HoverCard<Msg> {
     /// A card that will open over `anchor`. Give it something to show with
     /// [`content`](Self::content).
     pub fn new(anchor: impl Widget<Msg> + 'static) -> Self {
+        let (own, node) = crate::nested::Unmargined::split(Box::new(anchor));
         Self {
-            children: vec![Box::new(anchor)],
+            children: vec![node],
+            own: Some(own),
             content: None,
             style: SurfaceStyle::default(),
             gap: None,
@@ -692,13 +697,11 @@ impl<Msg: Clone> Widget<Msg> for HoverCard<Msg> {
     /// A card is not a box round its anchor: it is its anchor, with something that may float
     /// over it. The anchor's structure is forwarded, its padding left to the anchor itself.
     fn style_themed(&self, theme: &Theme) -> Style {
-        match self.children.first() {
-            Some(anchor) => Style {
-                padding: Insets::ZERO,
-                ..anchor.style_themed(theme)
-            },
-            None => Style::default(),
-        }
+        // And the margin is left once, by this: the child is held without it.
+        self.own
+            .as_ref()
+            .map(|c| crate::nested::nested_box(c.style_themed(theme)))
+            .unwrap_or_default()
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
