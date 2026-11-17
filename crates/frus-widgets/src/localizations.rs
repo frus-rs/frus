@@ -34,7 +34,7 @@
 //! # The languages it has
 //!
 //! [`English`], [`French`], [`German`], [`Spanish`], [`Japanese`], [`Thai`] and
-//! [`Vietnamese`] (milestone 813) — [`LANGUAGES`]. [`for_locale`] picks one by language, so
+//! [`Vietnamese`] (milestone 813) — [`LANGUAGES`](crate::localizations::LANGUAGES). [`for_locale`](crate::localizations::for_locale) picks one by language, so
 //! `es-MX` gets Spanish and a language not on the list gets English, and the shell installs
 //! it for an application that gives no table of its own: listing a language in the
 //! application's supported locales is all it takes.
