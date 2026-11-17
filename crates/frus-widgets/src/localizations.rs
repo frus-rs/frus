@@ -884,6 +884,10 @@ impl Localizations for French {
 pub struct German;
 
 impl Localizations for German {
+    fn alert_dialog_label(&self) -> &str {
+        "Benachrichtigung"
+    }
+
     fn back_button_label(&self) -> &str {
         "Zurück"
     }
@@ -1183,6 +1187,10 @@ impl Localizations for German {
 pub struct Spanish;
 
 impl Localizations for Spanish {
+    fn alert_dialog_label(&self) -> &str {
+        "Alerta"
+    }
+
     fn back_button_label(&self) -> &str {
         "Atrás"
     }
@@ -1487,6 +1495,10 @@ impl Localizations for Spanish {
 pub struct Japanese;
 
 impl Localizations for Japanese {
+    fn alert_dialog_label(&self) -> &str {
+        "通知"
+    }
+
     fn back_button_label(&self) -> &str {
         "戻る"
     }
@@ -1777,6 +1789,10 @@ impl Localizations for Japanese {
 pub struct Thai;
 
 impl Localizations for Thai {
+    fn alert_dialog_label(&self) -> &str {
+        "การแจ้งเตือน"
+    }
+
     fn back_button_label(&self) -> &str {
         "กลับ"
     }
@@ -2085,6 +2101,10 @@ impl Localizations for Thai {
 pub struct Vietnamese;
 
 impl Localizations for Vietnamese {
+    fn alert_dialog_label(&self) -> &str {
+        "Thông báo"
+    }
+
     fn back_button_label(&self) -> &str {
         "Quay lại"
     }
