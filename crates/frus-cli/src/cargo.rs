@@ -32,13 +32,23 @@ pub(crate) fn wait_or_cancel(child: &mut Child) -> Result<ExitStatus, String> {
     wait_or(child, &CANCEL)
 }
 
+/// Waits for `child`, or stops it — and what it started — once `stop` is set or `q` pressed.
+pub(crate) fn wait_or_stopped(child: &mut Child, stop: &AtomicBool) -> Result<ExitStatus, String> {
+    wait_until(child, || stop.load(Ordering::SeqCst) || cancelled())
+}
+
 /// Waits for `child`, or stops it once `cancel` is set.
 fn wait_or(child: &mut Child, cancel: &AtomicBool) -> Result<ExitStatus, String> {
+    wait_until(child, || cancel.load(Ordering::SeqCst))
+}
+
+/// Waits for `child`, or stops it once `stop` says so.
+fn wait_until(child: &mut Child, stop: impl Fn() -> bool) -> Result<ExitStatus, String> {
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             return Ok(status);
         }
-        if cancel.load(Ordering::SeqCst) {
+        if stop() {
             stop_tree(child);
             return Err(CANCELLED.into());
         }

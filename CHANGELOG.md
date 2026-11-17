@@ -8,10 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 814 so far, each documenting the objective, the alternatives
+> record — one per step, 816 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Hot reload: web patches apply, a failed build no longer freezes `frus run`** (J816). On
+  the web every patch failed. The page panicked with `LinkError: … wbg_cast …
+  breaks_if_inlined …: function import requires a callable`, because the patch still imported
+  a wasm-bindgen cast descriptor that the page no longer has. The fixed engine (pinned in
+  `hot.rs`, installed on its own at the next `frus run`) makes that import a local stub. In a
+  headless Edge session, five patches applied in the same page load with the state kept.
+  After a compile error, finding where the error is now runs beside the run's loop: keys
+  answer at once and the next save is still patched. Each answer takes 2 s or so, from the
+  engine's own compiler command. The engine always compiles incrementally, so a patch takes
+  2 s instead of 20 when the shell sets `CARGO_INCREMENTAL=0`. On the web, `R` says
+  "Restarted" once the application is up in the page again.
 
 - **Apple-style widgets** (J812): `CupertinoButton` (plain, tinted and filled; small, medium
   and large; dims while pressed), `CupertinoSwitch` (the 51 × 31 track, a thumb that stretches
