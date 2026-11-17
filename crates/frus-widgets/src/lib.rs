@@ -216,6 +216,9 @@ mod spinner;
 mod stack;
 mod stepper;
 mod steps;
+// Milestone 815: a conversation, and a questionnaire one step at a time.
+mod chat;
+mod stepform;
 mod stretch;
 #[cfg(feature = "svg")]
 mod svg;
@@ -341,6 +344,10 @@ pub use carouselm3::{
     CAROUSEL_ITEM_PADDING, CAROUSEL_RADIUS,
 };
 pub use chart::{BarChart, LineChart};
+pub use chat::{
+    chat_time, ChatComposer, ChatList, ChatListState, ChatMessage, ChatStrings, ChatTheme,
+    MessageBubble, MessageStatus, TypingIndicator,
+};
 pub use checkbox::Checkbox;
 pub use chip::{
     Chip, CHIP_BORDER_WIDTH, CHIP_HEIGHT, CHIP_ICON_SIZE, CHIP_LABEL_PADDING, CHIP_PADDING,
@@ -624,6 +631,9 @@ pub use sliver::{
 pub use spacer::Spacer;
 pub use spinner::CircularProgressIndicator;
 pub use stack::{Clip, IndexedStack, Stack, StackFit};
+pub use stepform::{
+    FormStep, StepForm, StepFormState, StepFormStrings, StepFormTheme, StepProgress,
+};
 pub use stepper::Stepper;
 pub use steps::Steps;
 pub use sticky::StickyHeader;

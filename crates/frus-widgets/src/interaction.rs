@@ -139,6 +139,10 @@ pub enum Key {
     Delete,
     /// Enter.
     Enter,
+    /// Shift+Enter: a line break asked for explicitly (milestone 815). A multi-line field
+    /// always breaks the line on it — also one that [submits on
+    /// Enter](crate::TextField::submit_on_enter) — and a single-line field takes it as Enter.
+    LineBreak,
     /// Left arrow (`shift`: extends the selection; `word`: jumps a word, Ctrl).
     Left {
         /// Whether Shift is held: the selection is extended.

@@ -578,6 +578,7 @@ impl<Msg: Clone + 'static> Widget<Msg> for GridView<Msg> {
             // kept, and a cell's key is the strip's business.
             keep_alive: false,
             find_child_index: None,
+            hold_position: false,
         })
     }
 

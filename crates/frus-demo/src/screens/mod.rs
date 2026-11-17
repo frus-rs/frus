@@ -14,6 +14,7 @@ mod board;
 mod browser;
 mod camera;
 mod charts;
+mod conversation;
 mod data;
 mod grid;
 mod journal;
@@ -22,6 +23,7 @@ mod menu;
 mod native;
 mod overlays;
 mod player;
+mod questionnaire;
 mod settings;
 mod sheet;
 mod shop;
@@ -35,6 +37,7 @@ pub(crate) use board::*;
 pub(crate) use browser::*;
 pub(crate) use camera::*;
 pub(crate) use charts::*;
+pub(crate) use conversation::*;
 pub(crate) use data::*;
 pub(crate) use grid::*;
 pub(crate) use journal::*;
@@ -43,6 +46,7 @@ pub(crate) use menu::window;
 pub(crate) use native::*;
 pub(crate) use overlays::*;
 pub(crate) use player::*;
+pub(crate) use questionnaire::*;
 pub(crate) use settings::*;
 pub(crate) use sheet::*;
 pub(crate) use shop::*;
@@ -95,6 +99,8 @@ pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
         GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
         GoRoute::new("shop", |_, _| ShopPage.into_widget()),
         GoRoute::new("overlays", |_, _| OverlaysPage.into_widget()),
+        GoRoute::new("conversation", |_, _| ConversationPage.into_widget()),
+        GoRoute::new("questionnaire", |_, _| QuestionnairePage.into_widget()),
         task,
     ])])
 }

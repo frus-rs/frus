@@ -672,6 +672,8 @@ impl HomeState {
                         link("Web browser →", "/browser"),
                         link("In-app purchases →", "/shop"),
                         link("Overlays and panels →", "/overlays"),
+                        link("Conversation →", "/conversation"),
+                        link("Questionnaire →", "/questionnaire"),
                     ]
                     .gap(12.0),
                 ),

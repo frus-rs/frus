@@ -219,6 +219,12 @@ pub struct WidgetThemes {
     pub command_palette: crate::CommandPaletteTheme,
     /// Defaults for [`ResizablePanels`](crate::ResizablePanels).
     pub resizable_panels: crate::ResizablePanelsTheme,
+    // Milestone 815.
+    /// Defaults for [`ChatList`](crate::ChatList), [`MessageBubble`](crate::MessageBubble)
+    /// and [`ChatComposer`](crate::ChatComposer).
+    pub chat: crate::ChatTheme,
+    /// Defaults for [`StepForm`](crate::StepForm).
+    pub step_form: crate::StepFormTheme,
 }
 
 /// How a selection in text that is not a field looks — a

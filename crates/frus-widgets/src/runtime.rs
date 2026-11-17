@@ -864,6 +864,10 @@ pub struct Runtime {
     pub(crate) item_targets: HashMap<WidgetId, (usize, f32)>,
     /// Requests for an item placed this frame, kept until the next applies them.
     item_targets_pending: RefCell<Vec<(WidgetId, (usize, f32))>>,
+    /// The last "back to the start" generation each list was built with (milestone 815).
+    list_generations: RefCell<HashMap<WidgetId, u32>>,
+    /// Lists asked to glide back to their start this frame, applied at the next.
+    pub(crate) to_start_pending: RefCell<Vec<WidgetId>>,
     /// Time elapsed (seconds) since start-up, for continuous animations.
     pub time: f32,
     /// Was the last interaction a **keyboard** one? The generic focus ring is only
@@ -2255,6 +2259,26 @@ impl Runtime {
             }
         }
         self.follow_item_targets();
+        // Lists sent back to their start (milestone 815): a glide, which a finger on the list
+        // refuses, as it refuses any request.
+        for id in std::mem::take(self.to_start_pending.get_mut()) {
+            if self.scroll_held == Some(id) {
+                continue;
+            }
+            self.scroll_ballistic.remove(&id);
+            self.item_targets.remove(&id);
+            self.scroll_target.insert(id, (0.0, 0.0));
+        }
+    }
+
+    /// Records list `id` built with "back to the start" `generation` (milestone 815): a
+    /// generation other than the last one seen is a request, and the list glides to its start
+    /// at the next frame. The first one seen only starts the count.
+    pub(crate) fn list_to_start(&self, id: WidgetId, generation: u32) {
+        let before = self.list_generations.borrow_mut().insert(id, generation);
+        if before.is_some_and(|before| before != generation) {
+            self.to_start_pending.borrow_mut().push(id);
+        }
     }
 
     /// Places each requested item again from what the last frame measured, and lets the

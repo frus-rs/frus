@@ -8,10 +8,28 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 809 so far, each documenting the objective, the alternatives
+> record — one per step, 815 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A conversation: `ChatList`, `MessageBubble`, `TypingIndicator`, `ChatComposer`; and a
+  questionnaire: `StepForm`, `FormStep`** (J815). The conversation rests at its newest message
+  and follows it as messages arrive; a reader who scrolled up keeps their place, and a button
+  offers to jump back with how many came in. Only the rows in view are built. Bubbles are grouped
+  by sender and time, with avatar, name, time and status (sending, sent, delivered, read, failed
+  with a retry), selectable words and an attachment slot; dates go between days; three dots say
+  who is typing; the composer grows to six lines, sends only something, and sends on Enter on a
+  desktop. The questionnaire asks one step at a time with a progress (numbered steps, a bar on a
+  phone, or dots), validation through `Form` rules that refuses Next and shows why, optional
+  steps with Skip, a review step, the answers kept in `StepFormState`, a completion message, and
+  steps that slide over the theme's motion durations. Both are themable
+  (`theme.widgets.chat`, `theme.widgets.step_form`), their words replaceable (`ChatStrings`,
+  `StepFormStrings`), right to left and accessible. Also: `ListView::hold_position` keeps the rows
+  in view in place when items arrive before them; `Key::LineBreak` (Shift+Enter) and
+  `TextField::submit_on_enter`; `Steps` marks skipped and refused steps, can leave markers inert
+  (`on_tap_where`), reads as a progress, and now puts its first step on the right in a
+  right-to-left layout, where its hotspots already were.
 
 - **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
   (J809). A command palette over the screen, opened by a key the application chooses (its
