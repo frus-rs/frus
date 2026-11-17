@@ -244,6 +244,12 @@ pub struct WidgetThemes {
     pub swipe_actions: crate::SwipeActionsTheme,
     /// Defaults for [`WheelPicker`](crate::WheelPicker).
     pub wheel_picker: crate::WheelPickerTheme,
+    // Milestone 815.
+    /// Defaults for [`ChatList`](crate::ChatList), [`MessageBubble`](crate::MessageBubble)
+    /// and [`ChatComposer`](crate::ChatComposer).
+    pub chat: crate::ChatTheme,
+    /// Defaults for [`StepForm`](crate::StepForm).
+    pub step_form: crate::StepFormTheme,
 }
 
 /// How a selection in text that is not a field looks — a

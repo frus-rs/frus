@@ -272,6 +272,9 @@ pub struct TextField<Msg = crate::callback::Callback> {
     /// **Multi-line** field: Enter inserts a line break (instead of submitting), the box
     /// is `rows` lines tall and scrolls vertically to follow the caret.
     multiline: bool,
+    /// Whether Enter submits a multi-line field, Shift+Enter breaking the line; see
+    /// [`TextField::submit_on_enter`].
+    submit_on_enter: bool,
     /// Number of visible lines in multi-line mode, at least: the box is never shorter.
     rows: u16,
     /// The most lines the box grows to as the value wraps, `None` without a limit; equal
@@ -736,6 +739,7 @@ impl<Msg> TextField<Msg> {
             suffix: None,
             suffix_action: None,
             multiline: false,
+            submit_on_enter: false,
             rows: 3,
             max_rows: Some(3),
             rows_told: false,
@@ -1020,6 +1024,18 @@ impl<Msg> TextField<Msg> {
     /// submitting), and the box shows `rows` lines (see [`rows`](Self::rows)).
     pub fn multiline(mut self) -> Self {
         self.multiline = true;
+        self
+    }
+
+    /// **Enter submits** a multi-line field, and Shift+Enter breaks the line (milestone
+    /// 815) — a conversation's message box on a desktop, where Enter sends. Off by default:
+    /// Enter breaks the line, as it does in any multi-line field. A single-line field
+    /// submits on Enter whatever this says.
+    ///
+    /// On a touch screen the keyboard's own key types what its [`action`](Self::action)
+    /// says; a conversation there usually keeps Enter for the line and sends with a button.
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.submit_on_enter = submit;
         self
     }
 
@@ -2483,7 +2499,18 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
             }
             // Escape is none of editing's business (routed leaf→root by the shell).
             Key::Escape => {}
-            Key::Enter if self.multiline => {
+            Key::LineBreak if self.multiline => {
+                // Shift+Enter: a line break, also where Enter submits (milestone 815).
+                if let Some((s, e)) = selection {
+                    chars.drain(s..e);
+                    cursor = s;
+                }
+                chars.insert(cursor, '\n');
+                cursor += 1;
+                anchor = None;
+                changed = true;
+            }
+            Key::Enter if self.multiline && !self.submit_on_enter => {
                 // Multi-line: Enter **inserts a line break** (no submission).
                 if let Some((s, e)) = selection {
                     chars.drain(s..e);
@@ -2494,8 +2521,9 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
                 anchor = None;
                 changed = true;
             }
-            Key::Enter => {
+            Key::Enter | Key::LineBreak => {
                 // Single-line: Enter submits — it does not alter the value, it emits the submission.
+                // And a multi-line field told to submit on Enter (milestone 815).
                 edit.cursor = cursor;
                 edit.anchor = anchor;
                 return self.on_submit.clone();

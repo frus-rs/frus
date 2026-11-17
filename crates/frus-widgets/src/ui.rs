@@ -34,6 +34,9 @@ mod slivers;
 
 /// Thickness of a scrollbar, in pixels (`scrollbar.dart:12`).
 const BAR_SIZE: f32 = 8.0;
+/// The most items arriving before the rows in view that a list holding its position
+/// measures in one frame (milestone 815); any beyond are counted at the guess.
+const MEASURED_ARRIVALS: usize = 64;
 /// Minimum length of a thumb (`scrollbar.dart:15`). It is the tap target: a thumb has to
 /// be catchable by a pointer, whatever fraction of the content the viewport shows.
 const MIN_THUMB: f32 = 48.0;
@@ -5091,6 +5094,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 false => (viewport.height, viewport.width),
             };
             // Items of any extent: what was measured of them, a guess for the rest.
+            let mut moved = None;
             let mut measured = if vlist.variable {
                 let mut known = self
                     .runtime
@@ -5098,11 +5102,23 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     .borrow_mut()
                     .remove(&id)
                     .unwrap_or_default();
+                // A list that holds its position follows the row it showed first to where
+                // that row is now, before anything is counted (milestone 815).
+                if vlist.hold_position {
+                    moved = known.follow_anchor(vlist.find_child_index);
+                } else {
+                    known.anchor = None;
+                }
                 known.fit(vlist.count);
                 Some(known)
             } else {
                 None
             };
+            // A list asked to go back to its start glides there from the next frame, which
+            // this one asks for (milestone 815).
+            if self.runtime.to_start_pending.borrow().contains(&id) {
+                self.wants_animation = true;
+            }
             let guess = measured
                 .as_ref()
                 .map_or(vlist.item_extent, |known| known.estimate(vlist.item_extent));
@@ -5188,17 +5204,72 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 };
                 let mut changed = false;
                 let mut laid = std::collections::HashMap::new();
+                // **Items arrived before the rows in view** (milestone 815): they are measured
+                // now, however far from the window they are, and the offset moves by what
+                // moved the row the last frame showed first — unless the list rests at its
+                // start, where what arrives is what the reader is waiting for.
+                let offset = match moved {
+                    Some(moved) => {
+                        for i in 0..moved.inserted.min(vlist.count).min(MEASURED_ARRIVALS) {
+                            let item = (vlist.build)(i);
+                            let row = child_id(id, i, item.as_ref());
+                            let item_rects = {
+                                let _row = runtime.states.enter_row(row, true);
+                                build_deferred_at(item.as_ref(), row, &self.theme, runtime);
+                                self.cached_rects(row, item.as_ref(), constraints)
+                            };
+                            let size = item_rects
+                                .first()
+                                .copied()
+                                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                            let length = if across { size.width } else { size.height };
+                            known.measure(i, length);
+                            laid.insert(i, (item, item_rects, length));
+                        }
+                        let now = known.start_of(moved.index, known.estimate(vlist.item_extent));
+                        let delta = now - moved.was_start;
+                        if offset > 0.5 && delta.abs() > 0.01 {
+                            let shift = if across { (delta, 0.0) } else { (0.0, delta) };
+                            self.runtime
+                                .scroll_corrections
+                                .borrow_mut()
+                                .push((id, shift));
+                            changed = true;
+                            offset + delta
+                        } else {
+                            offset
+                        }
+                    }
+                    None => offset,
+                };
+                // The rows that arrived were measured, which moves the guess for the rows
+                // not built; the offset above was found with the new guess, so the rows are
+                // placed with it too, or the ones in view would move by the difference for
+                // every unbuilt row before them, for one frame.
+                let guess = if moved.is_some() {
+                    known.estimate(vlist.item_extent)
+                } else {
+                    guess
+                };
                 let top = (offset - lead).max(0.0);
                 let (mut i, mut start) = known.first_at(top, guess);
                 let mut correction = 0.0;
                 while i < vlist.count && start < offset - lead + extent {
-                    let item = (vlist.build)(i);
-                    // A row is its key when it has one, its index otherwise (milestone 748).
-                    let row = child_id(id, i, item.as_ref());
-                    let item_rects = {
-                        let _row = runtime.states.enter_row(row, true);
-                        build_deferred_at(item.as_ref(), row, &self.theme, runtime);
-                        self.cached_rects(row, item.as_ref(), constraints)
+                    // An item that arrived this frame was built and measured above already.
+                    let (item, item_rects) = match laid.remove(&i) {
+                        Some((item, item_rects, _)) => (item, item_rects),
+                        None => {
+                            let item = (vlist.build)(i);
+                            // A row is its key when it has one, its index otherwise
+                            // (milestone 748).
+                            let row = child_id(id, i, item.as_ref());
+                            let item_rects = {
+                                let _row = runtime.states.enter_row(row, true);
+                                build_deferred_at(item.as_ref(), row, &self.theme, runtime);
+                                self.cached_rects(row, item.as_ref(), constraints)
+                            };
+                            (item, item_rects)
+                        }
                     };
                     let size = item_rects
                         .first()
@@ -5258,6 +5329,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                         false => (viewport.x + cross_near, along),
                     };
                     let key = item.key();
+                    // The first keyed row in view is the one a list that holds its position
+                    // keeps in place next frame (milestone 815).
+                    if vlist.hold_position && known.anchor.is_none() {
+                        known.anchor = key.map(|key| crate::list::RowAnchor {
+                            key,
+                            index: i,
+                            start,
+                        });
+                    }
                     let row = child_id(id, i, item.as_ref());
                     let item = self.keep(item);
                     let mut item_index = 0;

@@ -14,7 +14,8 @@
 //! −/value/+ numeric picker, this indicator is called `Steps`.
 
 use frus_core::{
-    Color, Point, Rect, ResolvedTextStyle, Role, Scene, SemanticsProperties, TextStyle,
+    Color, Point, Rect, ResolvedTextStyle, Role, Scene, SemanticsProperties, TextDirection,
+    TextStyle,
 };
 use frus_layout::{Align, Dimension, FlexDirection, Justify, Style};
 
@@ -86,6 +87,10 @@ pub struct Steps<Msg = crate::callback::Callback> {
     /// An **explicit** per-step "done" mask (validity). Empty → the default rule
     /// (`i < current`, see [`completed`](Self::completed)).
     completed: Vec<bool>,
+    /// The steps passed over without being done (milestone 815).
+    skipped: Vec<bool>,
+    /// The step whose answers were refused, drawn in the error colour (milestone 815).
+    error: Option<usize>,
     label_text_style: Option<TextStyle>,
     index_text_style: Option<TextStyle>,
     /// Empty, or **one** row of clickable hotspots laid over the markers when
@@ -101,6 +106,8 @@ impl<Msg: Clone + 'static> Steps<Msg> {
             current: 0,
             color: None,
             completed: Vec::new(),
+            skipped: Vec::new(),
+            error: None,
             label_text_style: None,
             index_text_style: None,
             children: Vec::new(),
@@ -151,15 +158,40 @@ impl<Msg: Clone + 'static> Steps<Msg> {
     /// there — typically a step already visited). Lays a row of transparent clickable zones
     /// **exactly** over the markers (a `SpaceBetween` distribution of marker-sized boxes),
     /// without changing the rendering.
-    pub fn on_tap(mut self, on_tap: impl Fn(usize) -> Msg) -> Self {
+    pub fn on_tap(self, on_tap: impl Fn(usize) -> Msg) -> Self {
+        self.on_tap_where(on_tap, |_| true)
+    }
+
+    /// Like [`on_tap`](Self::on_tap), for the markers `reachable` allows only — the steps a
+    /// form lets the reader go back to (milestone 815). The others take no press and no
+    /// focus.
+    pub fn on_tap_where(
+        mut self,
+        on_tap: impl Fn(usize) -> Msg,
+        reachable: impl Fn(usize) -> bool,
+    ) -> Self {
         let mut row: Flex<Msg> = Flex::row().justify(Justify::SpaceBetween);
         for (i, label) in self.labels.iter().enumerate() {
             row = row.child(Hotspot {
                 label: label.clone(),
-                message: on_tap(i),
+                message: reachable(i).then(|| on_tap(i)),
             });
         }
         self.children = vec![Box::new(row)];
+        self
+    }
+
+    /// Marks the steps passed over without being done, one flag per step (milestone 815): a
+    /// dash in an outlined marker rather than a number or a tick.
+    pub fn skipped(mut self, flags: impl IntoIterator<Item = bool>) -> Self {
+        self.skipped = flags.into_iter().collect();
+        self
+    }
+
+    /// Marks step `index` as **refused** — its answers did not pass — in the theme's error
+    /// colour, with an exclamation mark (milestone 815).
+    pub fn error(mut self, index: usize) -> Self {
+        self.error = Some(index);
         self
     }
 }
@@ -185,9 +217,20 @@ impl<Msg> Steps<Msg> {
         }
     }
 
-    /// The x of marker `i`'s centre within `bounds` (markers spread from edge to edge).
-    fn center_x(&self, bounds: Rect, i: usize) -> f32 {
+    /// Whether step `i` was passed over without being done.
+    fn is_skipped(&self, i: usize) -> bool {
+        !self.is_done(i) && self.skipped.get(i).copied().unwrap_or(false)
+    }
+
+    /// The x of marker `i`'s centre within `bounds` (markers spread from edge to edge), the
+    /// first at the start: on the right, right to left (milestone 815) — where a row of
+    /// hotspots over them lands too, since the layout mirrors a row.
+    fn center_x(&self, bounds: Rect, i: usize, direction: TextDirection) -> f32 {
         let n = self.labels.len();
+        let i = match direction {
+            TextDirection::Rtl => n.saturating_sub(1).saturating_sub(i),
+            TextDirection::Ltr => i,
+        };
         if n <= 1 {
             bounds.x + bounds.width * 0.5
         } else {
@@ -225,12 +268,16 @@ impl<Msg: Clone> Widget<Msg> for Steps<Msg> {
         let o = status.opacity;
         let accent = self.color.unwrap_or(theme.primary);
         let cy = bounds.y + R;
+        let dir = theme.direction;
 
         // Connectors (under the markers): crossed (accent) up to the current step, else border.
         for i in 0..n.saturating_sub(1) {
-            let x0 = self.center_x(bounds, i) + R;
-            let x1 = self.center_x(bounds, i + 1) - R;
-            let col = if self.is_done(i) {
+            let (a, b) = (
+                self.center_x(bounds, i, dir),
+                self.center_x(bounds, i + 1, dir),
+            );
+            let (x0, x1) = (a.min(b) + R, a.max(b) - R);
+            let col = if self.is_done(i) || self.is_skipped(i) {
                 accent
             } else {
                 theme.border
@@ -241,21 +288,37 @@ impl<Msg: Clone> Widget<Msg> for Steps<Msg> {
 
         // Markers + numbers/ticks + labels.
         for i in 0..n {
-            let cx = self.center_x(bounds, i);
+            let cx = self.center_x(bounds, i, dir);
             let rect = Rect::new(cx - R, cy - R, MARKER_D, MARKER_D);
             let current = i == self.current;
             // The current step shows its number (even when valid); the others show a tick
             // if done (validity), otherwise their number.
             let completed = !current && self.is_done(i);
+            let refused = self.error == Some(i);
+            let skipped = !current && !refused && self.is_skipped(i);
 
-            let (fill, bw, bc) = if completed || current {
+            let (fill, bw, bc) = if refused {
+                (theme.error, 0.0, Color::TRANSPARENT)
+            } else if completed || current {
                 (accent, 0.0, Color::TRANSPARENT)
+            } else if skipped {
+                (theme.surface, 1.5, accent)
             } else {
                 (theme.surface, 1.5, theme.border)
             };
             scene.draw_rect(rect, fill.fade(o), R, bw, bc.fade(o));
 
-            if completed {
+            if refused || skipped {
+                let (mark, color) = if refused {
+                    ("!", theme.on_error)
+                } else {
+                    ("–", accent)
+                };
+                let num_style = index_style(self.index_text_style, Some(theme));
+                let m = frus_text::measure_resolved(mark, &num_style);
+                let p = Point::new(cx - m.width * 0.5, cy - m.height * 0.5);
+                scene.text(p, mark.to_string(), &num_style, color.fade(o));
+            } else if completed {
                 // A tick (a centred 16 px icon) on an accent background.
                 let path = Icons::CHECK.placed(16.0, cx - 8.0, cy - 8.0, theme.direction);
                 scene.fill_path(&path, theme.on_primary.fade(o));
@@ -291,6 +354,19 @@ impl<Msg: Clone> Widget<Msg> for Steps<Msg> {
     fn on_click(&self) -> Option<Msg> {
         None
     }
+
+    /// Read as a progress (milestone 815): which step of how many, and its label. It said
+    /// nothing before.
+    fn semantics(&self) -> Option<SemanticsProperties> {
+        let n = self.labels.len();
+        let label = self.labels.get(self.current)?;
+        Some(
+            SemanticsProperties::new(Role::ProgressBar)
+                .label(label.clone())
+                .value(format!("{} / {n}", self.current + 1))
+                .range(1.0, (self.current + 1) as f32, n as f32),
+        )
+    }
 }
 
 /// A **transparent** clickable zone the size of a marker, laid over it when
@@ -298,7 +374,8 @@ impl<Msg: Clone> Widget<Msg> for Steps<Msg> {
 /// focus) to jump to the matching step.
 struct Hotspot<Msg> {
     label: String,
-    message: Msg,
+    /// `None` for a marker that cannot be gone to: inert, out of the tab order.
+    message: Option<Msg>,
 }
 
 impl<Msg: Clone> Widget<Msg> for Hotspot<Msg> {
@@ -317,14 +394,15 @@ impl<Msg: Clone> Widget<Msg> for Hotspot<Msg> {
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {}
 
     fn on_click(&self) -> Option<Msg> {
-        Some(self.message.clone())
+        self.message.clone()
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.message.is_some()
     }
 
     fn semantics(&self) -> Option<SemanticsProperties> {
+        self.message.as_ref()?;
         Some(
             SemanticsProperties::new(Role::Button)
                 .label(self.label.clone())
@@ -348,6 +426,104 @@ mod tests {
             &mut scene,
         );
         scene.primitives().to_vec()
+    }
+
+    fn text_x(prims: &[Primitive], t: &str) -> Option<f32> {
+        prims.iter().find_map(|p| match p {
+            Primitive::Text { text, position, .. } if text == t => Some(position.x),
+            _ => None,
+        })
+    }
+
+    /// Right to left, the first step is on the right — where the layout puts its hotspot.
+    /// The markers were drawn left to right in either direction before milestone 815.
+    #[test]
+    fn the_first_step_is_at_the_start_in_either_direction() {
+        let steps = Steps::<()>::new(["A", "B", "C"]).current(0);
+        let paint = |theme: &Theme| {
+            let mut scene = Scene::new();
+            Widget::<()>::paint(
+                &steps,
+                Rect::new(0.0, 0.0, 400.0, HEIGHT),
+                Status::default(),
+                theme,
+                &mut scene,
+            );
+            scene.primitives().to_vec()
+        };
+        let ltr = paint(&Theme::default());
+        let rtl = paint(&Theme::default().rtl());
+        assert!(text_x(&ltr, "1").unwrap() < 100.0);
+        assert!(
+            text_x(&rtl, "1").unwrap() > 300.0,
+            "the first marker on the right"
+        );
+        assert!(text_x(&rtl, "3").unwrap() < 100.0);
+    }
+
+    /// The press lands where the marker is drawn, right to left too: the row of hotspots is
+    /// mirrored by the layout, and the markers now are as well.
+    #[test]
+    fn a_press_on_the_first_marker_goes_to_the_first_step_right_to_left() {
+        use crate::{build_ui, Runtime};
+        let steps = Steps::<usize>::new(["A", "B", "C"])
+            .current(1)
+            .on_tap(|i| i);
+        let ui = build_ui(
+            &steps,
+            frus_core::Size::new(400.0, 200.0),
+            &Runtime::default(),
+            &Theme::default().rtl(),
+        );
+        let at = |x: f32| ui.hit(Point::new(x, R)).and_then(|id| ui.msg_for(id));
+        assert_eq!(
+            at(400.0 - R),
+            Some(0),
+            "the right-hand marker is the first step"
+        );
+        assert_eq!(at(R), Some(2));
+    }
+
+    /// A skipped step shows a dash, a refused one an exclamation mark.
+    #[test]
+    fn skipped_and_refused_steps_are_marked() {
+        let prims = paint_steps(
+            &Steps::<()>::new(["A", "B", "C"])
+                .current(2)
+                .completed([true, false, false])
+                .skipped([false, true, false])
+                .error(2),
+        );
+        let has = |t: &str| {
+            prims
+                .iter()
+                .any(|p| matches!(p, Primitive::Text { text, .. } if text == t))
+        };
+        assert!(has("–"), "the skipped step");
+        assert!(has("!"), "the refused one");
+        assert!(!has("2") && !has("3"));
+    }
+
+    /// It reads as a progress: which step, of how many.
+    #[test]
+    fn it_reads_as_a_progress() {
+        let steps = Steps::<()>::new(["Account", "Profile", "Review"]).current(1);
+        let s = Widget::<()>::semantics(&steps).expect("announced");
+        assert_eq!(s.role, Role::ProgressBar);
+        assert_eq!(s.label.as_deref(), Some("Profile"));
+        assert_eq!(s.value.as_deref(), Some("2 / 3"));
+    }
+
+    /// Only the reachable markers take a press, and the others stay out of the tab order.
+    #[test]
+    fn only_reachable_markers_are_live() {
+        let steps = Steps::<usize>::new(["A", "B", "C"])
+            .current(1)
+            .on_tap_where(|i| i, |i| i == 0);
+        let spots = Widget::<usize>::children(&steps)[0].children();
+        assert_eq!(spots[0].on_click(), Some(0));
+        assert_eq!(spots[2].on_click(), None);
+        assert!(!spots[2].focusable());
     }
 
     #[test]

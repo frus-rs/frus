@@ -42,6 +42,9 @@ pub struct VirtualList<'a, Msg = crate::callback::Callback> {
     /// Where the row with a key is now, if it is still in the list; see
     /// [`ListView::find_child_index`].
     pub find_child_index: Option<&'a dyn Fn(crate::ChildKey) -> Option<usize>>,
+    /// Whether the rows in view stay where they are when items arrive before them; see
+    /// [`ListView::hold_position`].
+    pub hold_position: bool,
 }
 
 /// A row a list keeps alive while it is out of view (milestone 748): its identity, the key
@@ -99,6 +102,28 @@ impl ListShape {
 pub struct ItemExtents {
     /// The extent of each item, `NaN` for one not measured yet.
     known: Vec<f32>,
+    /// The first keyed row the last frame showed, for a list that holds its position
+    /// (milestone 815).
+    pub(crate) anchor: Option<RowAnchor>,
+}
+
+/// A row a list that [holds its position](ListView::hold_position) keeps in place: its key,
+/// the index it was at and where it started along the list, the last time it was laid out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RowAnchor {
+    pub(crate) key: u64,
+    pub(crate) index: usize,
+    pub(crate) start: f32,
+}
+
+/// What a list that holds its position found when its anchor row had moved (milestone 815):
+/// the index it is at now, how many items arrived at the start (each unknown yet), and where
+/// the row started before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AnchorMoved {
+    pub(crate) index: usize,
+    pub(crate) inserted: usize,
+    pub(crate) was_start: f32,
 }
 
 impl ItemExtents {
@@ -175,6 +200,36 @@ impl ItemExtents {
         (self.known.len(), start)
     }
 
+    /// **Follows the anchor row to its new index** (milestone 815): when items were added or
+    /// removed before it, as many unknown extents are put at the start of the record, or
+    /// taken from it, so that the extents measured stay with the rows they were measured
+    /// on. Items that arrive before the rows in view are taken to arrive at the start — the
+    /// newest message of a conversation, the newest post of a feed. `None` when the anchor
+    /// has not moved, or cannot be found.
+    pub(crate) fn follow_anchor(
+        &mut self,
+        find: Option<&dyn Fn(crate::ChildKey) -> Option<usize>>,
+    ) -> Option<AnchorMoved> {
+        let anchor = self.anchor.take()?;
+        let now = find?(crate::ChildKey(anchor.key))?;
+        if now == anchor.index {
+            return None;
+        }
+        let inserted = now.saturating_sub(anchor.index);
+        if inserted > 0 {
+            self.known
+                .splice(0..0, std::iter::repeat_n(f32::NAN, inserted));
+        } else {
+            let removed = (anchor.index - now).min(self.known.len());
+            self.known.drain(0..removed);
+        }
+        Some(AnchorMoved {
+            index: now,
+            inserted,
+            was_start: anchor.start,
+        })
+    }
+
     /// Records item `i`'s extent; whether it differs from what the frame assumed.
     pub(crate) fn measure(&mut self, i: usize, extent: f32) -> bool {
         let before = self.known[i];
@@ -219,7 +274,18 @@ pub struct ListView<Msg = crate::callback::Callback> {
     keep_alive: bool,
     /// See [`ListView::find_child_index`].
     find_child_index: Option<Box<dyn Fn(crate::ChildKey) -> Option<usize>>>,
+    /// See [`ListView::hold_position`].
+    hold_position: bool,
+    /// A report that may decline to be one: what a widget built on a list (a conversation)
+    /// says only when something it cares about changed (milestone 815).
+    scroll_filter: Option<ScrollFilter<Msg>>,
+    /// A request to glide back to the start, by generation: each new number is one request
+    /// (milestone 815).
+    to_start: Option<u32>,
 }
+
+/// A scroll report that may say nothing.
+pub(crate) type ScrollFilter<Msg> = Box<dyn Fn(crate::ScrollPosition) -> Option<Msg>>;
 
 impl<Msg> ListView<Msg> {
     /// Creates a list of `count` items of extent `item_extent`, each item being
@@ -261,7 +327,45 @@ impl<Msg> ListView<Msg> {
             rows_scope,
             keep_alive: false,
             find_child_index: None,
+            hold_position: false,
+            scroll_filter: None,
+            to_start: None,
         }
+    }
+
+    /// **Keeps the rows in view where they are when items arrive before them** (milestone
+    /// 815) — unless the list rests at its start, where the new items come into view.
+    ///
+    /// A conversation built [from the far end](Self::reverse), with index 0 the newest
+    /// message, rests at its start while the reader follows it, and each new message comes
+    /// in at the bottom. A reader who scrolled up to read something older is not resting
+    /// there, and without this every message arriving would push what they read up by its
+    /// own height. With it the list moves its offset by what arrived — measured, not
+    /// guessed — and the rows stay put.
+    ///
+    /// It needs to know which row is which: rows with a key ([`keyed`](crate::keyed)) and a
+    /// [`find_child_index`](Self::find_child_index). Items are taken to arrive at the start
+    /// of the list; items removed before the rows in view are taken from it too.
+    pub fn hold_position(mut self, hold: bool) -> Self {
+        self.hold_position = hold;
+        self
+    }
+
+    /// A report that may decline to be one (milestone 815): `on_scroll` is asked with each
+    /// position and sends what it answers.
+    pub(crate) fn scroll_filter(
+        mut self,
+        report: impl Fn(crate::ScrollPosition) -> Option<Msg> + 'static,
+    ) -> Self {
+        self.scroll_filter = Some(Box::new(report));
+        self
+    }
+
+    /// Glides back to the start each time `generation` changes (milestone 815). The first
+    /// generation the list is built with is where it starts counting, not a request.
+    pub(crate) fn back_to_start_on(mut self, generation: u32) -> Self {
+        self.to_start = Some(generation);
+        self
     }
 
     /// A virtualised list of `count` items **of any extent**, built on demand by
@@ -520,6 +624,9 @@ impl<Msg> Widget<Msg> for ListView<Msg> {
         if let Some(path) = &self.restoration {
             runtime.restoration.register_scroll(path.clone(), id);
         }
+        if let Some(generation) = self.to_start {
+            runtime.list_to_start(id, generation);
+        }
         self.build_themed(theme)
     }
 
@@ -572,6 +679,7 @@ impl<Msg> Widget<Msg> for ListView<Msg> {
             variable: self.variable,
             keep_alive: self.keep_alive,
             find_child_index: self.find_child_index.as_deref(),
+            hold_position: self.hold_position,
         })
     }
 
@@ -600,6 +708,9 @@ impl<Msg> Widget<Msg> for ListView<Msg> {
     }
 
     fn on_scroll(&self, position: crate::ScrollPosition) -> Option<Msg> {
+        if let Some(filter) = &self.scroll_filter {
+            return filter(position);
+        }
         self.on_scroll.as_ref().map(|report| report(position))
     }
 
@@ -1516,5 +1627,157 @@ mod keep_tests {
         frame(&mut runtime, &list, 0.0);
         assert_eq!(log.take(), first, "the inner rows kept their state");
         assert!(log.disposed.borrow().is_empty());
+    }
+}
+
+/// Lists that hold their position (milestone 815): rows arriving before the rows in view.
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+    use crate::interaction::WidgetId;
+    use crate::{build_ui, keyed, ChildKey, Container, Runtime, Size};
+    use std::rc::Rc;
+
+    /// Rows of `heights`, keyed by name, newest first, built from the bottom.
+    fn chat(rows: &Rc<Vec<(String, f32)>>, hold: bool) -> ListView<()> {
+        let shown = rows.clone();
+        let found = rows.clone();
+        ListView::builder(rows.len(), move |i| {
+            let (name, height) = &shown[i];
+            keyed(
+                name.clone(),
+                Container::<()>::new()
+                    .height(*height)
+                    .child(crate::Text::new(name.clone())),
+            )
+        })
+        .reverse()
+        .hold_position(hold)
+        .find_child_index(move |key: ChildKey| found.iter().position(|(n, _)| key.is(n)))
+        .width(200.0)
+        .height(200.0)
+    }
+
+    /// Lays `list` out once; every row drawn, by name, with where it is on the screen.
+    fn frame(runtime: &Runtime, list: &ListView<()>) -> Vec<(String, f32)> {
+        let ui = build_ui(list, Size::new(200.0, 200.0), runtime, &Theme::default());
+        ui.scene()
+            .primitives()
+            .iter()
+            .filter_map(|p| match p {
+                frus_core::Primitive::Text { text, position, .. } => {
+                    Some((text.clone(), position.y))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rows(n: usize) -> Rc<Vec<(String, f32)>> {
+        Rc::new((0..n).map(|i| (format!("row {i}"), 40.0)).collect())
+    }
+
+    fn with_new(rows: &Rc<Vec<(String, f32)>>, height: f32) -> Rc<Vec<(String, f32)>> {
+        let mut more = vec![("new".to_string(), height)];
+        more.extend(rows.iter().cloned());
+        Rc::new(more)
+    }
+
+    /// Scrolled away from the start, a row of 70 arriving at it leaves **every row in view
+    /// where it was on the screen** — which takes its measured height, not the 40 every
+    /// other row has: counted at the guess, they would all move by 30.
+    ///
+    /// The offset itself moves by a little more than 70. The rows between the start and the
+    /// view were never built, so they are counted at the mean of the rows measured, and the
+    /// new row raises that mean; the offset follows them so that what is on the screen does
+    /// not move. That is the promise, and what is checked.
+    #[test]
+    fn a_row_arriving_at_the_start_keeps_the_rows_in_view_in_place() {
+        let before = rows(30);
+        let mut runtime = Runtime::default();
+        runtime.scroll.insert(WidgetId::ROOT, (0.0, 300.0));
+        let at = settle(&mut runtime, &chat(&before, true));
+        let shown = frame(&runtime, &chat(&before, true));
+        runtime.apply_scroll_corrections();
+        assert_eq!(runtime.scroll[&WidgetId::ROOT].1, at, "nothing moved yet");
+
+        let now = frame(&runtime, &chat(&with_new(&before, 70.0), true));
+        runtime.apply_scroll_corrections();
+        let moved = runtime.scroll[&WidgetId::ROOT].1 - at;
+        assert!(moved >= 70.0, "by at least what arrived: {moved}");
+        let mut compared = 0;
+        for (name, y) in &shown {
+            if let Some((_, after)) = now.iter().find(|(n, _)| n == name) {
+                assert!((after - y).abs() < 0.5, "{name} moved from {y} to {after}");
+                compared += 1;
+            }
+        }
+        assert!(
+            compared >= 4,
+            "the rows in view were compared: {shown:?} {now:?}"
+        );
+        // And the frame after keeps them there: the correction is not applied twice.
+        let next = frame(&runtime, &chat(&with_new(&before, 70.0), true));
+        for (name, y) in &now {
+            if let Some((_, after)) = next.iter().find(|(n, _)| n == name) {
+                assert!(
+                    (after - y).abs() < 0.5,
+                    "{name} moved again, {y} to {after}"
+                );
+            }
+        }
+    }
+
+    /// Lays `list` out until its offset rests, and returns where. The rows are 40 and the
+    /// list counts unmeasured ones at its estimate of 56, so the first frame corrects the
+    /// offset by what the row at the top of the view really measured — an older behaviour
+    /// of every list of any extent, and not what these tests are about.
+    fn settle(runtime: &mut Runtime, list: &ListView<()>) -> f32 {
+        frame(runtime, list);
+        runtime.apply_scroll_corrections();
+        frame(runtime, list);
+        runtime.apply_scroll_corrections();
+        runtime.scroll[&WidgetId::ROOT].1
+    }
+
+    /// Resting at the start, the new row is what comes into view: nothing moves.
+    #[test]
+    fn at_the_start_the_new_row_comes_into_view() {
+        let before = rows(30);
+        let mut runtime = Runtime::default();
+        runtime.scroll.insert(WidgetId::ROOT, (0.0, 0.0));
+        frame(&runtime, &chat(&before, true));
+        frame(&runtime, &chat(&with_new(&before, 70.0), true));
+        runtime.apply_scroll_corrections();
+        assert_eq!(runtime.scroll[&WidgetId::ROOT].1, 0.0);
+    }
+
+    /// Without being asked, a list moves under the reader as it always did.
+    #[test]
+    fn a_list_not_asked_does_not_hold() {
+        let before = rows(30);
+        let mut runtime = Runtime::default();
+        runtime.scroll.insert(WidgetId::ROOT, (0.0, 300.0));
+        let at = settle(&mut runtime, &chat(&before, false));
+        frame(&runtime, &chat(&with_new(&before, 70.0), false));
+        runtime.apply_scroll_corrections();
+        assert_eq!(runtime.scroll[&WidgetId::ROOT].1, at);
+    }
+
+    /// Rows removed before the ones in view move the offset back by what they were counted
+    /// at: here two rows of 40.
+    #[test]
+    fn rows_removed_before_the_view_move_it_back() {
+        let before = rows(32);
+        let after: Rc<Vec<(String, f32)>> = Rc::new(before[2..].to_vec());
+        let mut runtime = Runtime::default();
+        runtime.scroll.insert(WidgetId::ROOT, (0.0, 300.0));
+        frame(&runtime, &chat(&before, true));
+        frame(&runtime, &chat(&before, true));
+        runtime.apply_scroll_corrections();
+        let at = runtime.scroll[&WidgetId::ROOT].1;
+        frame(&runtime, &chat(&after, true));
+        runtime.apply_scroll_corrections();
+        assert_eq!(runtime.scroll[&WidgetId::ROOT].1, at - 80.0);
     }
 }

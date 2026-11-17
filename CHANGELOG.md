@@ -13,6 +13,25 @@ any release may break.
 
 ## [Unreleased]
 
+- **A conversation: `ChatList`, `MessageBubble`, `TypingIndicator`, `ChatComposer`; and a
+  questionnaire: `StepForm`, `FormStep`** (J815). The conversation rests at its newest message
+  and follows it as messages arrive; a reader who scrolled up keeps their place, and a button
+  offers to jump back with how many came in. Only the rows in view are built. Bubbles are grouped
+  by sender and time, with avatar, name, time and status (sending, sent, delivered, read, failed
+  with a retry), selectable words and an attachment slot; dates go between days; three dots say
+  who is typing; the composer grows to six lines, sends only something, and sends on Enter on a
+  desktop. The questionnaire asks one step at a time with a progress (numbered steps, a bar on a
+  phone, or dots), validation through `Form` rules that refuses Next and shows why, optional
+  steps with Skip, a review step, the answers kept in `StepFormState`, a completion message, and
+  steps that slide over the theme's motion durations. Both are themable
+  (`theme.widgets.chat`, `theme.widgets.step_form`), their words replaceable (`ChatStrings`,
+  `StepFormStrings`) and said in the seven built-in languages (21 new `Localizations` entries:
+  `today_label`, `send_button_label`, `next_button_label`, `step_of_pattern` and the rest), right
+  to left and accessible. Also: `ListView::hold_position` keeps the rows
+  in view in place when items arrive before them; `Key::LineBreak` (Shift+Enter) and
+  `TextField::submit_on_enter`; `Steps` marks skipped and refused steps, can leave markers inert
+  (`on_tap_where`), reads as a progress, and now puts its first step on the right in a
+  right-to-left layout, where its hotspots already were.
 - **Hot reload: web patches apply, a failed build no longer freezes `frus run`** (J816). On
   the web every patch failed. The page panicked with `LinkError: … wbg_cast …
   breaks_if_inlined …: function import requires a callable`, because the patch still imported

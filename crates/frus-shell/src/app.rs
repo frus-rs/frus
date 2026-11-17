@@ -10100,6 +10100,9 @@ impl<A: Application> App<A> {
             WinitKey::Named(NamedKey::Delete) => Some(Key::Delete),
             // Repeating Enter does not submit again; text and deletion do
             // repeat normally.
+            // Shift+Enter asks for a line break, which a field that sends on Enter still
+            // takes (milestone 815).
+            WinitKey::Named(NamedKey::Enter) if !event.repeat && shift => Some(Key::LineBreak),
             WinitKey::Named(NamedKey::Enter) if !event.repeat => Some(Key::Enter),
             WinitKey::Named(NamedKey::Enter) => None,
             // With Ctrl, Left/Right jump a word and Home/End bound the field — with
