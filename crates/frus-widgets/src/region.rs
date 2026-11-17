@@ -394,12 +394,15 @@ impl<Msg: Clone + 'static> SelectionArea<Msg> {
     /// everything is selected — and answers with the list to show; an empty one shows no bar.
     ///
     /// ```
-    /// use frus_widgets::{SelectionArea, Text, ToolbarItem};
+    /// use frus_widgets::{EditAction, SelectionArea, Text, ToolbarItem};
     ///
     /// // Copy only: nothing to select all of on a one-line receipt.
     /// let receipt: SelectionArea<()> = SelectionArea::around(Text::new("ORDER-4417"))
     ///     .selection_toolbar(|_, items| {
-    ///         items.into_iter().filter(|item| item.label() == "Copy").collect()
+    ///         items
+    ///             .into_iter()
+    ///             .filter(|item| item.edit_action() == Some(EditAction::Copy))
+    ///             .collect()
     ///     });
     /// # let _ = receipt;
     /// ```

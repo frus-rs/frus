@@ -478,6 +478,39 @@ mod tests {
         );
     }
 
+    /// **Against the framework's own languages** (milestone 813): a regional variant falls
+    /// back to its language, and a language none of them is falls back to English, the first.
+    #[test]
+    fn the_framework_s_languages_resolve_by_language_and_fall_back_to_english() {
+        let supported: Vec<Locale> = crate::localizations::LANGUAGES
+            .iter()
+            .map(|language| Locale::new(*language))
+            .collect();
+        let cases = [
+            ("es-MX", "es"),
+            ("es-419", "es"),
+            ("de-CH", "de"),
+            ("ja-JP", "ja"),
+            ("th-TH", "th"),
+            ("vi-VN", "vi"),
+            ("fr-BE", "fr"),
+            ("pt-BR", "en"),
+            ("zh-Hant-TW", "en"),
+        ];
+        for (asked, got) in cases {
+            assert_eq!(
+                resolve(&locales(&[asked]), &supported),
+                Locale::new(got),
+                "{asked}"
+            );
+        }
+        assert_eq!(
+            resolve(&locales(&["pt-BR", "vi"]), &supported),
+            Locale::new("vi"),
+            "the first language the framework has, from the reader's list"
+        );
+    }
+
     /// **The application's order decides ties**: listing `en-US` before `en-GB` says which
     /// English a reader who only asked for `en` should get.
     #[test]

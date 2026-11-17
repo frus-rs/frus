@@ -28,6 +28,21 @@ any release may break.
   and `Widget::overlay_presentation` with `OverlayPresentation` (a modal overlay that fades and
   scales into place). A new localised entry, `Localizations::alert_dialog_label`. The demo
   has an "Apple-style widgets" screen.
+- **The framework's own words in German, Spanish, Japanese, Thai and Vietnamese** (J813). The
+  built-in tables now cover seven languages, and an application that lists one in its supported
+  locales gets it with no table of its own: the shell installs
+  `localizations::for_locale(resolved)` when `Application::localizations` answers `None`
+  (`es-MX` gets Spanish, a language frus has no words in gets English). Each table carries the
+  calendar's first day, the order a date is typed in, how a month and year, a day of a month and
+  a whole date are written, digit grouping and whether the clock has twenty-four hours. New
+  entries, all seven languages: the selection bar's Cut, Copy, Paste and Select all (they were
+  English constants; `EditAction::label` now returns a `String` and `ToolbarItem::label` a
+  `Cow<str>`, so tell built-in items apart with `edit_action`), an app bar's overflow button, a
+  chip's remove cross, the licence page's button and counts, a file tree's loading row, `date_input_format` (the order a
+  typed date is read in, which the hint's letters cannot say in every language), `month_year`,
+  `short_month_day`, `long_date` and `uses_24_hour_clock`. `parse_date` and `format_date` accept
+  `.` and `-` patterns. Japanese and Thai need a font with their letters on the web; desktop and
+  Android draw them with the system's fonts.
 - **Wheels coast** (J814). A flick on a `ListWheel` or a `WheelPicker` spins it through many
   rows and settles exactly on one, the row nearest to where the platform's ordinary fling
   would have stopped; a slow release goes back to the nearest row, and a flick past either

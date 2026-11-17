@@ -247,7 +247,12 @@ impl<Msg: Clone + 'static> TimePicker<Msg> {
         let help_s = help_style(self.help_text_style, None);
         let cell = self.dial_text_style;
         let preview = if self.hour12 {
-            let suffix = if pm { "PM" } else { "AM" };
+            let words = crate::localizations::of();
+            let suffix = if pm {
+                words.post_meridiem_label()
+            } else {
+                words.ante_meridiem_label()
+            };
             Text::styled(format!("{}:{minute:02} {suffix}", digit12(hour)), preview_s)
         } else {
             Text::styled(format!("{hour:02}:{minute:02}"), preview_s)

@@ -57,14 +57,7 @@ impl<Msg: Clone + 'static> DateTimeRange<Msg> {
         if let (Some(s), Some(e)) = (start_date, end_date) {
             let l10n = crate::localizations::of();
             let stamp = |d: (i32, u32, u32), t: (u32, u32)| {
-                format!(
-                    "{} {}, {}  {:02}:{:02}",
-                    l10n.months()[(d.1 - 1) as usize],
-                    d.2,
-                    d.0,
-                    t.0,
-                    t.1
-                )
+                format!("{}  {:02}:{:02}", l10n.long_date(d.0, d.1, d.2), t.0, t.1)
             };
             let summary = format!("{}  →  {}", stamp(s, start_time), stamp(e, end_time));
             children.push(Box::new(Text::new(summary).size(16.0)));

@@ -195,7 +195,7 @@ impl<Msg: Clone + 'static> FileTree<Msg> {
             on_select: None,
             icon: None,
             label: None,
-            loading_label: "Loading…".into(),
+            loading_label: crate::localizations::of().loading_label().into(),
             built: OnceCell::new(),
         }
     }

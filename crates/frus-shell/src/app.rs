@@ -946,10 +946,14 @@ fn install_ambient<A: Application>(app: &A, preferred: &[frus_widgets::Locale]) 
     // Text whose style names no language is shaped in this one: the glyph forms a font
     // localizes, and which platform face draws the Han characters (milestone 784).
     frus_text::set_default_locale(&locale.to_string());
+    // **The words the framework says**: the application's table, or the framework's own for
+    // the language it resolved (milestone 813) — so an application listing German among its
+    // locales gets German dialogs and calendars without writing a table.
+    let table = app
+        .localizations()
+        .unwrap_or_else(|| frus_widgets::localizations::for_locale(&locale));
     frus_widgets::locale::install(locale);
-    if let Some(table) = app.localizations() {
-        frus_widgets::localizations::install(table);
-    }
+    frus_widgets::localizations::install(table);
 }
 
 /// Hands the platform what is to be kept for restoration, when it changed since the last
@@ -12557,13 +12561,68 @@ mod tests {
             1
         );
 
-        // And an application that says nothing leaves whatever is in force alone rather
-        // than forcing English back on top of a table installed elsewhere.
-        install_ambient(&Deferred, &[]);
+        // An application that gives no table gets the framework's own for the language it
+        // resolved (milestone 813). This one supports only English, so English it is —
+        // the table above does not linger after the application stopped giving it.
+        install_ambient(&Deferred, &[Locale::new("de")]);
         assert_eq!(
             frus_widgets::localizations::of().back_button_label(),
-            "Retour",
-            "saying nothing is not the same as saying English"
+            "Back"
+        );
+    }
+
+    /// **An application that lists a language gets the framework's words in it** without
+    /// writing a table (milestone 813): the device's `es-MX` resolves to the application's
+    /// `es`, and the shell installs the Spanish table for it; a language the framework has
+    /// no table for falls back to English.
+    #[test]
+    fn a_shell_installs_the_framework_s_own_words_for_the_resolved_language() {
+        struct Speaks;
+
+        impl crate::Application for Speaks {
+            type Message = ();
+
+            fn update(&mut self, _message: ()) -> crate::Command<()> {
+                crate::Command::none()
+            }
+
+            fn view(&self, _theme: &Theme) -> Box<dyn frus_widgets::Widget<()>> {
+                Box::new(frus_widgets::Flex::<()>::column())
+            }
+
+            fn supported_locales(&self) -> Vec<Locale> {
+                ["en", "es", "ja", "sw"]
+                    .into_iter()
+                    .map(Locale::new)
+                    .collect()
+            }
+        }
+
+        install_ambient(&Speaks, &[Locale::with_country("es", "MX")]);
+        assert_eq!(frus_widgets::locale::of(), Locale::new("es"));
+        let words = frus_widgets::localizations::of();
+        assert_eq!(words.cancel_button_label(), "Cancelar");
+        assert_eq!(words.first_day_of_week_index(), 1, "lunes");
+
+        install_ambient(&Speaks, &[Locale::with_country("ja", "JP")]);
+        assert_eq!(
+            frus_widgets::localizations::of().back_button_label(),
+            "戻る"
+        );
+
+        // Swahili is the application's own, and the framework has no words in it.
+        install_ambient(&Speaks, &[Locale::new("sw")]);
+        assert_eq!(frus_widgets::locale::of(), Locale::new("sw"));
+        assert_eq!(
+            frus_widgets::localizations::of().back_button_label(),
+            "Back"
+        );
+
+        // And a language the application does not have resolves to its first: English.
+        install_ambient(&Speaks, &[Locale::new("ko")]);
+        assert_eq!(
+            frus_widgets::localizations::of().back_button_label(),
+            "Back"
         );
     }
 

@@ -818,7 +818,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
     /// icon button (milestone 611). It was a `⋯` in an outlined pill.
     fn overflow_button(message: Msg) -> impl Widget<Msg> + 'static {
         crate::IconButton::new(crate::Icons::MORE_VERT)
-            .label("More")
+            .label(crate::localizations::of().more_button_label())
             .on_press(message)
     }
 
