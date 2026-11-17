@@ -46,6 +46,13 @@ pub struct PageSnap {
     /// page a reader would name is still reported, and a requested page still
     /// glides. Only the release changes. See [`PageView::page_snapping`].
     pub snapping: bool,
+    /// Does a snapping release **coast** (milestone 814)?
+    ///
+    /// False, the page view's rule: a release goes to one page, the next on a flick and
+    /// the nearer otherwise, however fast. True, a wheel's: the release flings as an
+    /// ordinary scroll would and comes to rest on the page nearest to where that fling
+    /// would have stopped, so a flick passes many. Ignored when `snapping` is false.
+    pub coasting: bool,
 }
 
 impl PageSnap {
@@ -101,6 +108,8 @@ pub struct PagedView<'a, Msg = crate::callback::Callback> {
     pub pad_ends: bool,
     /// Does a release come to rest on a page? See [`PageView::page_snapping`].
     pub snapping: bool,
+    /// Does a snapping release coast past several pages? See [`PageSnap::coasting`].
+    pub coasting: bool,
     /// Builds one page per index.
     pub build: &'a dyn Fn(usize) -> Box<dyn Widget<Msg>>,
 }
@@ -123,6 +132,7 @@ impl<Msg> PagedView<'_, Msg> {
             requested: self.requested,
             horizontal,
             snapping: self.snapping,
+            coasting: self.coasting,
         }
     }
 
@@ -422,6 +432,8 @@ impl<Msg> Widget<Msg> for PageView<Msg> {
             requested: self.requested,
             pad_ends: self.pad_ends,
             snapping: self.snapping,
+            // A page view turns one page per release, however hard the flick.
+            coasting: false,
             build: &*self.build,
         })
     }
@@ -658,6 +670,32 @@ mod tests {
         assert!(runtime.fling_scroll(snapping, physics, (0.0, 0.0)));
     }
 
+    /// **A page view still turns one page per release** however hard the flick, on both
+    /// families of physics (milestone 814): coasting through rows is a wheel's, and the
+    /// page view must not catch it.
+    #[test]
+    fn a_hard_flick_still_turns_one_page() {
+        let id = crate::interaction::WidgetId::ROOT;
+        for physics in [ScrollPhysics::CLAMPING, ScrollPhysics::BOUNCING] {
+            let mut runtime = Runtime::default();
+            let area = crate::Scrollable {
+                physics,
+                ..ui_of(view(Rc::new(Cell::new(0))), &runtime).scroll_regions()[0]
+            };
+            let snap = area.page.expect("paged");
+            assert!(!snap.coasting, "a page view does not coast");
+            runtime.scroll.insert(id, (330.0, 0.0));
+            assert!(runtime.fling_scroll(area, physics, (8000.0, 0.0)));
+            for _ in 0..600 {
+                if !runtime.advance_scroll(&[area], 1.0 / 60.0) {
+                    break;
+                }
+            }
+            let (x, _) = runtime.scroll[&id];
+            assert!((x - 600.0).abs() < 1.0, "one page on, at {x} ({physics:?})");
+        }
+    }
+
     /// Everything but the release stays: the page a reader would name is still
     /// reported, and the page the application asks for is still honoured.
     #[test]
@@ -731,6 +769,7 @@ mod tests {
             requested: 0,
             horizontal: true,
             snapping: true,
+            coasting: false,
         };
         assert_eq!(snap.page_at(0.0), 0);
         assert_eq!(snap.page_at(149.0), 0);

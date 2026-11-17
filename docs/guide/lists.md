@@ -328,8 +328,9 @@ Escape, and a screen reader offers every action by name in its actions menu.
 ## Picking from a wheel
 
 `WheelPicker` is one or more spinning wheels behind one band, the way a time or a date is picked
-on a phone. A fling carries on and settles on a value, a `.looping(true)` column goes round, and
-the phone ticks under the finger as each value passes the middle.
+on a phone. A flick spins a wheel through many values and settles exactly on one; a slow
+release goes back to the nearest. A `.looping(true)` column goes round, and the phone ticks under
+the finger as each value passes the middle.
 
 ```rust
 use frus::{component, WheelColumn, WheelPicker, Widget};

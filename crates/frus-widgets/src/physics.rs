@@ -24,8 +24,8 @@
 //! what keeps the policy unit-testable without a window.
 
 use frus_core::{
-    BouncingScrollSimulation, ClampingScrollSimulation, Simulation, SpringDescription,
-    SpringSimulation, Tolerance,
+    BouncingScrollSimulation, ClampingScrollSimulation, FrictionSimulation, Simulation,
+    SpringDescription, SpringSimulation, Tolerance,
 };
 
 /// The state of one scroll axis, as the physics sees it. All in logical pixels.
@@ -485,6 +485,87 @@ impl ScrollPhysics {
             tolerance,
         )))
     }
+
+    /// The motion that follows the finger lifting off a region of **rows of one height**
+    /// that coasts like a fling but may only come to rest on a row — a wheel
+    /// (milestone 814). `extent` is the distance from one row to the next, and row `i`
+    /// rests at `i × extent`.
+    ///
+    /// Unlike [`page_ballistic`](Self::page_ballistic), the release speed says how
+    /// **far**, not just which way: the ordinary fling is worked out first, the row
+    /// nearest to where it would have stopped is chosen, and the motion is reshaped to
+    /// stop exactly there. A flick passes many rows; a slow release goes back to the
+    /// nearest one.
+    ///
+    /// - Past an edge and heading further out, or a fling that would end on an edge
+    ///   anyway, the ordinary physics runs unchanged — it is what brings the content to
+    ///   that edge, with the platform's own bounce or clamp.
+    /// - A release that would stop on the row it started from springs back to it.
+    /// - Anything else rolls on a friction whose drag is chosen so that it passes the
+    ///   row at the tolerance speed: no overshoot and no roll-back.
+    ///
+    /// Every motion returned comes to rest **exactly** on its row or edge, not within a
+    /// tolerance of it.
+    pub fn item_ballistic(
+        self,
+        metrics: ScrollMetrics,
+        velocity: f32,
+        extent: f32,
+    ) -> Option<Ballistic> {
+        let tolerance = self.tolerance();
+        let velocity = velocity.clamp(-self.max_fling_velocity(), self.max_fling_velocity());
+        let extent = extent.max(1.0);
+        let land = |motion: Option<Ballistic>, end: f32| motion.map(|m| m.landing_on(end));
+        // Out of range and not heading back: the ordinary physics brings it to the edge.
+        if velocity <= 0.0 && metrics.pixels <= metrics.min {
+            return land(self.ballistic(metrics, velocity), metrics.min);
+        }
+        if velocity >= 0.0 && metrics.pixels >= metrics.max {
+            return land(self.ballistic(metrics, velocity), metrics.max);
+        }
+        // Where the ordinary fling would have stopped.
+        let natural = self.ballistic(metrics, velocity);
+        let natural_end = natural.as_ref().map_or(metrics.pixels, Ballistic::final_x);
+        // Ending on an edge anyway: the ordinary physics already puts it there.
+        if natural.is_some() && (natural_end == metrics.min || natural_end == metrics.max) {
+            return land(natural, natural_end);
+        }
+        let item_of = |offset: f32| {
+            (offset.clamp(metrics.min, metrics.max) / extent)
+                .round()
+                .max(0.0)
+        };
+        let settling_item = item_of(natural_end);
+        let settling = (settling_item * extent).clamp(metrics.min, metrics.max);
+        // Already there, and still.
+        if velocity.abs() < tolerance.velocity
+            && (settling - metrics.pixels).abs() < tolerance.distance
+        {
+            return None;
+        }
+        // Too slow to leave the row it is on: spring back to it.
+        if settling_item == item_of(metrics.pixels) || velocity.abs() <= tolerance.velocity {
+            let spring =
+                SpringSimulation::new(self.spring(), metrics.pixels, settling, velocity, tolerance);
+            return Some(Ballistic::Spring(spring).landing_on(settling));
+        }
+        // Roll on, with the drag tuned to arrive at the row as the motion dies.
+        let end_velocity = tolerance.velocity * velocity.signum();
+        let friction = FrictionSimulation::through(
+            metrics.pixels,
+            settling,
+            velocity,
+            end_velocity,
+            Tolerance {
+                velocity: end_velocity.abs(),
+                ..tolerance
+            },
+        );
+        Some(Ballistic::Landing(Landing {
+            motion: Motion::Friction(friction),
+            end: settling,
+        }))
+    }
 }
 
 /// Which page an offset sits on, as a **fraction**: `1.5` is halfway between the
@@ -602,6 +683,104 @@ pub enum Ballistic {
     Clamping(ClampingScrollSimulation),
     /// A plain return to an edge, with no fling.
     Spring(SpringSimulation),
+    /// A motion that comes to rest **exactly** on a row or an edge — what
+    /// [`ScrollPhysics::item_ballistic`] returns (milestone 814).
+    Landing(Landing),
+}
+
+impl Ballistic {
+    /// Where the motion comes to rest, worked out before it runs.
+    pub fn final_x(&self) -> f32 {
+        match self {
+            Ballistic::Bouncing(s) => s.final_x(),
+            Ballistic::Clamping(s) => s.final_x(),
+            Ballistic::Spring(s) => s.x(f32::MAX),
+            Ballistic::Landing(s) => s.end,
+        }
+    }
+
+    /// This motion, made to come to rest exactly at `end`.
+    fn landing_on(self, end: f32) -> Ballistic {
+        let motion = match self {
+            Ballistic::Bouncing(s) => Motion::Bouncing(s),
+            Ballistic::Clamping(s) => Motion::Clamping(s),
+            Ballistic::Spring(s) => Motion::Spring(s),
+            Ballistic::Landing(_) => return self,
+        };
+        Ballistic::Landing(Landing { motion, end })
+    }
+}
+
+/// A motion that ends **exactly** at a resting place rather than within a tolerance of
+/// it (milestone 814): a wheel's row has to be the row, to the pixel, or the next
+/// release would start from half a pixel off and a reader would see the text sit
+/// crooked under the selection band.
+///
+/// It samples the motion it carries, never lets a friction roll past its end, and
+/// reports the end itself once that motion is done.
+#[derive(Clone, Copy, Debug)]
+pub struct Landing {
+    motion: Motion,
+    end: f32,
+}
+
+impl Landing {
+    /// Where the motion comes to rest.
+    pub fn end(&self) -> f32 {
+        self.end
+    }
+}
+
+/// What a [`Landing`] runs on its way to its end.
+#[derive(Clone, Copy, Debug)]
+enum Motion {
+    Bouncing(BouncingScrollSimulation),
+    Clamping(ClampingScrollSimulation),
+    Spring(SpringSimulation),
+    /// A friction tuned to die out on the end; it alone is never let past it.
+    Friction(FrictionSimulation),
+}
+
+impl Motion {
+    fn sim(&self) -> &dyn Simulation {
+        match self {
+            Motion::Bouncing(s) => s,
+            Motion::Clamping(s) => s,
+            Motion::Spring(s) => s,
+            Motion::Friction(s) => s,
+        }
+    }
+}
+
+impl Simulation for Landing {
+    fn x(&self, time: f32) -> f32 {
+        if self.is_done(time) {
+            return self.end;
+        }
+        let x = self.motion.sim().x(time);
+        match self.motion {
+            // A friction tuned to stop on the end approaches it from one side only.
+            Motion::Friction(f) if f.dx(0.0) > 0.0 => x.min(self.end),
+            Motion::Friction(_) => x.max(self.end),
+            _ => x,
+        }
+    }
+
+    fn dx(&self, time: f32) -> f32 {
+        if self.is_done(time) {
+            0.0
+        } else {
+            self.motion.sim().dx(time)
+        }
+    }
+
+    fn is_done(&self, time: f32) -> bool {
+        self.motion.sim().is_done(time)
+    }
+
+    fn tolerance(&self) -> Tolerance {
+        self.motion.sim().tolerance()
+    }
 }
 
 impl Simulation for Ballistic {
@@ -610,6 +789,7 @@ impl Simulation for Ballistic {
             Ballistic::Bouncing(s) => s.x(time),
             Ballistic::Clamping(s) => s.x(time),
             Ballistic::Spring(s) => s.x(time),
+            Ballistic::Landing(s) => s.x(time),
         }
     }
 
@@ -618,6 +798,7 @@ impl Simulation for Ballistic {
             Ballistic::Bouncing(s) => s.dx(time),
             Ballistic::Clamping(s) => s.dx(time),
             Ballistic::Spring(s) => s.dx(time),
+            Ballistic::Landing(s) => s.dx(time),
         }
     }
 
@@ -626,6 +807,7 @@ impl Simulation for Ballistic {
             Ballistic::Bouncing(s) => s.is_done(time),
             Ballistic::Clamping(s) => s.is_done(time),
             Ballistic::Spring(s) => s.is_done(time),
+            Ballistic::Landing(s) => s.is_done(time),
         }
     }
 
@@ -634,6 +816,7 @@ impl Simulation for Ballistic {
             Ballistic::Bouncing(s) => s.tolerance(),
             Ballistic::Clamping(s) => s.tolerance(),
             Ballistic::Spring(s) => s.tolerance(),
+            Ballistic::Landing(s) => s.tolerance(),
         }
     }
 }
@@ -892,6 +1075,126 @@ mod tests {
         assert!(ScrollPhysics::CLAMPING
             .page_ballistic(ScrollMetrics::new(0.0, 600.0, 300.0), -900.0, 300.0)
             .is_none());
+    }
+
+    // --- Rows that coast (milestone 814) ---
+
+    /// Runs `sim` frame by frame at 60 Hz, as the runtime does, and answers where it
+    /// rests and the furthest it went past that.
+    fn settle(sim: Ballistic) -> (f32, f32) {
+        let end = sim.final_x();
+        let mut t = 0.0;
+        let mut overshoot: f32 = 0.0;
+        while !sim.is_done(t) {
+            assert!(t < 10.0, "never settled");
+            let x = sim.x(t);
+            overshoot = overshoot.max((x - end) * (end - sim.x(0.0)).signum());
+            t += 1.0 / 60.0;
+        }
+        (sim.x(t), overshoot)
+    }
+
+    const ROW: f32 = 34.0;
+
+    fn rows(pixels: f32) -> ScrollMetrics {
+        ScrollMetrics::new(pixels, 59.0 * ROW, 200.0)
+    }
+
+    /// **A flick passes many rows, and rests exactly on one**: where the ordinary fling
+    /// would have stopped, rounded to a row — on both families, with no overshoot and
+    /// roll-back.
+    #[test]
+    fn a_flick_coasts_through_rows_and_lands_on_one() {
+        for physics in [ScrollPhysics::BOUNCING, ScrollPhysics::CLAMPING] {
+            for velocity in [1500.0, -1500.0, 900.0] {
+                let start = rows(30.0 * ROW + 5.0);
+                let sim = physics.item_ballistic(start, velocity, ROW).unwrap();
+                let natural = physics.ballistic(start, velocity).unwrap().final_x();
+                let (rest, overshoot) = settle(sim);
+                assert_eq!(rest, (rest / ROW).round() * ROW, "on a row: {rest}");
+                assert_eq!(
+                    rest,
+                    ((natural / ROW).round() * ROW).clamp(0.0, 59.0 * ROW),
+                    "the row nearest the natural end ({natural}, {physics:?})"
+                );
+                assert!(
+                    ((rest - start.pixels) / ROW).abs() >= 3.0,
+                    "{velocity} px/s passes several rows: {rest}"
+                );
+                assert!(overshoot <= 0.0, "never past the row: {overshoot}");
+            }
+        }
+    }
+
+    /// **The same flick turns a page view one page**: the coasting rule is a separate
+    /// one, and the paged rule is untouched.
+    #[test]
+    fn coasting_is_not_paging() {
+        let start = rows(30.0 * ROW);
+        let paged = ScrollPhysics::CLAMPING
+            .page_ballistic(start, 4000.0, ROW)
+            .unwrap();
+        assert!((paged.x(5.0) - 31.0 * ROW).abs() < 1.0);
+        let coasting = ScrollPhysics::CLAMPING
+            .item_ballistic(start, 4000.0, ROW)
+            .unwrap();
+        assert!(coasting.final_x() > 34.0 * ROW);
+    }
+
+    /// **No fling, and it goes back to the nearer row** — whichever side of it it was
+    /// let go on — exactly, by a spring.
+    #[test]
+    fn a_release_without_a_fling_snaps_to_the_nearest_row() {
+        for physics in [ScrollPhysics::BOUNCING, ScrollPhysics::CLAMPING] {
+            let back = physics
+                .item_ballistic(rows(30.0 * ROW + 12.0), 0.0, ROW)
+                .unwrap();
+            assert!(matches!(back, Ballistic::Landing(_)));
+            assert_eq!(settle(back).0, 30.0 * ROW);
+            let on = physics
+                .item_ballistic(rows(30.0 * ROW + 22.0), 0.0, ROW)
+                .unwrap();
+            assert_eq!(settle(on).0, 31.0 * ROW);
+            assert!(
+                physics.item_ballistic(rows(30.0 * ROW), 0.0, ROW).is_none(),
+                "on a row and still: nothing to do"
+            );
+        }
+    }
+
+    /// **A fling past an end stops on the end row**, with the platform's own clamp or
+    /// bounce, and comes to rest exactly there.
+    #[test]
+    fn a_fling_past_an_end_rests_on_the_end() {
+        let max = 59.0 * ROW;
+        for physics in [ScrollPhysics::BOUNCING, ScrollPhysics::CLAMPING] {
+            let sim = physics
+                .item_ballistic(rows(55.0 * ROW), 8000.0, ROW)
+                .unwrap();
+            assert_eq!(sim.final_x(), max);
+            let mut t = 0.0;
+            let mut x = sim.x(0.0);
+            while !sim.is_done(t) && t < 10.0 {
+                // The runtime pins a clamping fling to the content.
+                if !physics.allows_overscroll() && sim.x(t) >= max {
+                    x = max;
+                    break;
+                }
+                t += 1.0 / 60.0;
+                x = sim.x(t);
+            }
+            assert_eq!(x, max, "rests on the last row ({physics:?})");
+            let sim = physics
+                .item_ballistic(rows(2.0 * ROW), -8000.0, ROW)
+                .unwrap();
+            assert_eq!(sim.final_x(), 0.0);
+        }
+        // Overscrolled and heading further out: the bounce brings it home, exactly.
+        let out = ScrollMetrics::new(max + 20.0, max, 200.0);
+        let sim = ScrollPhysics::BOUNCING
+            .item_ballistic(out, 300.0, ROW)
+            .unwrap();
+        assert_eq!(settle(sim).0, max);
     }
 
     // --- The second deceleration profile (milestone 499) ---
