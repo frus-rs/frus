@@ -678,6 +678,7 @@ impl HomeState {
                         link("Swipe actions →", "/swipe"),
                         link("Wheel picker →", "/wheel"),
                         link("Display widgets →", "/display"),
+                        link("Apple-style widgets →", "/cupertino"),
                     ]
                     .gap(12.0),
                 ),

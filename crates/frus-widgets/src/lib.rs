@@ -57,7 +57,13 @@ mod constraints;
 mod container;
 mod controltile;
 mod crossfade;
+mod cupertinoactivity;
+mod cupertinobutton;
 mod cupertinocolors;
+mod cupertinodialog;
+mod cupertinonavbar;
+mod cupertinoswitch;
+mod cupertinotabbar;
 mod cupertinotheme;
 mod customlayout;
 mod custompaint;
@@ -382,8 +388,28 @@ pub use container::Container;
 pub use contextmenu::{ContextMenu, ContextMenuState};
 pub use controltile::{CheckboxListTile, RadioListTile, SwitchListTile};
 pub use crossfade::AnimatedCrossFade;
+pub use cupertinoactivity::{
+    AdaptiveProgressIndicator, CupertinoActivityIndicator, CUPERTINO_ACTIVITY_COLOR,
+    CUPERTINO_ACTIVITY_RADIUS,
+};
+pub use cupertinobutton::{
+    CupertinoButton, CupertinoButtonSize, CupertinoButtonStyle, CUPERTINO_PRESSED_OPACITY,
+    CUPERTINO_TINTED_OPACITY_DARK, CUPERTINO_TINTED_OPACITY_LIGHT,
+};
 pub use cupertinocolors::{
     CupertinoColors, CupertinoDynamicColor, CupertinoUserInterfaceLevelData,
+};
+pub use cupertinodialog::{
+    CupertinoActionSheet, CupertinoActionSheetAction, CupertinoAlertDialog, CupertinoDialogAction,
+    CUPERTINO_ALERT_WIDTH, CUPERTINO_MODAL_BARRIER,
+};
+pub use cupertinonavbar::{
+    CupertinoNavigationBar, CUPERTINO_NAV_BAR_BORDER, CUPERTINO_NAV_BAR_HEIGHT,
+    CUPERTINO_NAV_BAR_LARGE_TITLE_EXTENSION,
+};
+pub use cupertinoswitch::{AdaptiveSwitch, CupertinoSwitch};
+pub use cupertinotabbar::{
+    CupertinoTabBar, CupertinoTabBarItem, CUPERTINO_TAB_BAR_BORDER, CUPERTINO_TAB_BAR_HEIGHT,
 };
 pub use cupertinotheme::{
     CupertinoTextTheme, CupertinoTextThemeData, CupertinoTheme, CupertinoThemeData,
@@ -559,7 +585,7 @@ pub use platformview::{
     ANDROID_VIEW_DEFAULT_HEIGHT, PLATFORM_VIEWS_SUPPORTED,
 };
 pub use popover::MenuAnchor;
-pub use portal::{OverlayPortal, Placement};
+pub use portal::{OverlayPortal, OverlayPresentation, Placement};
 pub use positioned::{Positioned, Positioning};
 #[doc(hidden)]
 pub use prefs::{

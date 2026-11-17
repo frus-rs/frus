@@ -1272,6 +1272,14 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// How this widget's **modal** overlay comes and goes beyond the scrim's fade: faded
+    /// with the overlay's progress, scaled down from a little larger as it opens — the
+    /// Apple-style alert's entrance (milestone 812). `None`, the default: the content is
+    /// shown whole while the scrim fades, or slides in where its placement slides.
+    fn overlay_presentation(&self) -> Option<crate::OverlayPresentation> {
+        None
+    }
+
     /// The **timing** of this widget's [`Placement::Card`](crate::Placement::Card) overlay,
     /// which the walk opens and closes from the pointer — see [`crate::HoverCard`] (milestone
     /// 809). Default: `None` (not a hover card; a card overlay without it is always shown).
@@ -1325,6 +1333,14 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// overlap. `None` = not a group. Combined with `anim_target`, the opacity
     /// **animates** (a group fade).
     fn opacity_group(&self) -> Option<f32> {
+        None
+    }
+
+    /// The opacity this widget **and its whole subtree** fade to while it is held: a press
+    /// answered by dimming rather than by ink, the way the Apple-style buttons answer one
+    /// (milestone 812). The fade follows the press's own progress, eased; at rest no layer
+    /// is made at all. `None`, the default: a press does not fade anything.
+    fn pressed_opacity(&self) -> Option<f32> {
         None
     }
 
@@ -2576,6 +2592,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     fn overlay_at(&self) -> Option<frus_core::Point> {
         (**self).overlay_at()
     }
+    fn overlay_presentation(&self) -> Option<crate::OverlayPresentation> {
+        (**self).overlay_presentation()
+    }
     fn hover_card(&self) -> Option<crate::HoverCardTiming> {
         (**self).hover_card()
     }
@@ -2596,6 +2615,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn opacity_group(&self) -> Option<f32> {
         (**self).opacity_group()
+    }
+    fn pressed_opacity(&self) -> Option<f32> {
+        (**self).pressed_opacity()
     }
     fn anim_color(&self) -> Option<frus_core::Color> {
         (**self).anim_color()

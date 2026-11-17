@@ -11,6 +11,43 @@ use crate::interaction::Status;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
+/// How a modal overlay's content **comes and goes**, beyond the scrim's fade (milestone
+/// 812): see [`Widget::overlay_presentation`].
+///
+/// Both effects follow the overlay's own progress, `0` hidden and `1` shown, so they run
+/// on the timing and the curve of the widget that owns the overlay.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct OverlayPresentation {
+    /// Whether the content fades in and out with the progress, as one layer.
+    pub fade: bool,
+    /// The content's scale at progress `0`, about its centre; `1.0` does not scale. An alert
+    /// that grows down from `1.3` says `1.3` while it opens and `1.0` while it closes, so
+    /// that it only fades on the way out.
+    pub scale_from: f32,
+}
+
+impl OverlayPresentation {
+    /// Faded, and scaled down from `scale_from` to its own size.
+    pub const fn fade_and_scale(scale_from: f32) -> Self {
+        Self {
+            fade: true,
+            scale_from,
+        }
+    }
+
+    /// Faded only.
+    pub const fn fade() -> Self {
+        Self::fade_and_scale(1.0)
+    }
+
+    /// The content's opacity and scale at `progress`.
+    pub fn at(self, progress: f32) -> (f32, f32) {
+        let p = progress.clamp(0.0, 1.0);
+        let opacity = if self.fade { p } else { 1.0 };
+        (opacity, self.scale_from + (1.0 - self.scale_from) * p)
+    }
+}
+
 /// Where to place the overlay relative to its anchor, or to the window.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Placement {

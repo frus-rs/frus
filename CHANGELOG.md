@@ -13,6 +13,21 @@ any release may break.
 
 ## [Unreleased]
 
+- **Apple-style widgets** (J812): `CupertinoButton` (plain, tinted and filled; small, medium
+  and large; dims while pressed), `CupertinoSwitch` (the 51 × 31 track, a thumb that stretches
+  while held, tap and drag), `CupertinoNavigationBar` (leading, a title centred across the bar,
+  trailing, a back chevron with the previous page's title, a translucent blurred background, a
+  large-title variant), `CupertinoTabBar`, `CupertinoAlertDialog` with `CupertinoDialogAction`
+  (default and destructive actions, buttons side by side or stacked, the grow-and-fade
+  entrance), `CupertinoActionSheet` (a cancel button apart, sliding up from the bottom) and
+  `CupertinoActivityIndicator` (eight fading ticks, still, partly revealed, any radius). Their
+  colours come from `CupertinoTheme` and adapt to the dark; every one can be overridden; all
+  work right to left and are announced to screen readers. `Switch::adaptive` and
+  `CircularProgressIndicator::adaptive` pick the Apple-style widget under an iOS or macOS
+  theme. Two new widget hooks: `Widget::pressed_opacity` (a press that dims a whole subtree)
+  and `Widget::overlay_presentation` with `OverlayPresentation` (a modal overlay that fades and
+  scales into place). A new localised entry, `Localizations::alert_dialog_label`. The demo
+  has an "Apple-style widgets" screen.
 - **The framework's own words in German, Spanish, Japanese, Thai and Vietnamese** (J813). The
   built-in tables now cover seven languages, and an application that lists one in its supported
   locales gets it with no table of its own: the shell installs
