@@ -317,6 +317,12 @@ pub struct WebInput {
     /// `autocorrect` and `spellcheck`: off for what is not prose — an address, a number,
     /// a secret — where a correction is a mistake.
     pub corrects: bool,
+    /// `autocomplete`: what the field is for, so the browser can fill it — `one-time-code`
+    /// for a code that arrived by SMS (milestone 810). `off` for a field that said nothing,
+    /// whose suggestions would only come up over a field drawn elsewhere. Set from the
+    /// field's first [`AutofillHint`](crate::AutofillHint) by
+    /// [`AutofillHint::web`](crate::AutofillHint::web).
+    pub autocomplete: &'static str,
 }
 
 impl Ime {
@@ -365,6 +371,7 @@ impl Ime {
                 Capitalization::Characters => "characters",
             },
             corrects: matches!(k, K::Text | K::Multiline),
+            autocomplete: "off",
         }
     }
 }

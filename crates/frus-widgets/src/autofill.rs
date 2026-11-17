@@ -125,6 +125,73 @@ impl AutofillHint {
         }
     }
 
+    /// The `autocomplete` token a browser expects for this hint (milestone 810): the web
+    /// editing element carries it, which is what makes a browser offer a saved address, a
+    /// password, or a code that arrived by SMS.
+    ///
+    /// ```
+    /// use frus_widgets::AutofillHint;
+    ///
+    /// assert_eq!(AutofillHint::OneTimeCode.web(), "one-time-code");
+    /// assert_eq!(AutofillHint::Password.web(), "current-password");
+    /// ```
+    pub const fn web(self) -> &'static str {
+        match self {
+            Self::Username | Self::NewUsername => "username",
+            Self::Password => "current-password",
+            Self::NewPassword => "new-password",
+            Self::OneTimeCode => "one-time-code",
+            Self::Email => "email",
+            Self::Name => "name",
+            Self::GivenName => "given-name",
+            Self::FamilyName => "family-name",
+            Self::TelephoneNumber => "tel",
+            Self::StreetAddress | Self::PostalAddress => "street-address",
+            Self::PostalCode => "postal-code",
+            Self::AddressCity => "address-level2",
+            Self::AddressState => "address-level1",
+            Self::CountryName => "country-name",
+            Self::CreditCardNumber => "cc-number",
+            Self::CreditCardExpirationDate => "cc-exp",
+            Self::CreditCardSecurityCode => "cc-csc",
+        }
+    }
+
+    /// The name of the `UITextContentType` an iOS text field is given for this hint
+    /// (milestone 810): `oneTimeCode` for a code that arrived by SMS, which is what puts the
+    /// code above the keyboard.
+    ///
+    /// The table is here so that it is written, read and tested once; frus has no iOS
+    /// editing bridge yet to hand it to.
+    ///
+    /// ```
+    /// use frus_widgets::AutofillHint;
+    ///
+    /// assert_eq!(AutofillHint::OneTimeCode.ios(), "oneTimeCode");
+    /// ```
+    pub const fn ios(self) -> &'static str {
+        match self {
+            Self::Username | Self::NewUsername => "username",
+            Self::Password => "password",
+            Self::NewPassword => "newPassword",
+            Self::OneTimeCode => "oneTimeCode",
+            Self::Email => "emailAddress",
+            Self::Name => "name",
+            Self::GivenName => "givenName",
+            Self::FamilyName => "familyName",
+            Self::TelephoneNumber => "telephoneNumber",
+            Self::StreetAddress => "streetAddressLine1",
+            Self::PostalAddress => "fullStreetAddress",
+            Self::PostalCode => "postalCode",
+            Self::AddressCity => "addressCity",
+            Self::AddressState => "addressState",
+            Self::CountryName => "countryName",
+            Self::CreditCardNumber => "creditCardNumber",
+            Self::CreditCardExpirationDate => "creditCardExpiration",
+            Self::CreditCardSecurityCode => "creditCardSecurityCode",
+        }
+    }
+
     /// Is what this field holds a **secret**, so that it must never be shown in a
     /// screenshot of the structure, nor learned by a keyboard?
     ///

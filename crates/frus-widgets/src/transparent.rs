@@ -561,6 +561,10 @@ macro_rules! forward_transparent {
                 self.inner.clips_to_box()
             }
 
+            fn marquee(&self) -> Option<$crate::marquee::MarqueeMotion> {
+                self.inner.marquee()
+            }
+
             fn hero_tag(&self) -> Option<u64> {
                 self.inner.hero_tag()
             }
@@ -603,6 +607,14 @@ macro_rules! forward_transparent {
 
             fn on_page_changed(&self, page: usize) -> Option<Msg> {
                 self.inner.on_page_changed(page)
+            }
+
+            fn page_tick(&self) -> bool {
+                self.inner.page_tick()
+            }
+
+            fn on_custom_action(&self, index: usize) -> Option<Msg> {
+                self.inner.on_custom_action(index)
             }
 
             fn on_scroll(

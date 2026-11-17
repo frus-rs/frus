@@ -895,9 +895,33 @@ pub struct Runtime {
     /// Where each open hover card was placed, by the card's own id: the pointer on the card
     /// keeps it open, and the next frame's walk needs to know where it was.
     pub(crate) card_rects: RefCell<HashMap<WidgetId, Rect>>,
+    /// When each scrolling [`Marquee`](crate::Marquee) started, and when it was last drawn
+    /// (milestone 811): a marquee runs from its own start, with its pause, rather than
+    /// from wherever the application's clock happens to be.
+    pub(crate) marquees: RefCell<HashMap<WidgetId, (f32, f32)>>,
 }
 
 impl Runtime {
+    /// How long the marquee `id` has been scrolling, in seconds, as of this frame.
+    ///
+    /// A marquee not drawn for more than a second — gone from the screen, or still because
+    /// it fitted — starts again from its beginning; the entries of those are forgotten here,
+    /// so the table holds only what is moving.
+    pub(crate) fn marquee_elapsed(&self, id: WidgetId) -> f32 {
+        let now = self.time;
+        let mut marquees = self.marquees.borrow_mut();
+        let entry = marquees.entry(id).or_insert((now, now));
+        if now - entry.1 > 1.0 || now < entry.0 {
+            *entry = (now, now);
+        }
+        entry.1 = now;
+        let elapsed = now - entry.0;
+        if marquees.len() > 64 {
+            marquees.retain(|_, (_, seen)| now - *seen <= 1.0);
+        }
+        elapsed
+    }
+
     /// Whether the focus is shown now: [`Traditional`](crate::FocusHighlightMode::Traditional)
     /// after a key, [`Touch`](crate::FocusHighlightMode::Touch) after a touch or a click.
     pub fn focus_highlight_mode(&self) -> crate::FocusHighlightMode {
@@ -2038,7 +2062,19 @@ impl Runtime {
             } else {
                 (area.metrics_y(current.1), velocity.1)
             };
-            let motion = physics.page_ballistic(metrics, velocity, snap.extent);
+            // A region of rows that **coasts** (a wheel, milestone 814) is the exception: its
+            // release speed says how far, so it is filtered like any fling's — a release too
+            // slow to be one goes back to the nearest row rather than on to the next.
+            let motion = if snap.coasting {
+                let velocity = if velocity.abs() >= physics.min_fling_velocity() {
+                    velocity
+                } else {
+                    0.0
+                };
+                physics.item_ballistic(metrics, velocity, snap.extent)
+            } else {
+                physics.page_ballistic(metrics, velocity, snap.extent)
+            };
             if motion.is_none() {
                 return false;
             }
@@ -2109,6 +2145,13 @@ impl Runtime {
             }
             let previous = self.page_requested.insert(area.id, snap.requested);
             if previous == Some(snap.requested) {
+                continue;
+            }
+            // The application **echoing** the page the view already shows — it was told of
+            // the change mid-drag or mid-fling and answered with it — is not a request to go
+            // anywhere: gliding there would stop the fling at the first page it passed
+            // (milestone 810).
+            if previous.is_some() && self.page_shown.get(&area.id) == Some(&snap.requested) {
                 continue;
             }
             let max = if snap.horizontal {
@@ -2633,6 +2676,40 @@ impl Runtime {
         crate::dismiss::release_of(&mut self.dismiss, id, velocity, cross, axis, threshold)
     }
 
+    /// Moves the swiped item `item` by `delta` px along its axis (milestone 810): a
+    /// [`SwipeActions`](crate::SwipeActions) row uncovering its actions, any other
+    /// dismissible sliding away.
+    pub fn swipe_drag(&mut self, item: &crate::dismiss::Dismissable, delta: f32) {
+        crate::dismiss::swipe_drag(&mut self.dismiss, item, delta);
+    }
+
+    /// The finger lets go of the swiped item `item`, at `velocity` px/s along its axis and
+    /// `cross` across it; `cancelled` for a gesture the platform took back.
+    pub fn swipe_release(
+        &mut self,
+        item: &crate::dismiss::Dismissable,
+        velocity: f32,
+        cross: f32,
+        cancelled: bool,
+    ) {
+        crate::dismiss::swipe_release(&mut self.dismiss, item, velocity, cross, cancelled);
+    }
+
+    /// The [`SwipeActions`](crate::SwipeActions) rows resting open, or on their way.
+    pub fn open_swipe_rows(&self) -> Vec<WidgetId> {
+        crate::dismiss::open_rows(&self.dismiss)
+    }
+
+    /// Closes every open [`SwipeActions`](crate::SwipeActions) row.
+    pub fn close_swipe_rows(&mut self) {
+        crate::dismiss::close_all(&mut self.dismiss);
+    }
+
+    /// How far the swiped item `id` has moved, as a signed share of its width.
+    pub fn swipe_progress(&self, id: WidgetId) -> f32 {
+        self.dismiss.get(&id).map_or(0.0, |s| s.progress())
+    }
+
     /// How much of a dismissed item's box is left, while its gap closes. `None` = not
     /// collapsing, so the item keeps the size its style asks for.
     pub fn dismiss_extent_factor(&self, id: WidgetId) -> Option<f32> {
@@ -3019,6 +3096,7 @@ mod tests {
             refresh: None,
             page: Some(crate::PageSnap {
                 snapping: true,
+                coasting: false,
                 extent: 300.0,
                 count: 3,
                 requested,

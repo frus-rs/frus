@@ -456,7 +456,9 @@ impl<Msg: Clone + 'static> LicensePage<Msg> {
             match selected.and_then(|index| packages.get(index)) {
                 // One package: its name, and the whole of every licence covering it.
                 Some((package, covering)) => {
-                    let back = back_label.clone().unwrap_or_else(|| "Back".to_string());
+                    let back = back_label.clone().unwrap_or_else(|| {
+                        crate::localizations::of().back_button_label().to_string()
+                    });
                     if let Some(on_select) = &on_select {
                         let on_select = Rc::clone(on_select);
                         column = column.child(
@@ -490,11 +492,9 @@ impl<Msg: Clone + 'static> LicensePage<Msg> {
                     for (index, (package, covering)) in packages.iter().enumerate() {
                         let mut tile = crate::ListTile::new()
                             .title(package.label())
-                            .subtitle(if covering.len() == 1 {
-                                "1 licence".to_string()
-                            } else {
-                                format!("{} licences", covering.len())
-                            })
+                            .subtitle(
+                                crate::localizations::of().license_count_label(covering.len()),
+                            )
                             .dense();
                         if let Some(on_select) = &on_select {
                             tile = tile.on_tap(on_select(Some(index)));
@@ -627,16 +627,21 @@ impl<Msg: Clone + 'static> AboutDialog<Msg> {
         }
         if let Some(message) = on_licences {
             dialog = dialog.action(
-                crate::Button::new(licences_label.unwrap_or_else(|| "Licences".to_string()))
-                    .variant(crate::Variant::Text)
-                    .on_press(message),
+                crate::Button::new(
+                    licences_label
+                        .unwrap_or_else(|| crate::localizations::of().licenses_label().to_string()),
+                )
+                .variant(crate::Variant::Text)
+                .on_press(message),
             );
         }
         if let Some(message) = on_close {
             dialog = dialog.on_dismiss(message.clone()).action(
-                crate::Button::new(close_label.unwrap_or_else(|| "Close".to_string()))
-                    .variant(crate::Variant::Text)
-                    .on_press(message),
+                crate::Button::new(close_label.unwrap_or_else(|| {
+                    crate::localizations::of().close_button_label().to_string()
+                }))
+                .variant(crate::Variant::Text)
+                .on_press(message),
             );
         }
         dialog.body(body)

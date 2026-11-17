@@ -82,6 +82,7 @@ mod editing;
 mod expanded;
 mod expansionpanel;
 mod fab;
+mod filetree;
 mod filters;
 mod fittedbox;
 mod flex;
@@ -108,7 +109,9 @@ mod presence;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
 mod animationhandle;
+mod emptystate;
 mod expandrail;
+mod field;
 mod glass;
 pub mod host;
 mod icon;
@@ -130,6 +133,7 @@ mod hovercard;
 mod keepalive;
 mod keyboarddismiss;
 mod keyed;
+mod kpicard;
 mod layoutbuilder;
 mod lazy;
 pub mod licenses;
@@ -145,6 +149,7 @@ pub mod locale;
 pub mod localizations;
 #[cfg(feature = "lottie")]
 mod lottie;
+mod marquee;
 mod media;
 mod mediascope;
 mod menu;
@@ -156,6 +161,7 @@ mod navigator;
 mod navrail;
 mod navscaffold;
 mod notifier;
+mod otpinput;
 mod overflowbar;
 mod overscroll;
 mod pageselector;
@@ -186,6 +192,7 @@ mod resizable;
 mod responsive;
 mod restoration;
 mod richtext;
+mod rollingdigits;
 mod rotatedbox;
 mod router;
 mod rowcolumn;
@@ -208,10 +215,12 @@ mod shadowprobe;
 mod shapes;
 mod sheet;
 mod shortcuts;
+mod sidebar;
 mod skeleton;
 mod slider;
 mod slidershape;
 mod spacer;
+mod sparkline;
 mod spinner;
 mod stack;
 mod stepper;
@@ -222,11 +231,13 @@ mod stepform;
 mod stretch;
 #[cfg(feature = "svg")]
 mod svg;
+mod swipeactions;
 mod switch;
 mod table;
 mod tabs;
 mod text;
 mod textinput;
+mod wheelpicker;
 // External textures: video, camera, maps, native views (milestone 793).
 mod texture;
 mod theme;
@@ -408,8 +419,8 @@ pub use disabled::{
     DISABLED_CONTENT_OPACITY,
 };
 pub use dismiss::{
-    DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState, Dismissable,
-    Dismissible,
+    revealed_strip, DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState,
+    Dismissable, Dismissible, RevealSpec,
 };
 pub use divider::{Divider, VerticalDivider, DIVIDER_SPACE, DIVIDER_THICKNESS};
 pub use dragdrop::{DragSource, DragTarget, Draggable, DropZone};
@@ -419,6 +430,7 @@ pub use dropdown::{DropdownButton, DropdownOption};
 pub use dropdownmenu::DropdownMenu;
 pub use dsl::{button, center, expanded, flexible, keyed, spacer, text};
 pub use editing::TextEditingController;
+pub use emptystate::{EmptyState, EmptyStateTheme};
 pub use expanded::{Expanded, FlexFit, Flexible};
 pub use expandrail::{
     ExpandableNavigationRail, ExpandableRailTheme, RailDestination, RAIL_COLLAPSED_WIDTH,
@@ -426,6 +438,10 @@ pub use expandrail::{
 };
 pub use expansionpanel::{ExpansionPanel, ExpansionPanelList};
 pub use fab::{FabSize, FloatingActionButton};
+pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
+pub use filetree::{
+    FileNode, FileNodeKind, FileTree, FileTreeTheme, FILE_TREE_INDENT, FILE_TREE_ROW_HEIGHT,
+};
 pub use filters::{BackdropFilter, BackdropGroup, ColorFiltered, ImageFiltered, ShaderMask};
 pub use fittedbox::FittedBox;
 pub use flex::{Flex, ListBody, Wrap};
@@ -477,6 +493,7 @@ pub use kbd::Kbd;
 pub use keepalive::KeepAlive;
 pub use keyboarddismiss::{KeyboardDismissBehavior, TapOutside};
 pub use keyed::{ChildKey, Keyed};
+pub use kpicard::{KpiCard, KpiCardTheme, KpiTrend};
 pub use layoutbuilder::LayoutBuilder;
 pub use licenses::{AboutDialog, AboutListTile, LicenseNotice, LicensePage, Package};
 pub use list::{ListView, VirtualList};
@@ -494,9 +511,14 @@ pub use local_task::{
     local_tasks, run_local_tasks, set_local_wake, spawn_local, TaskHandle, TaskScope,
 };
 pub use locale::Locale;
-pub use localizations::{English, French, Localizations};
+pub use localizations::{
+    English, French, German, Japanese, Localizations, Spanish, Thai, Vietnamese,
+};
 #[cfg(feature = "lottie")]
 pub use lottie::Lottie;
+pub use marquee::{
+    Marquee, MarqueeMotion, MarqueeTheme, MARQUEE_GAP, MARQUEE_PAUSE, MARQUEE_VELOCITY,
+};
 pub use media::{
     Accessibility, AccessibilityOverrides, Brightness, Edges, MediaQuery, SurfaceGuard,
 };
@@ -516,6 +538,9 @@ pub use navrail::{BottomBar, DestinationIcon, NavigationDestination, NavigationR
 pub use navscaffold::NavScaffold;
 pub use notifier::{ChangeNotifier, Listenable, Subscription, ValueNotifier};
 pub use opencontainer::{OpenContainer, OpenContainerTheme};
+pub use otpinput::{
+    OtpInput, OtpInputTheme, OtpKind, OTP_BOX_HEIGHT, OTP_BOX_WIDTH, OTP_GAP, OTP_GROUP_GAP,
+};
 pub use overflowbar::OverflowBar;
 pub use overscroll::{
     cross_axis as glow_cross_axis, edge_for, GlowEdge, OverscrollGlow, ScrollGlows,
@@ -529,9 +554,9 @@ pub use pageview::{PageSnap, PageView, PagedView};
 pub use pagination::Pagination;
 pub use paintcache::PaintCache;
 pub use physics::{
-    page_of, page_target, snap_target, Ballistic, OverscrollIndicator, ScrollDecelerationRate,
-    ScrollFeel, ScrollMetrics, ScrollPhysics, Scrollbars, UserScroll, CONSTANT_DECELERATION_FAST,
-    MAX_FLING_VELOCITY, MIN_FLING_VELOCITY,
+    page_of, page_target, snap_target, Ballistic, Landing, OverscrollIndicator,
+    ScrollDecelerationRate, ScrollFeel, ScrollMetrics, ScrollPhysics, Scrollbars, UserScroll,
+    CONSTANT_DECELERATION_FAST, MAX_FLING_VELOCITY, MIN_FLING_VELOCITY,
 };
 pub use placeholder::{Placeholder, PLACEHOLDER_COLOR, PLACEHOLDER_FALLBACK, PLACEHOLDER_STROKE};
 pub use platformview::{
@@ -568,6 +593,7 @@ pub use resizable::{ResizablePanel, ResizablePanels, ResizablePanelsState, Resiz
 pub use responsive::{responsive, Responsive};
 pub use restoration::{restoration_scope, RestorableValue, Restoration, RestorationBucket};
 pub use richtext::RichText;
+pub use rollingdigits::{RollingDigits, RollingDigitsTheme};
 pub use rotatedbox::RotatedBox;
 pub use router::{
     GoRoute, GoRouter, GoRouterState, NavigationShell, PopResult, RouteChange, RouteChangeKind,
@@ -614,6 +640,10 @@ pub use shortcuts::{
     ActionListener, Actions, CallbackShortcuts, FocusableActionDetector, Intent, KeyStroke,
     KeyboardListener, ShortcutKey, Shortcuts,
 };
+pub use sidebar::{
+    Sidebar, SidebarItem, SidebarTheme, SIDEBAR_BREAKPOINT, SIDEBAR_COLLAPSED_WIDTH,
+    SIDEBAR_EXPANDED_WIDTH,
+};
 pub use skeleton::Skeleton;
 pub use slider::{RangeSlider, ShowValueIndicator, Slider, SliderInteraction};
 pub use slidershape::{
@@ -629,6 +659,7 @@ pub use sliver::{
     SliverPersistentHeader, SliverToBoxAdapter, DEFAULT_CACHE_EXTENT,
 };
 pub use spacer::Spacer;
+pub use sparkline::{Sparkline, SparklineTheme, SPARKLINE_HEIGHT};
 pub use spinner::CircularProgressIndicator;
 pub use stack::{Clip, IndexedStack, Stack, StackFit};
 pub use stepform::{
@@ -640,6 +671,10 @@ pub use sticky::StickyHeader;
 pub use stretch::{OverscrollStretch, ScrollStretch};
 #[cfg(feature = "svg")]
 pub use svg::SvgPicture;
+pub use swipeactions::{
+    SwipeAction, SwipeActions, SwipeActionsTheme, SWIPE_ACTION_WIDTH, SWIPE_FULL_THRESHOLD,
+    SWIPE_ROW_HEIGHT,
+};
 pub use switch::Switch;
 pub use switcher::AnimatedSwitcher;
 pub use system_ui::{AnnotatedRegion, SystemBars, SystemUiOverlayStyle};
@@ -703,6 +738,9 @@ pub use webview::{
     WEB_VIEW_DEFAULT_HEIGHT, WEB_VIEW_TYPE,
 };
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
+pub use wheelpicker::{
+    WheelColumn, WheelPicker, WheelPickerTheme, WHEEL_ITEM_EXTENT, WHEEL_VISIBLE_ROWS,
+};
 pub use widget::{
     CellFn, DragMode, DragTrack, FillAxes, FilterContext, ReorderAxis, ThumbDrag, Widget,
 };

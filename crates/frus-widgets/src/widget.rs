@@ -1057,6 +1057,21 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// Whether a paged view gives a **haptic tick** each time the page on screen changes
+    /// (milestone 810): a [`WheelPicker`](crate::WheelPicker)'s click as each value passes
+    /// the middle, where the platform has haptics and the theme has
+    /// [`enable_feedback`](crate::Theme::enable_feedback) on.
+    fn page_tick(&self) -> bool {
+        false
+    }
+
+    /// The message for **named action** `index` of this widget's semantics (milestone 810):
+    /// a screen reader performing the action at `index` of
+    /// [`SemanticsProperties::custom_actions`]. `None` when there is none.
+    fn on_custom_action(&self, _index: usize) -> Option<Msg> {
+        None
+    }
+
     /// Message sent by a **scroll region** when its offset changes — the reading half
     /// of [`crate::ScrollPosition`].
     ///
@@ -1123,6 +1138,16 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// child spill (milestone 597).
     fn clips_to_box(&self) -> bool {
         false
+    }
+
+    /// If the child of the box this widget's
+    /// [`constraints_transform`](Self::constraints_transform) makes **scrolls by itself
+    /// when it is wider than the box** — a [`crate::Marquee`] — how it moves (milestone
+    /// 811). The walk slides the child along with the clock, draws the second child (a
+    /// copy) a gap behind it so the loop has no seam, and asks for frames only while the
+    /// child overflows and motion is allowed. `None` — the default — and nothing moves.
+    fn marquee(&self) -> Option<crate::marquee::MarqueeMotion> {
+        None
     }
 
     /// If the widget builds its content **from its actual box**, returns the
@@ -2458,6 +2483,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     fn clips_to_box(&self) -> bool {
         (**self).clips_to_box()
     }
+    fn marquee(&self) -> Option<crate::marquee::MarqueeMotion> {
+        (**self).marquee()
+    }
     fn hero_tag(&self) -> Option<u64> {
         (**self).hero_tag()
     }
@@ -2490,6 +2518,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn on_page_changed(&self, page: usize) -> Option<Msg> {
         (**self).on_page_changed(page)
+    }
+    fn page_tick(&self) -> bool {
+        (**self).page_tick()
+    }
+    fn on_custom_action(&self, index: usize) -> Option<Msg> {
+        (**self).on_custom_action(index)
     }
     fn on_scroll(&self, position: crate::scrollposition::ScrollPosition) -> Option<Msg> {
         (**self).on_scroll(position)

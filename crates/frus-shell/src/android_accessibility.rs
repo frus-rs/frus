@@ -121,7 +121,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
     // Every row's strings in a frame of their own: the thread is attached for good, and a
     // local reference nobody frees would stay for as long as the process does.
     let count = tree.nodes.len();
-    let capacity = 33 + 5 * count as i32 + 2 * events.len() as i32;
+    let capacity = 34 + 6 * count as i32 + 2 * events.len() as i32;
     let result = env.with_local_frame(capacity, |env| -> jni::errors::Result<()> {
         let n = count as i32;
         let ids = env.new_int_array(n)?;
@@ -136,6 +136,8 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
         let texts = env.new_object_array(n, "java/lang/String", JObject::null())?;
         let descriptions = env.new_object_array(n, "java/lang/String", JObject::null())?;
         let hints = env.new_object_array(n, "java/lang/String", JObject::null())?;
+        // A row's named actions (milestone 810), one line each; null for none.
+        let customs = env.new_object_array(n, "java/lang/String", JObject::null())?;
 
         let mut id_buf = Vec::with_capacity(count);
         let mut parent_buf = Vec::with_capacity(count);
@@ -167,6 +169,10 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
                     let value = env.new_string(value)?;
                     env.set_object_array_element(array, i, &value)?;
                 }
+            }
+            if !node.custom_actions.is_empty() {
+                let names = env.new_string(node.custom_actions.join("\n"))?;
+                env.set_object_array_element(&customs, i, &names)?;
             }
         }
         env.set_int_array_region(&ids, 0, &id_buf)?;
@@ -201,7 +207,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
             class,
             "publish",
             "([I[I[I[I[I[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;\
-             [Ljava/lang/String;[F[I[I[I[Ljava/lang/String;Ljava/lang/String;)V",
+             [Ljava/lang/String;[Ljava/lang/String;[F[I[I[I[Ljava/lang/String;Ljava/lang/String;)V",
             &[
                 JValue::Object(&ids),
                 JValue::Object(&parents),
@@ -212,6 +218,7 @@ pub(crate) fn publish(tree: &AndroidTree, events: &[AndroidEvent], announce: Opt
                 JValue::Object(&texts),
                 JValue::Object(&descriptions),
                 JValue::Object(&hints),
+                JValue::Object(&customs),
                 JValue::Object(&ranges),
                 JValue::Object(&scrolls),
                 JValue::Object(&embeds),

@@ -672,6 +672,12 @@ impl HomeState {
                         link("Web browser →", "/browser"),
                         link("In-app purchases →", "/shop"),
                         link("Overlays and panels →", "/overlays"),
+                        link("One-time code →", "/otp"),
+                        link("Fields and groups →", "/fields"),
+                        link("Empty state →", "/empty"),
+                        link("Swipe actions →", "/swipe"),
+                        link("Wheel picker →", "/wheel"),
+                        link("Display widgets →", "/display"),
                         link("Conversation →", "/conversation"),
                         link("Questionnaire →", "/questionnaire"),
                     ]

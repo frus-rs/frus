@@ -281,3 +281,99 @@ fn threads() -> Box<dyn Widget> {
 
 `.on_scroll(|position| ..)` tells you where the list is — to load the next page when the reader
 nears the end, for instance: `position.offset.1 > position.max.1 - 400.0`.
+
+## Actions behind a row
+
+`SwipeActions` is a row that slides aside to show what can be done with it, and stays: it
+rests open on its actions, springs closed short of half of them, and a swipe all the way
+performs the first action of that side. Rows of the same `.group` are open one at a time.
+Leading actions are on the reading start side, so a right-to-left interface mirrors them.
+
+```rust
+use frus::{component, keyed, Align, Column, Icons, ListTile, SwipeAction, SwipeActions, Widget};
+
+fn mailbox() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let mail = cx.use_state(|| vec!["Lunch on Friday?", "Your invoice", "Weekly report"]);
+        let rows = mail.get().into_iter().fold(
+            Column::new().cross_axis_alignment(Align::Stretch),
+            |column, subject| {
+                let (archive, delete) = (mail.clone(), mail.clone());
+                let row = SwipeActions::new(ListTile::new().title(subject))
+                    .trailing(
+                        SwipeAction::new("Delete", move || {
+                            delete.update(|m| m.retain(|s| *s != subject))
+                        })
+                        .icon(Icons::DELETE),
+                    )
+                    .leading(
+                        SwipeAction::new("Archive", move || {
+                            archive.update(|m| m.retain(|s| *s != subject))
+                        })
+                        .icon(Icons::ARCHIVE),
+                    )
+                    .group(1)
+                    .height(56.0);
+                column.child(keyed(subject, row))
+            },
+        );
+        Box::new(rows)
+    }))
+}
+```
+
+The actions are not only for fingers: a focused row opens with the arrow keys and closes with
+Escape, and a screen reader offers every action by name in its actions menu.
+
+## Picking from a wheel
+
+`WheelPicker` is one or more spinning wheels behind one band, the way a time or a date is picked
+on a phone. A flick spins a wheel through many values and settles exactly on one; a slow
+release goes back to the nearest. A `.looping(true)` column goes round, and the phone ticks under
+the finger as each value passes the middle.
+
+```rust
+use frus::{component, WheelColumn, WheelPicker, Widget};
+
+fn alarm() -> Box<dyn Widget> {
+    Box::new(component(|cx| {
+        let hour = cx.use_state(|| 7usize);
+        let minute = cx.use_state(|| 30usize);
+        let (h, m) = (hour.clone(), minute.clone());
+        Box::new(
+            WheelPicker::new()
+                .column(
+                    WheelColumn::new(24, |i| format!("{i:02}"), move |i: usize| h.set(i))
+                        .selected(hour.get())
+                        .looping(true),
+                )
+                .column(
+                    WheelColumn::new(60, |i| format!("{i:02}"), move |i: usize| m.set(i))
+                        .selected(minute.get())
+                        .looping(true),
+                ),
+        )
+    }))
+}
+```
+
+`WheelColumn::numbers(1950..=2050, year, ..)` is a column of numbers, and a date is three
+columns side by side. A single wheel of any widgets is `ListWheel`.
+
+## When there is nothing to list
+
+`EmptyState` is what a list shows before it has anything: an icon or an illustration, a title,
+a line saying why, and what to do about it.
+
+```rust
+use frus::{button, EmptyState, Icons, Widget};
+
+fn no_projects() -> Box<dyn Widget> {
+    Box::new(
+        EmptyState::new("No projects yet")
+            .icon(Icons::FOLDER_OPEN)
+            .description("Projects you create show up here.")
+            .action(button("New project", || {})),
+    )
+}
+```

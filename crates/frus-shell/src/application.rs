@@ -528,10 +528,15 @@ pub trait Application {
     /// language: the label on a back arrow, the word on a notification's cross, a
     /// calendar's month names and *which day its weeks start on*.
     ///
-    /// `None` — the default — leaves them in English, which is what they were before
-    /// any of them could be translated. Answer with a table and the shell installs it
-    /// **every frame**, so an application that changes language while it is running is
-    /// obeyed on the next one.
+    /// `None` — the default — gives the framework's own table for the language
+    /// [`resolved_locale`](Application::resolved_locale) chose
+    /// ([`localizations::for_locale`](frus_widgets::localizations::for_locale)): English,
+    /// French, German, Spanish, Japanese, Thai or Vietnamese, and English for any other. So
+    /// listing a language in [`supported_locales`](Application::supported_locales) is enough
+    /// for the framework to speak it. Answer with a table of your own — for a language the
+    /// framework has none for, or to change a few of its words — and the shell installs that
+    /// instead. Either way it is installed **every frame**, so an application that changes
+    /// language while it is running is obeyed on the next one.
     ///
     /// See [`frus_widgets::localizations`].
     fn localizations(&self) -> Option<std::rc::Rc<dyn Localizations>> {

@@ -5685,8 +5685,45 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     _ if widget.clips_to_box() => clip.intersect(own),
                     _ => clip,
                 };
-                let mut child_index = 0;
-                self.walk(child, cid, origin, clip, &child_rects, &mut child_index);
+                // A marquee whose child is wider than it, with motion allowed, slides the
+                // child along with the clock and draws its copy a gap behind it (milestone
+                // 811). One that fits, or that the reader asked to keep still, is walked
+                // as any other box, and asks for no frame.
+                let moving = widget.marquee().filter(|motion| {
+                    motion.moves(own.width, size.width)
+                        && !self.runtime.still
+                        && !crate::MediaQuery::reduce_motion()
+                });
+                if let Some(motion) = moving {
+                    self.wants_animation = true;
+                    let elapsed = self.runtime.marquee_elapsed(id);
+                    let lap = size.width + motion.gap.max(0.0);
+                    let travel = motion.travel(elapsed, lap);
+                    // The content runs towards where reading starts, unless told otherwise:
+                    // to the left in a left-to-right text, to the right in the other.
+                    let leftwards = motion.reverse == self.rtl();
+                    let sign = if leftwards { -1.0 } else { 1.0 };
+                    let at = (origin.0 + sign * travel, origin.1);
+                    let mut child_index = 0;
+                    self.walk(child, cid, at, clip, &child_rects, &mut child_index);
+                    if let Some(copy) = widget.children().get(1) {
+                        let copy = copy.as_ref();
+                        let copy_id = child_id(id, 1, copy);
+                        let copy_rects = self.cached_rects(copy_id, copy, constraints);
+                        let mut copy_index = 0;
+                        self.walk(
+                            copy,
+                            copy_id,
+                            (at.0 - sign * lap, at.1),
+                            clip,
+                            &copy_rects,
+                            &mut copy_index,
+                        );
+                    }
+                } else {
+                    let mut child_index = 0;
+                    self.walk(child, cid, origin, clip, &child_rects, &mut child_index);
+                }
             }
         } else if let Some(build) = widget.layout_builder() {
             // Builds the content from the actual box, then lays it out and renders it inside
@@ -5831,8 +5868,10 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 rect: bounds,
                 spec,
             });
-            // A swipe that is settling, flying or collapsing drives itself.
-            if state.is_some_and(|s| s.phase() != DismissPhase::Drag) {
+            // A swipe that is settling, flying or collapsing drives itself; a row of actions
+            // resting open does not.
+            if state.is_some_and(|s| !matches!(s.phase(), DismissPhase::Drag | DismissPhase::Open))
+            {
                 self.wants_animation = true;
             }
         } else if let Some(custom) = widget.custom_layout() {

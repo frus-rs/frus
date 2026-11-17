@@ -55,6 +55,8 @@ fn to_ak_role(role: Role) -> AkRole {
         Role::ProgressBar => AkRole::ProgressIndicator,
         Role::Dialog => AkRole::Dialog,
         Role::Splitter => AkRole::Splitter,
+        Role::Tree => AkRole::Tree,
+        Role::TreeItem => AkRole::TreeItem,
     }
 }
 
@@ -96,6 +98,8 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
     }
     match sem.toggled {
         Toggled::None => {}
+        // A tree's item is selected, not ticked (milestone 811).
+        toggled if sem.role == Role::TreeItem => node.set_selected(toggled == Toggled::True),
         Toggled::False => node.set_toggled(AkToggled::False),
         Toggled::True => node.set_toggled(AkToggled::True),
         Toggled::Mixed => node.set_toggled(AkToggled::Mixed),
@@ -119,6 +123,17 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         // that types for the person (milestone 710). It goes through the message typing
         // would have produced, so a field that refuses typing refuses this too.
         node.add_action(Action::SetValue);
+    }
+    if !sem.custom_actions.is_empty() && !sem.disabled {
+        // Named actions beyond activating it — a list row's Archive and Delete
+        // (milestone 810) — offered in the reader's actions menu, by index.
+        for (index, name) in sem.custom_actions.iter().enumerate() {
+            node.push_custom_action(accesskit::CustomAction {
+                id: index as i32,
+                description: name.clone(),
+            });
+        }
+        node.add_action(Action::CustomAction);
     }
     node.add_action(Action::Focus);
     node
@@ -251,6 +266,8 @@ pub(crate) enum A11yAction {
     Focus(WidgetId),
     /// Put this text in the field (milestone 710).
     SetValue(WidgetId, String),
+    /// Perform the widget's named action at this index (milestone 810).
+    Custom(WidgetId, usize),
 }
 
 type Shared = Arc<Mutex<Snapshot>>;
@@ -289,6 +306,9 @@ fn forwarded(request: ActionRequest) -> Option<A11yAction> {
         (Action::Focus, _) => A11yAction::Focus(id),
         (Action::SetValue, Some(ActionData::Value(value))) => {
             A11yAction::SetValue(id, value.to_string())
+        }
+        (Action::CustomAction, Some(ActionData::CustomAction(index))) if index >= 0 => {
+            A11yAction::Custom(id, index as usize)
         }
         _ => return None,
     })
@@ -385,6 +405,25 @@ mod tests {
         assert_eq!(to_ak_role(Role::ProgressBar), AkRole::ProgressIndicator);
         assert_eq!(to_ak_role(Role::Dialog), AkRole::Dialog);
         assert_eq!(to_ak_role(Role::Splitter), AkRole::Splitter);
+        assert_eq!(to_ak_role(Role::Tree), AkRole::Tree);
+        assert_eq!(to_ak_role(Role::TreeItem), AkRole::TreeItem);
+    }
+
+    /// **A tree's item is selected, not ticked**, and says whether it is open (milestone
+    /// 811).
+    #[test]
+    fn a_tree_item_is_selected_and_expanded() {
+        let item = to_ak_node(
+            Rect::new(0.0, 0.0, 100.0, 28.0),
+            &sem(Role::TreeItem)
+                .label("src")
+                .toggled(true)
+                .expanded(false),
+        );
+        assert_eq!(item.role(), AkRole::TreeItem);
+        assert_eq!(item.is_selected(), Some(true));
+        assert_eq!(item.toggled(), None);
+        assert_eq!(item.is_expanded(), Some(false));
     }
 
     #[test]

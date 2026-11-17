@@ -74,6 +74,9 @@ pub(crate) mod action {
     /// `AccessibilityAction.ACTION_SET_PROGRESS`'s id, `android.R.id.accessibilityActionSetProgress`:
     /// not a bit of the mask, an action of its own.
     pub const SET_PROGRESS: i32 = 0x0102_003d;
+    /// The id of a node's first **named action** (milestone 810); the next is one more. Far
+    /// from every standard action's bit and from the platform's resource ids.
+    pub const CUSTOM_BASE: i32 = 0x7e00_0000;
 }
 
 /// Android's accessibility event types this side raises.
@@ -128,6 +131,9 @@ pub(crate) struct AndroidNode {
     /// The native view drawn in this node's place (milestone 794), whose own nodes the
     /// screen reader reads as its children; [`NO_EMBED`] for none.
     pub embed: i32,
+    /// The node's named actions beyond a press (milestone 810), in order: each offered as a
+    /// custom action whose id is [`action::CUSTOM_BASE`] plus its index.
+    pub custom_actions: Vec<String>,
 }
 
 impl AndroidNode {
@@ -237,7 +243,8 @@ impl VirtualIds {
 /// `EditText` "edit box", an `ActionBar$Tab` "tab".
 fn class_name(role: Role) -> &'static str {
     match role {
-        Role::None | Role::ListItem | Role::Dialog => "android.view.View",
+        Role::None | Role::ListItem | Role::Dialog | Role::TreeItem => "android.view.View",
+        Role::Tree => "android.widget.ListView",
         Role::Label | Role::Heading => "android.widget.TextView",
         Role::Button | Role::Link => "android.widget.Button",
         Role::CheckBox => "android.widget.CheckBox",
@@ -340,12 +347,13 @@ fn to_row(
             range: Some(range),
             scroll: None,
             embed: NO_EMBED,
+            custom_actions: Vec::new(),
         };
     }
     match (sem.role, sem.toggled) {
         (_, Toggled::None) => {}
-        // A tab is the selected one, not a ticked one.
-        (Role::Tab, toggled) => {
+        // A tab, or a tree's item, is the selected one, not a ticked one.
+        (Role::Tab | Role::TreeItem, toggled) => {
             if toggled == Toggled::True {
                 flags |= flag::SELECTED;
             }
@@ -378,6 +386,11 @@ fn to_row(
         range: None,
         scroll: None,
         embed: NO_EMBED,
+        custom_actions: if enabled {
+            sem.custom_actions.clone()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -442,6 +455,7 @@ fn area_row(id: i32, parent: i32, area: &ScrollArea, scale: f32) -> AndroidNode 
             px(area.max.1),
         ]),
         embed: NO_EMBED,
+        custom_actions: Vec::new(),
     }
 }
 
@@ -659,6 +673,8 @@ pub(crate) enum A11yAction {
     Adjust(WidgetId, bool),
     /// Move the slider to this fraction of its range.
     SetFraction(WidgetId, f32),
+    /// Perform the widget's named action at this index (milestone 810).
+    Custom(WidgetId, usize),
 }
 
 /// A request the Java half passed on: the virtual view, the Android action, and its
@@ -696,6 +712,14 @@ pub(crate) fn to_action(
             0.0
         };
         return Some(A11yAction::SetFraction(widget, fraction));
+    }
+    if let Some(index) = request
+        .action
+        .checked_sub(action::CUSTOM_BASE)
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|&index| index < node.custom_actions.len())
+    {
+        return Some(A11yAction::Custom(widget, index));
     }
     if node.actions & request.action == 0 {
         return None;

@@ -1485,14 +1485,14 @@ impl<Msg> TextField<Msg> {
     /// ([`ToolbarItem::custom`]) — or return an empty list, and no bar shows at all.
     ///
     /// ```
-    /// use frus_widgets::{TextField, ToolbarItem};
+    /// use frus_widgets::{EditAction, TextField, ToolbarItem};
     ///
     /// #[derive(Clone)]
     /// enum Msg { Translate }
     ///
     /// // A field that never lets its text be pasted over, and offers a way to translate it.
     /// let field: TextField<Msg> = TextField::new("Bonjour").selection_toolbar(|context, mut items| {
-    ///     items.retain(|item| item.label() != "Paste");
+    ///     items.retain(|item| item.edit_action() != Some(EditAction::Paste));
     ///     if context.has_selection {
     ///         items.push(ToolbarItem::custom("Translate", Msg::Translate));
     ///     }

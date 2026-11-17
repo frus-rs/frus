@@ -447,6 +447,14 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.on_page_changed(page))
     }
 
+    fn page_tick(&self) -> bool {
+        self.inner.as_ref().is_some_and(|w| w.page_tick())
+    }
+
+    fn on_custom_action(&self, index: usize) -> Option<Msg> {
+        self.inner.as_ref().and_then(|w| w.on_custom_action(index))
+    }
+
     fn on_scroll(&self, position: crate::ScrollPosition) -> Option<Msg> {
         self.inner.as_ref().and_then(|w| w.on_scroll(position))
     }

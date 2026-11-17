@@ -30,6 +30,60 @@ any release may break.
   `TextField::submit_on_enter`; `Steps` marks skipped and refused steps, can leave markers inert
   (`on_tap_where`), reads as a progress, and now puts its first step on the right in a
   right-to-left layout, where its hotspots already were.
+- **The framework's own words in German, Spanish, Japanese, Thai and Vietnamese** (J813). The
+  built-in tables now cover seven languages, and an application that lists one in its supported
+  locales gets it with no table of its own: the shell installs
+  `localizations::for_locale(resolved)` when `Application::localizations` answers `None`
+  (`es-MX` gets Spanish, a language frus has no words in gets English). Each table carries the
+  calendar's first day, the order a date is typed in, how a month and year, a day of a month and
+  a whole date are written, digit grouping and whether the clock has twenty-four hours. New
+  entries, all seven languages: the selection bar's Cut, Copy, Paste and Select all (they were
+  English constants; `EditAction::label` now returns a `String` and `ToolbarItem::label` a
+  `Cow<str>`, so tell built-in items apart with `edit_action`), an app bar's overflow button, a
+  chip's remove cross, the licence page's button and counts, a file tree's loading row, `date_input_format` (the order a
+  typed date is read in, which the hint's letters cannot say in every language), `month_year`,
+  `short_month_day`, `long_date` and `uses_24_hour_clock`. `parse_date` and `format_date` accept
+  `.` and `-` patterns. Japanese and Thai need a font with their letters on the web; desktop and
+  Android draw them with the system's fonts.
+- **Wheels coast** (J814). A flick on a `ListWheel` or a `WheelPicker` spins it through many
+  rows and settles exactly on one, the row nearest to where the platform's ordinary fling
+  would have stopped; a slow release goes back to the nearest row, and a flick past either
+  end rests on the end row. Before, a release moved exactly one row however fast it was.
+  `PageView` still turns one page per release. New: `ScrollPhysics::item_ballistic`,
+  `Ballistic::Landing` with `Landing` (a motion that comes to rest exactly on its end),
+  `Ballistic::final_x`, `BouncingScrollSimulation::final_x`, and `PageSnap::coasting` /
+  `PagedView::coasting` (a public field: code building these structs by hand must add it).
+
+- **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
+  next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for
+  the platform's SMS-code autofill), `Field` (a label, description, error and required marker
+  around any control; its error is read out by a screen reader when it appears), `InputGroup`
+  with `Addon` (a field and its text, icon or button in one bordered box), `SwipeActions` with
+  `SwipeAction` (a list row that rests open on its actions, performs the first on a swipe all
+  the way, opens one row per group, and offers its actions to the keyboard and to screen
+  readers by name), `WheelPicker` with `WheelColumn` (spinning wheels for a time or a date,
+  looping, with a haptic tick on phones), and `EmptyState`. Each has a theme in
+  `theme.widgets`. `ListWheel` gained `.looping` and `.haptic_ticks`, and a drag across a
+  wheel is no longer pulled back when the application echoes each value. Semantics gained
+  live regions (`SemanticsProperties::live`) and named actions (`custom_action`), bridged to AccessKit and
+  TalkBack. The web editing element carries the field's `autocomplete` token. Guides:
+  `docs/guide/input.md`, `docs/guide/lists.md`; the demo has a screen per widget.
+- **Display widgets** (J811). `Marquee`: text, or any child, that scrolls sideways in a loop
+  when it does not fit — still and free when it fits, waiting at the start of each lap,
+  followed by a copy so the loop has no seam, held still under reduced motion; a new walk hook
+  (`Widget::marquee`) moves it with the clock without rebuilding anything. `RollingDigits`: a
+  number whose digits roll like an odometer's wheels to each new value, on the theme's motion
+  tokens, in cells of one width, with grouping, decimals, prefix and suffix; instant under
+  reduced motion. `KpiCard`: label, value (text, rolling digits or any widget), change coloured
+  by the scheme's success and error colours (`lower_is_better` swaps them), an optional
+  `Sparkline` and slots for every part; read as one element. `FileTree`: folders and files
+  with lazy children (a loading row until they come), chevron to open, row to select, Right and
+  Left to open and close, rows read as tree items with their expanded and selected state.
+  `Sidebar`: side navigation in groups that folds into an icon rail with tooltips, its width
+  animated; with a body, a drawer with a scrim on a narrow window, closed by Back. Every colour,
+  size and timing has a `theme.widgets` entry. New semantic roles `Role::Tree` and
+  `Role::TreeItem`, mapped for AccessKit, ARIA and Android. The demo has a "Display widgets"
+  screen.
 
 - **Overlays and panels: `CommandPalette`, `HoverCard`, `ContextMenu`, `ResizablePanels`**
   (J809). A command palette over the screen, opened by a key the application chooses (its
