@@ -283,7 +283,8 @@ impl FrusApp {
         self
     }
 
-    /// The words the framework says on the application's behalf, where they are not English.
+    /// The words the framework says on the application's behalf, where its own table for the
+    /// resolved language will not do: a language it has no table for, or words of your own.
     pub fn localizations(self, table: std::rc::Rc<dyn Localizations>) -> Self {
         host::app().set_localizations(Some(table));
         self

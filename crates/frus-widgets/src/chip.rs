@@ -224,8 +224,8 @@ impl<Msg: Clone> Widget<Msg> for Remove<Msg> {
     }
 
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
-        let semantics =
-            frus_core::SemanticsProperties::new(frus_core::Role::Button).label("Remove");
+        let semantics = frus_core::SemanticsProperties::new(frus_core::Role::Button)
+            .label(crate::localizations::of().remove_button_label());
         // Milestone 320 stopped this cross answering a tap and stopped there. Tab still
         // landed on it and a reader was still told it could be pressed — the same control
         // reported three different ways, and the two that were wrong are the two nobody

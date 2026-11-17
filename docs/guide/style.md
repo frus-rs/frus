@@ -98,6 +98,46 @@ desktop's (Windows, macOS, and Linux through fontconfig) and, on Android, the on
 **web** there is no such font to reach: a page draws only the fonts the application bundles or
 registers, so register a face for every script it shows, or the character is drawn as a box.
 
+### The framework's own words in the reader's language
+
+Some words on screen come from frus rather than from your application: a back arrow's label, a
+date picker's title and month names, the Cut, Copy, Paste and Select all bar over a selection,
+a table's "Rows per page". frus has them in **English, French, German, Spanish, Japanese, Thai
+and Vietnamese**. List the languages your application has, and frus speaks the one the device
+resolves to:
+
+```rust
+use frus::{localizations, Locale, Localizations};
+
+// What an application's `supported_locales` returns.
+let supported = vec![Locale::new("en"), Locale::new("es"), Locale::new("ja")];
+// A phone set to Mexican Spanish resolves to `es`...
+let resolved = frus::locale::resolve(&[Locale::with_country("es", "MX")], &supported);
+assert_eq!(resolved, Locale::new("es"));
+// ...and frus says its words in Spanish, with the week starting on Monday.
+let words = localizations::for_locale(&resolved);
+assert_eq!(words.cancel_button_label(), "Cancelar");
+assert_eq!(words.month_year(8, 2026), "agosto de 2026");
+assert_eq!(words.first_day_of_week_index(), 1);
+// A language frus has no words in gets English.
+assert_eq!(localizations::for_locale(&Locale::new("sw")).cancel_button_label(), "Cancel");
+```
+
+The tables carry more than words: which day a calendar's week starts on, the order a date is
+typed in (`17.08.2026` in German, `2026/08/17` in Japanese), how a month and year are written
+together, how a number's thousands are grouped, and whether the clock has twenty-four hours
+(`uses_24_hour_clock`, which an application can use to pick a time picker's `hour12()`). Thai
+dates use the Gregorian year. To change some of the words, or to add a language, implement
+`Localizations` — every entry has an English default — and return it from the application's
+`localizations`.
+
+**Japanese and Thai need a font with their letters.** The bundled face has every letter of the
+other five languages but none of these two. On the desktop and on Android the system's own fonts
+draw them, so there is nothing to ship. On the **web** register a face for each with
+`frus::fonts::add_font` — a subset of Noto Sans JP or Noto Sans Thai — or they are drawn as
+boxes. No such font is bundled by default: each is megabytes, and most applications never show
+the script.
+
 ## Colours from the theme
 
 `cx.theme().scheme` holds the colour **roles**: `primary` and `on_primary` (what is drawn on

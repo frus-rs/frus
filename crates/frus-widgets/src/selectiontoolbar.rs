@@ -45,14 +45,17 @@ pub enum EditAction {
 }
 
 impl EditAction {
-    /// The words on the button.
-    pub fn label(self) -> &'static str {
+    /// The words on the button, in the language in force
+    /// ([`localizations::of`](crate::localizations::of)): *Copy*, *Copier*, *Kopieren*.
+    pub fn label(self) -> String {
+        let words = crate::localizations::of();
         match self {
-            EditAction::Cut => "Cut",
-            EditAction::Copy => "Copy",
-            EditAction::Paste => "Paste",
-            EditAction::SelectAll => "Select all",
+            EditAction::Cut => words.cut_button_label(),
+            EditAction::Copy => words.copy_button_label(),
+            EditAction::Paste => words.paste_button_label(),
+            EditAction::SelectAll => words.select_all_button_label(),
         }
+        .to_owned()
     }
 }
 
@@ -134,11 +137,14 @@ impl<Msg> ToolbarItem<Msg> {
         }
     }
 
-    /// The words on the item.
-    pub fn label(&self) -> &str {
+    /// The words on the item: a built-in one's in the language in force.
+    ///
+    /// To tell the built-in items apart, ask [`edit_action`](Self::edit_action) rather than
+    /// comparing words, which change with the language.
+    pub fn label(&self) -> std::borrow::Cow<'_, str> {
         match &self.kind {
-            ItemKind::Action(action) => action.label(),
-            ItemKind::Custom { label, .. } => label,
+            ItemKind::Action(action) => std::borrow::Cow::Owned(action.label()),
+            ItemKind::Custom { label, .. } => std::borrow::Cow::Borrowed(label),
         }
     }
 
@@ -343,7 +349,7 @@ struct ToolbarButton<Msg> {
 impl<Msg> ToolbarButton<Msg> {
     fn new(item: ToolbarItem<Msg>, first: bool, last: bool) -> Self {
         let (label, action, message) = match item.kind {
-            ItemKind::Action(action) => (action.label().to_owned(), Some(action), None),
+            ItemKind::Action(action) => (action.label(), Some(action), None),
             ItemKind::Custom { label, message } => (label, None, Some(message)),
         };
         Self {
@@ -465,7 +471,7 @@ struct MenuButton<Msg> {
 impl<Msg> MenuButton<Msg> {
     fn new(item: ToolbarItem<Msg>) -> Self {
         let (label, action, message) = match item.kind {
-            ItemKind::Action(action) => (action.label().to_owned(), Some(action), None),
+            ItemKind::Action(action) => (action.label(), Some(action), None),
             ItemKind::Custom { label, message } => (label, None, Some(message)),
         };
         Self {
@@ -788,6 +794,39 @@ mod tests {
         let own = ToolbarItem::custom("Translate", 7);
         assert_eq!(own.edit_action(), None);
         assert_eq!(own.label(), "Translate");
+    }
+
+    /// **The bar speaks the reader's language** (milestone 813): its four words were
+    /// English constants, the one part of a text field no table could reach.
+    #[test]
+    fn the_built_in_words_follow_the_language_in_force() {
+        use std::rc::Rc;
+        let words = |table: Rc<dyn crate::Localizations>| {
+            crate::localizations::scope(table, || {
+                [
+                    ToolbarItem::<()>::cut(),
+                    ToolbarItem::copy(),
+                    ToolbarItem::paste(),
+                    ToolbarItem::select_all(),
+                ]
+                .iter()
+                .map(|item| item.label().into_owned())
+                .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(
+            words(Rc::new(crate::German)),
+            ["Ausschneiden", "Kopieren", "Einsetzen", "Alle auswählen"]
+        );
+        assert_eq!(
+            words(Rc::new(crate::Japanese)),
+            ["切り取り", "コピー", "貼り付け", "すべてを選択"]
+        );
+        // And the button built from one carries them too.
+        let button = crate::localizations::scope(Rc::new(crate::Spanish), || {
+            ToolbarButton::<u8>::new(ToolbarItem::copy(), true, true)
+        });
+        assert_eq!(button.label, "Copiar");
     }
 
     #[test]
