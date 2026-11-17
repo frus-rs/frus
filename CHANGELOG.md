@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 813 so far, each documenting the objective, the alternatives
+> record — one per step, 814 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -28,6 +28,15 @@ any release may break.
   `short_month_day`, `long_date` and `uses_24_hour_clock`. `parse_date` and `format_date` accept
   `.` and `-` patterns. Japanese and Thai need a font with their letters on the web; desktop and
   Android draw them with the system's fonts.
+- **Wheels coast** (J814). A flick on a `ListWheel` or a `WheelPicker` spins it through many
+  rows and settles exactly on one, the row nearest to where the platform's ordinary fling
+  would have stopped; a slow release goes back to the nearest row, and a flick past either
+  end rests on the end row. Before, a release moved exactly one row however fast it was.
+  `PageView` still turns one page per release. New: `ScrollPhysics::item_ballistic`,
+  `Ballistic::Landing` with `Landing` (a motion that comes to rest exactly on its end),
+  `Ballistic::final_x`, `BouncingScrollSimulation::final_x`, and `PageSnap::coasting` /
+  `PagedView::coasting` (a public field: code building these structs by hand must add it).
+
 - **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
   next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for
   the platform's SMS-code autofill), `Field` (a label, description, error and required marker

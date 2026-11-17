@@ -610,6 +610,16 @@ impl BouncingScrollSimulation {
         }
     }
 
+    /// Where the motion comes to rest: the edge it springs back to when it leaves the
+    /// content (or starts outside it), otherwise where the friction runs out.
+    pub fn final_x(&self) -> f32 {
+        if self.spring_time == f32::INFINITY {
+            self.friction.final_x()
+        } else {
+            self.spring.end
+        }
+    }
+
     /// The simulation in force at `time`, and the offset to subtract from `time`
     /// before sampling it (the spring counts from its own start).
     fn phase(&self, time: f32) -> (&dyn Simulation, f32) {
@@ -950,6 +960,24 @@ mod tests {
         );
         assert!(sim.x(5.0) < 1000.0);
         assert!(sim.is_done(5.0));
+        assert_eq!(
+            sim.final_x(),
+            expected.final_x(),
+            "rests where friction ends"
+        );
+    }
+
+    /// **Where a bouncing fling comes to rest** is known before it runs: the edge it
+    /// springs back to, or the point its friction runs out at (milestone 814).
+    #[test]
+    fn bouncing_fling_knows_where_it_rests() {
+        let spring = scroll_spring();
+        let past =
+            BouncingScrollSimulation::new(0.0, 2000.0, 0.0, 100.0, spring, Tolerance::PIXELS);
+        assert_eq!(past.final_x(), 100.0, "a fling past the end rests on it");
+        let outside =
+            BouncingScrollSimulation::new(-30.0, 0.0, 0.0, 100.0, spring, Tolerance::PIXELS);
+        assert_eq!(outside.final_x(), 0.0, "an overscroll rests on its edge");
     }
 
     #[test]
