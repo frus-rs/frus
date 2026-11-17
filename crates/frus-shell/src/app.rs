@@ -1188,6 +1188,10 @@ pub struct App<A: Application> {
     /// same text carried over every frame does not repeat. Desktop, web and Android.
     #[cfg(any(desktop, web, android))]
     announce: String,
+    /// What the frame's **live regions** last said (milestone 810): a node marked live is
+    /// announced when it appears or its words change.
+    #[cfg(any(desktop, web, android))]
+    live_regions: crate::live_region::LiveRegions,
     /// The tap-or-long-press recogniser (gesture tier 1).
     press: PressRecognizer,
     /// When the loop's current turn began, before it read the input waiting for it, and when
@@ -1546,6 +1550,8 @@ impl<A: Application> App<A> {
             reorder_y: 0.0,
             #[cfg(any(desktop, web, android))]
             announce: String::new(),
+            #[cfg(any(desktop, web, android))]
+            live_regions: Default::default(),
             press: PressRecognizer::new(),
             long_press_msg: None,
             pending_word: None,
@@ -1694,6 +1700,21 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Performs named action `index` of widget `id`, for an assistive technology that asked
+    /// (milestone 810): the message the widget gives for it, dispatched as a press's would be.
+    #[cfg(any(desktop, android))]
+    fn custom_action_for_assistive_tech(&mut self, id: WidgetId, index: usize) {
+        let message = self
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))
+            .and_then(|widget| widget.on_custom_action(index));
+        if let Some(message) = message {
+            self.dispatch(message);
+            self.request_redraw();
+        }
+    }
+
     /// Puts `value` in the field `id`, for an assistive technology that set it (milestone 710):
     /// through the message typing it would have produced, as an autofill or an undo does — so
     /// a field that refuses typing refuses this too — with the caret after what arrived.
@@ -1733,6 +1754,7 @@ impl<A: Application> App<A> {
             match action {
                 A11yAction::Click(id) => self.activate_for_assistive_tech(id),
                 A11yAction::SetValue(id, value) => self.set_value_for_assistive_tech(id, value),
+                A11yAction::Custom(id, index) => self.custom_action_for_assistive_tech(id, index),
                 A11yAction::Focus(id) => {
                     // A button of the selection bar takes no focus: the bar acts on the
                     // field, and a focus that left it would end the very selection the bar
@@ -1798,7 +1820,13 @@ impl<A: Application> App<A> {
                     Some(placement) => crate::simulated::Simulated::to_window(placement, *rect),
                     None => *rect,
                 },
-                web: widget.ime().web(),
+                web: {
+                    let mut web = widget.ime().web();
+                    if let Some(hint) = widget.autofill_hints().first() {
+                        web.autocomplete = hint.web();
+                    }
+                    web
+                },
                 label: semantics.label.as_deref(),
                 text: widget.text_value().unwrap_or_default(),
                 edit: self.runtime.edits.get(&id).copied().unwrap_or_default(),
@@ -2519,6 +2547,7 @@ impl<A: Application> App<A> {
                         self.activate_for_assistive_tech(id);
                     }
                 }
+                A11yAction::Custom(id, index) => self.custom_action_for_assistive_tech(id, index),
                 A11yAction::Focus(id) => self.focus_for_assistive_tech(id),
                 A11yAction::ClearFocus(id) => {
                     if self.runtime.input.focused == Some(id) {
@@ -4766,9 +4795,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // the offset back — the reports below, a press, the next frame's springs.
                 // Without it the row was drawn right once and pressed wrong (milestone 533).
                 self.runtime.keep_scroll_in_range(&paged);
-                let turned: Vec<A::Message> = self
-                    .runtime
-                    .page_changes(&paged)
+                let changes = self.runtime.page_changes(&paged);
+                // A wheel ticks as each value passes its middle (milestone 810).
+                if changes
+                    .iter()
+                    .any(|(id, _)| find_widget(tree, *id).is_some_and(|w| w.page_tick()))
+                {
+                    self.wheel_tick_feedback();
+                }
+                let turned: Vec<A::Message> = changes
                     .into_iter()
                     .filter_map(|(id, page)| {
                         find_widget(tree, id).and_then(|widget| widget.on_page_changed(page))
@@ -4838,6 +4873,19 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // having closed, go back to the trigger. Done before the AccessKit
                 // announcement, so the focus it publishes is current.
                 self.reconcile_focus();
+
+                // A live region that appeared or changed its words is read out (milestone
+                // 810): an error message under a field, shown where the reader is not.
+                #[cfg(any(desktop, web, android))]
+                {
+                    let said = self
+                        .ui
+                        .as_ref()
+                        .and_then(|ui| self.live_regions.changes(ui.semantics()));
+                    if let Some(said) = said {
+                        self.set_announcement(said);
+                    }
+                }
 
                 // Publish the frame's semantic tree to AccessKit. The layout's pixels to the
                 // window's: the total scale, the app's density included; a simulated device's
@@ -6220,16 +6268,9 @@ impl<A: Application> App<A> {
                 // A cancelled gesture still owes the offset back, or the region
                 // would stay frozen under a finger that is no longer there.
                 if let Some(Drag::Dismiss { item, .. }) = self.drag {
-                    // A cancelled swipe asks for nothing: zero velocity puts it back.
-                    self.runtime.dismiss_release(
-                        item.id,
-                        0.0,
-                        0.0,
-                        item.spec.axis,
-                        // Unreachable threshold: a cancel never dismisses, however far
-                        // the item had already travelled.
-                        f32::INFINITY,
-                    );
+                    // A cancelled swipe asks for nothing: it goes back, and never dismisses
+                    // or performs an action, however far it had already travelled.
+                    self.runtime.swipe_release(&item, 0.0, 0.0, true);
                 }
                 // A value a cancelled drag held settles back, and says nothing.
                 if let Some(Drag::Gesture { id, .. }) = self.drag {
@@ -6377,6 +6418,16 @@ impl<A: Application> App<A> {
         crate::haptics::gesture_feedback(
             &theme,
             crate::haptics::long_press_feedback(crate::haptics::system_platform()),
+        );
+    }
+
+    /// A wheel's value passed its middle: the platform's tick, unless the application's theme
+    /// turned feedback off (milestone 810).
+    fn wheel_tick_feedback(&self) {
+        let theme = self.themes.displayed(&self.app);
+        crate::haptics::gesture_feedback(
+            &theme,
+            crate::haptics::wheel_tick_feedback(crate::haptics::system_platform()),
         );
     }
 
@@ -7256,6 +7307,30 @@ impl<A: Application> App<A> {
         // A touch scroll, a pan or a swipe that never moved is a plain tap: we let it
         // follow the ordinary click path below.
         let was_tap = gesture_was_a_tap(ended.as_ref());
+        // An open row of actions closes at any tap (milestone 810). A tap on one of its
+        // actions still performs it; a tap on the row itself only closes it.
+        if was_tap || ended.is_none() {
+            let open = self.runtime.open_swipe_rows();
+            if !open.is_empty() {
+                let cursor = self.cursor;
+                let on_a_row = self.ui.as_ref().is_some_and(|ui| {
+                    ui.dismissables().iter().any(|item| {
+                        open.contains(&item.id) && item.rect.contains(cursor) && {
+                            let strip = frus_widgets::revealed_strip(
+                                item.rect,
+                                self.runtime.swipe_progress(item.id),
+                            );
+                            !strip.contains(cursor)
+                        }
+                    })
+                });
+                self.runtime.close_swipe_rows();
+                self.request_redraw();
+                if on_a_row {
+                    return;
+                }
+            }
+        }
         // The bracket closes. A press that never moved still gets its end: it changed
         // the value once, and a caller that defers its expensive work until the release
         // would otherwise never be told the release happened.
@@ -7370,13 +7445,7 @@ impl<A: Application> App<A> {
                 } else {
                     (estimate.velocity.y, estimate.velocity.x)
                 };
-                self.runtime.dismiss_release(
-                    item.id,
-                    along,
-                    across,
-                    item.spec.axis,
-                    item.spec.threshold,
-                );
+                self.runtime.swipe_release(item, along, across, false);
                 self.request_redraw();
                 return;
             }
@@ -8726,8 +8795,7 @@ impl<A: Application> App<A> {
                     } else {
                         dy
                     };
-                    self.runtime
-                        .dismiss_drag(item.id, delta, item.extent(), item.spec.axis);
+                    self.runtime.swipe_drag(item, delta);
                     *last = self.cursor;
                     self.track_gesture();
                 }

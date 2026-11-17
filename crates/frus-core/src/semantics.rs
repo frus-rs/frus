@@ -98,6 +98,16 @@ pub struct SemanticsProperties {
     /// **showing**: `Some(true)` expanded, `Some(false)` collapsed, `None` for a control
     /// that opens nothing. A reader says "expanded" or "collapsed" after the name.
     pub expanded: Option<bool>,
+    /// A **live region** (milestone 810): when the node's label or value changes while it
+    /// is on screen, or the node appears, an assistive technology reads the new words out
+    /// without the reader moving to it. A field's error message is one: it appears after
+    /// the reader typed, somewhere they are not looking.
+    pub live: bool,
+    /// **Named actions** beyond activating the node (milestone 810), in the order they are
+    /// offered: a list row's *Archive* and *Delete* that a finger reaches by swiping. A
+    /// screen reader lists them in its actions menu; performing one sends the widget's
+    /// `on_custom_action` for its index.
+    pub custom_actions: Vec<String>,
 }
 
 impl SemanticsProperties {
@@ -182,6 +192,35 @@ impl SemanticsProperties {
         self
     }
 
+    /// Marks the node as a **live region**: a change to its words is read out where it
+    /// happens.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let error = SemanticsProperties::new(Role::Label).label("Required").live(true);
+    /// assert!(error.live);
+    /// ```
+    pub fn live(mut self, live: bool) -> Self {
+        self.live = live;
+        self
+    }
+
+    /// Adds a **named action** a screen reader offers beside activating the node.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let row = SemanticsProperties::new(Role::ListItem)
+    ///     .custom_action("Archive")
+    ///     .custom_action("Delete");
+    /// assert_eq!(row.custom_actions, ["Archive", "Delete"]);
+    /// ```
+    pub fn custom_action(mut self, name: impl Into<String>) -> Self {
+        self.custom_actions.push(name.into());
+        self
+    }
+
     /// The value as an assistive technology may read it out: the value itself, or, when it
     /// is [`obscured`](Self::obscured), one dot per character, so the length is known and
     /// the characters are not.
@@ -204,7 +243,7 @@ impl SemanticsProperties {
     /// `true` when this node carries something useful to assistive technology — a
     /// non-null role or a label. Empty containers are left out of the tree.
     pub fn is_meaningful(&self) -> bool {
-        self.role != Role::None || self.label.is_some()
+        self.role != Role::None || self.label.is_some() || !self.custom_actions.is_empty()
     }
 
     /// This annotation laid **over** `under`, whose answers show through wherever this
@@ -247,6 +286,12 @@ impl SemanticsProperties {
             range: self.range.or(under.range),
             obscured: self.obscured || under.obscured,
             expanded: self.expanded.or(under.expanded),
+            live: self.live || under.live,
+            custom_actions: if self.custom_actions.is_empty() {
+                under.custom_actions.clone()
+            } else {
+                self.custom_actions
+            },
         }
     }
 }
