@@ -42,7 +42,9 @@ Each table also carries what a translation of the strings alone would leave behi
   change with the language.
 - `more_button_label` (an app bar's overflow dots said "More"), `remove_button_label` (a
   chip's cross said "Remove"), `licenses_label` and `license_count_label` (the licence page's
-  button and its "1 licence" / "3 licences"; its Back and Close now come from the table too).
+  button and its "1 licence" / "3 licences"; its Back and Close now come from the table too),
+  `loading_label` (the "Loading…" row of milestone 811's `FileTree`, merged while this was in
+  progress).
 - `date_input_format`: the order a typed date is read and written in, always with the letters
   `dd`, `mm`, `yyyy` and the language's separator. `date_input_pattern` stays the hint shown to
   the reader. They had to be split: the date picker read the hint's letters to know the order,

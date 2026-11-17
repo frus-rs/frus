@@ -217,6 +217,12 @@ pub trait Localizations {
         }
     }
 
+    /// **What stands in for content still on its way**: a file tree's folder whose
+    /// children have not arrived yet (milestone 813).
+    fn loading_label(&self) -> &str {
+        "Loading…"
+    }
+
     /// **The placeholder in a table's search field** (`searchFieldLabel`).
     fn search_field_label(&self) -> &str {
         "Search"
@@ -631,6 +637,10 @@ impl Localizations for French {
         format!("{}\u{a0}licence{plural}", self.group_digits(count))
     }
 
+    fn loading_label(&self) -> &str {
+        "Chargement…"
+    }
+
     fn search_field_label(&self) -> &str {
         "Rechercher"
     }
@@ -942,6 +952,10 @@ impl Localizations for German {
         format!("{}\u{a0}{noun}", self.group_digits(count))
     }
 
+    fn loading_label(&self) -> &str {
+        "Wird geladen…"
+    }
+
     fn search_field_label(&self) -> &str {
         "Suchen"
     }
@@ -1234,6 +1248,10 @@ impl Localizations for Spanish {
     fn license_count_label(&self, count: usize) -> String {
         let noun = if count == 1 { "licencia" } else { "licencias" };
         format!("{}\u{a0}{noun}", self.group_digits(count))
+    }
+
+    fn loading_label(&self) -> &str {
+        "Cargando…"
     }
 
     fn search_field_label(&self) -> &str {
@@ -1536,6 +1554,10 @@ impl Localizations for Japanese {
         format!("ライセンス: {} 件", self.group_digits(count))
     }
 
+    fn loading_label(&self) -> &str {
+        "読み込み中…"
+    }
+
     fn search_field_label(&self) -> &str {
         "検索"
     }
@@ -1819,6 +1841,10 @@ impl Localizations for Thai {
 
     fn license_count_label(&self, count: usize) -> String {
         format!("ใบอนุญาต {} ใบ", self.group_digits(count))
+    }
+
+    fn loading_label(&self) -> &str {
+        "กำลังโหลด…"
     }
 
     fn search_field_label(&self) -> &str {
@@ -2124,6 +2150,10 @@ impl Localizations for Vietnamese {
 
     fn license_count_label(&self, count: usize) -> String {
         format!("{} giấy phép", self.group_digits(count))
+    }
+
+    fn loading_label(&self) -> &str {
+        "Đang tải…"
     }
 
     fn search_field_label(&self) -> &str {
@@ -2533,6 +2563,7 @@ mod tests {
             ("remove", t.remove_button_label().into()),
             ("licences", t.licenses_label().into()),
             ("licence count", t.license_count_label(3)),
+            ("loading", t.loading_label().into()),
             ("search", t.search_field_label().into()),
             ("no results", t.no_results_label().into()),
             ("decrease", t.decrease_label().into()),

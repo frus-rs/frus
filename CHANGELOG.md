@@ -23,7 +23,7 @@ any release may break.
   entries, all seven languages: the selection bar's Cut, Copy, Paste and Select all (they were
   English constants; `EditAction::label` now returns a `String` and `ToolbarItem::label` a
   `Cow<str>`, so tell built-in items apart with `edit_action`), an app bar's overflow button, a
-  chip's remove cross, the licence page's button and counts, `date_input_format` (the order a
+  chip's remove cross, the licence page's button and counts, a file tree's loading row, `date_input_format` (the order a
   typed date is read in, which the hint's letters cannot say in every language), `month_year`,
   `short_month_day`, `long_date` and `uses_24_hour_clock`. `parse_date` and `format_date` accept
   `.` and `-` patterns. Japanese and Thai need a font with their letters on the web; desktop and
