@@ -157,6 +157,9 @@ pub struct ContextMenu<Msg = crate::callback::Callback> {
     enabled: bool,
     /// `[child]`, or `[child, menu]` while it is open.
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// The child itself, for its box: `children[0]` holds it without its margin, which
+    /// this leaves around itself (milestone 817).
+    own: Option<std::rc::Rc<dyn Widget<Msg>>>,
 }
 
 impl<Msg: Clone + 'static> ContextMenu<Msg> {
@@ -168,13 +171,15 @@ impl<Msg: Clone + 'static> ContextMenu<Msg> {
         on_change: impl Fn(ContextMenuState) -> R1 + 'static,
     ) -> Self {
         let on_change = crate::callback::handler1(on_change);
+        let (own, node) = crate::nested::Unmargined::split(Box::new(child));
         Self {
             state: state.clone(),
             on_change: Rc::new(on_change),
             entries: Vec::new(),
             menus: crate::MenuTheme::default(),
             enabled: true,
-            children: vec![Box::new(child)],
+            children: vec![node],
+            own: Some(own),
         }
     }
 
@@ -254,13 +259,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for ContextMenu<Msg> {
     /// The menu is not a box round its child: it is its child, with something that may float
     /// over it. The child's structure is forwarded, its padding left to the child.
     fn style_themed(&self, theme: &Theme) -> Style {
-        match self.children.first() {
-            Some(child) => Style {
-                padding: frus_core::Insets::ZERO,
-                ..child.style_themed(theme)
-            },
-            None => Style::default(),
-        }
+        // And the margin is left once, by this: the child is held without it.
+        self.own
+            .as_ref()
+            .map(|c| crate::nested::nested_box(c.style_themed(theme)))
+            .unwrap_or_default()
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {

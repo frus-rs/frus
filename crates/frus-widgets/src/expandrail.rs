@@ -324,7 +324,7 @@ impl<Msg: Clone + 'static> ExpandableNavigationRail<Msg> {
             match height {
                 Dimension::Length(h) => rail(h),
                 _ => Box::new(crate::LayoutBuilder::new(move |size: crate::Size| {
-                    BoxedItem(rail(size.height))
+                    rail(size.height)
                 })) as Box<dyn Widget<Msg>>,
             }
         }))
@@ -422,25 +422,7 @@ impl<Msg: Clone + 'static> RailItem<Msg> {
         let sem = frus_core::SemanticsProperties::new(frus_core::Role::Tab)
             .label(d.label.clone())
             .toggled(selected);
-        Box::new(crate::Semantics::new(sem, BoxedItem(item)))
-    }
-}
-
-struct BoxedItem<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for BoxedItem<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
+        Box::new(crate::Semantics::new(sem, item))
     }
 }
 
@@ -481,7 +463,7 @@ mod tests {
     fn pills(selected: bool, expanded: bool) -> Vec<Rect> {
         let theme = Theme::light();
         let d = RailDestination::new(crate::icons::Icons::INBOX, "Inbox");
-        let item = BoxedItem(RailItem::<()>::build(&d, selected, expanded, (), &theme));
+        let item = RailItem::<()>::build(&d, selected, expanded, (), &theme);
         let ui = build_ui(&item, Size::new(240.0, 120.0), &Runtime::default(), &theme);
         ui.scene()
             .primitives()

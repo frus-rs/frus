@@ -410,7 +410,7 @@ impl<Msg: Clone + 'static> Sidebar<Msg> {
             .ignoring(!open);
             let mut stack = crate::Stack::new().flex(1.0);
             if let Some(body) = parts.body.take() {
-                stack = stack.layer(crate::Positioned::fill(BoxedPart(body)));
+                stack = stack.layer(crate::Positioned::fill(body));
             }
             stack = stack.layer(crate::Positioned::fill(scrim)).layer(
                 crate::Positioned::new(slid)
@@ -446,29 +446,10 @@ impl<Msg: Clone + 'static> Sidebar<Msg> {
                     .flex(1.0)
                     .align(Align::Stretch)
                     .child(nav)
-                    .child(crate::Expanded::new(BoxedPart(body))),
+                    .child(crate::Expanded::new(body)),
             ),
             None => Box::new(nav),
         }
-    }
-}
-
-/// A boxed part as a widget.
-struct BoxedPart<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for BoxedPart<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
     }
 }
 

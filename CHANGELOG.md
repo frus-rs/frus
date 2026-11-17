@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 814 so far, each documenting the objective, the alternatives
+> record — one per step, 817 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -51,6 +51,17 @@ any release may break.
   `Ballistic::Landing` with `Landing` (a motion that comes to rest exactly on its end),
   `Ballistic::final_x`, `BouncingScrollSimulation::final_x`, and `PageSnap::coasting` /
   `PagedView::coasting` (a public field: code building these structs by hand must add it).
+
+- **A wrapper's padding and margin count once, and `Expanded` keeps a least size across its
+  line** (J817). A `ThemeBuilder` took its child's whole style, so a padding or a margin
+  straight under one was applied twice (8 pixels came out at 16); `Tooltip`, `RichTooltip`,
+  `HoverCard`, `ContextMenu`, `CommandPalette` and `ScrollOverlay` left a margin twice the same
+  way. Each now takes its child's box without the padding and holds the child without the
+  margin. `Expanded` and `Flexible` set their child's least width and height to zero; now only
+  a tight share overrules a least size, and only along the row's or column's line, so a
+  45-pixel button in an expanded slot of a row keeps its 45 pixels. New: the structural hook
+  `Widget::fills_flex_share` (forwarded by transparent wrappers) and
+  `frus_layout::Layout::clear_min`. The two workarounds in the Apple-style dialogs are gone.
 
 - **Input widgets** (J810). `OtpInput` (a row of boxes for a one-time code: typing moves to the
   next box, a paste fills them all, `.on_completed`, groups, masked, alphanumeric; it asks for

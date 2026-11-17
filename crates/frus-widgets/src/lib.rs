@@ -242,6 +242,7 @@ mod text;
 mod textinput;
 mod wheelpicker;
 // External textures: video, camera, maps, native views (milestone 793).
+mod nested;
 mod texture;
 mod theme;
 mod themebuilder;

@@ -1790,6 +1790,19 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// Whether this widget is a **tight** flexible child of a row or a column — an
+    /// [`crate::Expanded`] — whose size along its parent's line is exactly its share of
+    /// what is left.
+    ///
+    /// The parent asks rather than the child saying it in its style, because only the
+    /// parent knows which axis is the line. Along it, a least size the child asked for
+    /// gives way to the share; across it, the child keeps it. Structural: a transparent
+    /// wrapper forwards it, and so does a wrapper that takes its child's box
+    /// (milestone 817).
+    fn fills_flex_share(&self) -> bool {
+        false
+    }
+
     /// If this container gives all of its children the **shape of a tile**, the
     /// `width / height` ratio to impose on each of them. `None` = each child keeps
     /// its own shape.
@@ -2687,6 +2700,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn main_axis_floor(&self, theme: &Theme) -> Option<f32> {
         (**self).main_axis_floor(theme)
+    }
+    fn fills_flex_share(&self) -> bool {
+        (**self).fills_flex_share()
     }
     fn tile_shape(&self) -> Option<f32> {
         (**self).tile_shape()

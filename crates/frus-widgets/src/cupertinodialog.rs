@@ -545,17 +545,13 @@ fn alert_panel<Msg: Clone + 'static>(p: AlertParts<Msg>, theme: &Theme) -> Box<d
                 if i > 0 {
                     row = row.child(rule(divider, false));
                 }
-                // In a bare column: `Expanded` restyles its child, least height and all, so
-                // a button straight under one would lose its 45 pixels.
-                row = row.child(crate::Expanded::new(stack_down::<Msg>().child(
-                    action_button(
-                        action,
-                        action.style(ALERT_ACTION, theme),
-                        Color::TRANSPARENT,
-                        pressed,
-                        ALERT_BUTTON_MIN,
-                        padding,
-                    ),
+                row = row.child(crate::Expanded::new(action_button(
+                    action,
+                    action.style(ALERT_ACTION, theme),
+                    Color::TRANSPARENT,
+                    pressed,
+                    ALERT_BUTTON_MIN,
+                    padding,
                 )));
             }
             column = column.child(row);
@@ -864,12 +860,10 @@ fn sheet_panel<Msg: Clone + 'static>(p: SheetParts<Msg>, theme: &Theme) -> Box<d
             crate::SizedBox::new(column).width((media.size.height - 2.0 * SHEET_EDGE).max(0.0)),
         )),
     };
-    // Held in a bare column: a theme builder takes its child's box, padding and all, so a
-    // padding straight under one would be applied twice.
-    Box::new(stack_down::<Msg>().child(crate::Padding::new(
+    Box::new(crate::Padding::new(
         Insets::new(0.0, SHEET_EDGE, bottom, SHEET_EDGE),
         sheet,
-    )))
+    ))
 }
 
 impl<Msg: Clone> Widget<Msg> for CupertinoActionSheet<Msg> {

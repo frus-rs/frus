@@ -936,28 +936,9 @@ impl<Msg: Clone + 'static> DatePickerDialog<Msg> {
             dialog = dialog.on_dismiss(dismiss);
         }
         if let Some(panel) = self.children.into_iter().next() {
-            dialog = dialog.child(Boxed(panel));
+            dialog = dialog.child(panel);
         }
         dialog.body(body)
-    }
-}
-
-/// A boxed widget as a widget, with the child's box.
-struct Boxed<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for Boxed<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
     }
 }
 
