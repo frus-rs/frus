@@ -232,7 +232,7 @@ impl<Msg: Clone + 'static> GlassSurface<Msg> {
                 panel = panel.height(h);
             }
             if let Some(content) = content {
-                panel = panel.child(Boxed(content));
+                panel = panel.child(content);
             }
             let mut blur = crate::BackdropFilter::blur(r.sigma).enabled(enabled);
             if grouped {
@@ -276,25 +276,6 @@ fn glass_resolve(
         radius: radius
             .or(t.radius.map(BorderRadius::uniform))
             .unwrap_or(BorderRadius::uniform(28.0)),
-    }
-}
-
-/// A boxed widget as a widget, with the child's box.
-struct Boxed<Msg>(Box<dyn Widget<Msg>>);
-
-impl<Msg: 'static> Widget<Msg> for Boxed<Msg> {
-    fn style(&self) -> Style {
-        self.0.style()
-    }
-    fn style_themed(&self, theme: &Theme) -> Style {
-        self.0.style_themed(theme)
-    }
-    fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        std::slice::from_ref(&self.0)
-    }
-    fn paint(&self, _: Rect, _: Status, _: &Theme, _: &mut Scene) {}
-    fn on_click(&self) -> Option<Msg> {
-        None
     }
 }
 

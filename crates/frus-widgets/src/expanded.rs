@@ -138,6 +138,10 @@ pub enum FlexFit {
 /// places for the next fix to miss.
 pub(crate) fn flex_item(base: Style, flex: f32, fit: FlexFit) -> Style {
     let tight = fit == FlexFit::Tight;
+    let lift = |floor: Dimension| match floor {
+        Dimension::Auto => Dimension::Length(0.0),
+        asked => asked,
+    };
     Style {
         flex_grow: if tight { flex } else { 0.0 },
         flex_shrink: flex,
@@ -149,8 +153,15 @@ pub(crate) fn flex_item(base: Style, flex: f32, fit: FlexFit) -> Style {
         // The floor that makes `flex: 1` alone a no-op. `Auto` here means *the
         // content*, so the child would grow to its share and then refuse to go below
         // its natural width — which is the whole of the bug this widget exists for.
-        min_width: Dimension::Length(0.0),
-        min_height: Dimension::Length(0.0),
+        //
+        // Only the **automatic** floor goes. A least size the child asked for is its
+        // own: across the line it is kept, as the child's own constraints are kept
+        // inside the ones its parent hands down; along the line a tight share overrules
+        // it, and the parent says so, being the one that knows which axis the line is
+        // (`Widget::fills_flex_share`). Clearing both here made a 45-pixel button in an
+        // expanded slot of a row lay out at its text's height (milestone 817).
+        min_width: lift(base.min_width),
+        min_height: lift(base.min_height),
         // `width` and `height` are **left alone**. A basis already overrules the size
         // on the main axis, and on the cross axis the child's own is the one that is
         // wanted: clearing both made an expanded `Text` — which reports its measured
@@ -211,7 +222,12 @@ impl<Msg> Flexible<Msg> {
     }
 }
 
-crate::transparent::forward_transparent!(Flexible {
+crate::transparent::forward_transparent!(flex Flexible {
+    /// A tight one fills its share, and its least size along the line gives way to it.
+    fn fills_flex_share(&self) -> bool {
+        self.fit == FlexFit::Tight
+    }
+
     /// Forwarded, as [`Expanded`]'s is: making a widget flexible says nothing about
     /// which widget it is.
     fn key(&self) -> Option<u64> {
@@ -254,7 +270,13 @@ crate::transparent::forward_transparent!(Flexible {
     }
 });
 
-crate::transparent::forward_transparent!(Expanded {
+crate::transparent::forward_transparent!(flex Expanded {
+    /// Unless it was made loose, it fills its share, and its least size along the line
+    /// gives way to it.
+    fn fills_flex_share(&self) -> bool {
+        !self.loose
+    }
+
     /// Forwarded: expanding a widget says nothing about which widget it is, and the
     /// identity has to survive the wrapper or the child's retained state moves with its
     /// position in the list.
@@ -310,6 +332,54 @@ mod tests {
     /// Lays a row out and returns each direct child's width.
     fn widths(row: Flex<()>, width: f32) -> Vec<f32> {
         boxes(&row, width).into_iter().map(|(w, _)| w).collect()
+    }
+
+    /// A least size across the line is the child's own, and the share says nothing about
+    /// it: a 45-pixel button in an expanded slot keeps its 45 pixels (milestone 817).
+    #[test]
+    fn it_keeps_the_child_s_least_size_across_the_line() {
+        // In a row the least height is across the line: the share says nothing about it.
+        let row = Flex::row()
+            .align(frus_layout::Align::Start)
+            .child(Expanded::new(
+                Container::new().height(10.0).min_height(45.0),
+            ));
+        assert_eq!(boxes(&row, 200.0)[0], (200.0, 45.0));
+        // A flexible one too.
+        let row = Flex::row()
+            .align(frus_layout::Align::Start)
+            .child(Flexible::new(
+                Container::new().width(30.0).height(10.0).min_height(45.0),
+            ));
+        assert_eq!(boxes(&row, 200.0)[0], (30.0, 45.0));
+        // And in a column, the least width.
+        let column = Flex::column()
+            .align(frus_layout::Align::Start)
+            .child(Expanded::new(Container::new().width(10.0).min_width(45.0)));
+        assert_eq!(boxes(&column, 200.0)[0].0, 45.0);
+    }
+
+    /// Along the line a **tight** child is handed exactly its share, so a least size it
+    /// asked for gives way to it: six buttons with a least width that do not fit side by
+    /// side still split the row rather than overflow it.
+    #[test]
+    fn along_the_line_a_tight_share_overrules_the_child_s_least_size() {
+        let row = Flex::row()
+            .child(Expanded::new(
+                Container::new().min_width(150.0).height(10.0),
+            ))
+            .child(Expanded::new(Container::new().height(10.0)));
+        assert_eq!(widths(row, 200.0), vec![100.0, 100.0]);
+    }
+
+    /// A **loose** child takes at most its share and keeps its own size inside it, least
+    /// size included.
+    #[test]
+    fn along_the_line_a_loose_child_keeps_its_least_size() {
+        let row = Flex::row()
+            .child(Container::new().width(100.0).height(10.0))
+            .child(Flexible::new(Container::new().min_width(60.0).height(10.0)));
+        assert_eq!(widths(row, 200.0), vec![100.0, 60.0]);
     }
 
     /// The cross axis is **not** the wrapper's business, and clearing it cost a

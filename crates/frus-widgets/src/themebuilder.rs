@@ -38,11 +38,13 @@
 //! menu open.
 
 use std::cell::{OnceCell, RefCell};
+use std::rc::Rc;
 
 use frus_core::{Rect, Scene};
 use frus_layout::Style;
 
 use crate::interaction::Status;
+use crate::nested::{nested_box, Unmargined};
 use crate::theme::Theme;
 use crate::widget::Widget;
 
@@ -61,6 +63,9 @@ pub struct ThemeBuilder<Msg = crate::callback::Callback> {
     build: RefCell<Option<Deferred<Msg>>>,
     /// The built child, as the one-element slice [`Widget::children`] has to hand back.
     built: OnceCell<Vec<Box<dyn Widget<Msg>>>>,
+    /// The built child itself, for its box: the node in `built` holds it without its
+    /// margin, which is the builder's to leave (milestone 817).
+    own: OnceCell<Rc<dyn Widget<Msg>>>,
     /// The axes it asks to fill on its child's behalf — for a page-level widget whose
     /// child sizes itself as a share of its parent (milestone 786).
     fill: crate::widget::FillAxes,
@@ -74,6 +79,7 @@ impl<Msg: 'static> ThemeBuilder<Msg> {
                 Box::new(build(theme)) as Box<dyn Widget<Msg>>
             }))),
             built: OnceCell::new(),
+            own: OnceCell::new(),
             fill: crate::widget::FillAxes::NONE,
         }
     }
@@ -83,6 +89,7 @@ impl<Msg: 'static> ThemeBuilder<Msg> {
         Self {
             build: RefCell::new(Some(Box::new(build))),
             built: OnceCell::new(),
+            own: OnceCell::new(),
             fill: crate::widget::FillAxes::NONE,
         }
     }
@@ -102,7 +109,11 @@ impl<Msg: 'static> ThemeBuilder<Msg> {
     fn child(&self, theme: &Theme) -> &[Box<dyn Widget<Msg>>] {
         if self.built.get().is_none() {
             let built = match self.build.borrow_mut().take() {
-                Some(build) => vec![build(theme)],
+                Some(build) => {
+                    let (own, node) = Unmargined::split(build(theme));
+                    let _ = self.own.set(own);
+                    vec![node]
+                }
                 // Already taken and stored by another call: the `get` below finds it.
                 None => Vec::new(),
             };
@@ -123,11 +134,14 @@ impl<Msg: Clone + 'static> Widget<Msg> for ThemeBuilder<Msg> {
 
     fn style_themed(&self, theme: &Theme) -> Style {
         // The builder is **transparent**: it takes the child's box, so putting one around
-        // a widget does not change where that widget lands.
+        // a widget does not change where that widget lands. The box and not the inside of
+        // it: the child pads itself, and taking the padding too applied it twice — an
+        // 8-pixel padding under a builder came out at 16 (milestone 817).
+        self.child(theme);
         let mut style = self
-            .child(theme)
-            .first()
-            .map(|c| c.style_themed(theme))
+            .own
+            .get()
+            .map(|c| nested_box(c.style_themed(theme)))
             .unwrap_or_default();
         // A builder asked to fill takes the room it is given, not a share of a parent
         // that may have none to give (milestone 786).
@@ -174,6 +188,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for ThemeBuilder<Msg> {
 
     fn fill_axes(&self, _theme: &Theme) -> crate::widget::FillAxes {
         self.fill
+    }
+
+    /// Forwarded: the builder's box is its child's, flexible share included.
+    fn fills_flex_share(&self) -> bool {
+        self.own.get().is_some_and(|c| c.fills_flex_share())
     }
 }
 
@@ -262,6 +281,80 @@ mod tests {
                 .expect("the child painted")
         };
         assert_eq!(rect_of(&bare), rect_of(&wrapped));
+    }
+
+    /// Where a column of `child` above a blue square paints both, in a 400 × 300 window.
+    fn column_rects(child: Box<dyn Widget<Msg>>) -> (frus_core::Rect, frus_core::Rect) {
+        let column: crate::Column<Msg> = crate::Column::new()
+            .main_axis_size(crate::MainAxisSize::Min)
+            .cross_axis_alignment(frus_layout::Align::Start)
+            .child(child)
+            .child(
+                Container::new()
+                    .width(10.0)
+                    .height(10.0)
+                    .color(Color::rgb(0.0, 0.0, 1.0)),
+            );
+        let runtime = Runtime::default();
+        let ui = build_ui(
+            &column,
+            frus_core::Size::new(400.0, 300.0),
+            &runtime,
+            &Theme::default(),
+        );
+        let find = |red: bool| {
+            ui.scene()
+                .primitives()
+                .iter()
+                .find_map(|p| match p {
+                    frus_core::Primitive::Rect { rect, color, .. }
+                        if (color.r > 0.5) == red && (color.b > 0.5) != red =>
+                    {
+                        Some(*rect)
+                    }
+                    _ => None,
+                })
+                .expect("both boxes painted")
+        };
+        (find(true), find(false))
+    }
+
+    fn red() -> Container<Msg> {
+        Container::new()
+            .width(20.0)
+            .height(20.0)
+            .color(Color::rgb(1.0, 0.0, 0.0))
+    }
+
+    /// A padding straight under the builder pads **once**. The builder used to take its
+    /// child's whole box, padding included, and the child then padded itself again
+    /// inside it: an 8-pixel padding came out at 16 (milestone 817).
+    #[test]
+    fn a_padding_under_the_builder_pads_once() {
+        let padded = || crate::Padding::new(frus_core::Insets::uniform(8.0), red());
+        let bare = column_rects(Box::new(padded()));
+        let wrapped = column_rects(Box::new(ThemeBuilder::boxed(move |_: &Theme| {
+            Box::new(padded()) as Box<dyn Widget<Msg>>
+        })));
+        assert_eq!(bare.0, frus_core::Rect::new(8.0, 8.0, 20.0, 20.0));
+        assert_eq!(
+            wrapped, bare,
+            "the box and what follows it, as without the builder"
+        );
+    }
+
+    /// The same for a **margin**: it is space around the box, and the builder's box is
+    /// its child's, so the space is left once.
+    #[test]
+    fn a_margin_under_the_builder_is_left_once() {
+        let spaced = || red().margin(6.0);
+        let bare = column_rects(Box::new(spaced()));
+        let wrapped = column_rects(Box::new(ThemeBuilder::new(move |_: &Theme| spaced())));
+        assert_eq!(bare.0, frus_core::Rect::new(6.0, 6.0, 20.0, 20.0));
+        assert_eq!(
+            wrapped, bare,
+            "the box and what follows it, as without the builder"
+        );
     }
 
     /// Built **once**, not once per traversal: the closure runs a single time however
