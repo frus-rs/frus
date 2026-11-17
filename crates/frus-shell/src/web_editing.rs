@@ -622,8 +622,10 @@ mod web {
             el.set_attribute("autocorrect", corrects).ok();
             el.set_attribute("spellcheck", if web.corrects { "true" } else { "false" })
                 .ok();
-            // The page's own suggestions would come up over a field drawn elsewhere.
-            el.set_attribute("autocomplete", "off").ok();
+            // What the field is for, so the browser can fill it — a code from an SMS, a saved
+            // password (milestone 810). A field that said nothing gets `off`: the page's own
+            // suggestions would come up over a field drawn elsewhere.
+            el.set_attribute("autocomplete", web.autocomplete).ok();
 
             let id = field.id;
             let composing: Rc<RefCell<Option<String>>> = Rc::default();

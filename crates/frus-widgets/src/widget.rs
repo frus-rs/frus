@@ -1057,6 +1057,21 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// Whether a paged view gives a **haptic tick** each time the page on screen changes
+    /// (milestone 810): a [`WheelPicker`](crate::WheelPicker)'s click as each value passes
+    /// the middle, where the platform has haptics and the theme has
+    /// [`enable_feedback`](crate::Theme::enable_feedback) on.
+    fn page_tick(&self) -> bool {
+        false
+    }
+
+    /// The message for **named action** `index` of this widget's semantics (milestone 810):
+    /// a screen reader performing the action at `index` of
+    /// [`SemanticsProperties::custom_actions`]. `None` when there is none.
+    fn on_custom_action(&self, _index: usize) -> Option<Msg> {
+        None
+    }
+
     /// Message sent by a **scroll region** when its offset changes — the reading half
     /// of [`crate::ScrollPosition`].
     ///
@@ -2519,6 +2534,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn on_page_changed(&self, page: usize) -> Option<Msg> {
         (**self).on_page_changed(page)
+    }
+    fn page_tick(&self) -> bool {
+        (**self).page_tick()
+    }
+    fn on_custom_action(&self, index: usize) -> Option<Msg> {
+        (**self).on_custom_action(index)
     }
     fn on_scroll(&self, position: crate::scrollposition::ScrollPosition) -> Option<Msg> {
         (**self).on_scroll(position)

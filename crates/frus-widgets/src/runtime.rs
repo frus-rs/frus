@@ -2131,6 +2131,13 @@ impl Runtime {
             if previous == Some(snap.requested) {
                 continue;
             }
+            // The application **echoing** the page the view already shows — it was told of
+            // the change mid-drag or mid-fling and answered with it — is not a request to go
+            // anywhere: gliding there would stop the fling at the first page it passed
+            // (milestone 810).
+            if previous.is_some() && self.page_shown.get(&area.id) == Some(&snap.requested) {
+                continue;
+            }
             let max = if snap.horizontal {
                 area.max_x
             } else {
@@ -2631,6 +2638,40 @@ impl Runtime {
         threshold: f32,
     ) -> Option<crate::dismiss::DismissDirection> {
         crate::dismiss::release_of(&mut self.dismiss, id, velocity, cross, axis, threshold)
+    }
+
+    /// Moves the swiped item `item` by `delta` px along its axis (milestone 810): a
+    /// [`SwipeActions`](crate::SwipeActions) row uncovering its actions, any other
+    /// dismissible sliding away.
+    pub fn swipe_drag(&mut self, item: &crate::dismiss::Dismissable, delta: f32) {
+        crate::dismiss::swipe_drag(&mut self.dismiss, item, delta);
+    }
+
+    /// The finger lets go of the swiped item `item`, at `velocity` px/s along its axis and
+    /// `cross` across it; `cancelled` for a gesture the platform took back.
+    pub fn swipe_release(
+        &mut self,
+        item: &crate::dismiss::Dismissable,
+        velocity: f32,
+        cross: f32,
+        cancelled: bool,
+    ) {
+        crate::dismiss::swipe_release(&mut self.dismiss, item, velocity, cross, cancelled);
+    }
+
+    /// The [`SwipeActions`](crate::SwipeActions) rows resting open, or on their way.
+    pub fn open_swipe_rows(&self) -> Vec<WidgetId> {
+        crate::dismiss::open_rows(&self.dismiss)
+    }
+
+    /// Closes every open [`SwipeActions`](crate::SwipeActions) row.
+    pub fn close_swipe_rows(&mut self) {
+        crate::dismiss::close_all(&mut self.dismiss);
+    }
+
+    /// How far the swiped item `id` has moved, as a signed share of its width.
+    pub fn swipe_progress(&self, id: WidgetId) -> f32 {
+        self.dismiss.get(&id).map_or(0.0, |s| s.progress())
     }
 
     /// How much of a dismissed item's box is left, while its gap closes. `None` = not

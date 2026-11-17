@@ -115,7 +115,9 @@ mod presence;
 // Documented inside (`host.rs`): an outer doc comment here would make its links resolve from
 // this scope rather than from the module's.
 mod animationhandle;
+mod emptystate;
 mod expandrail;
+mod field;
 mod glass;
 pub mod host;
 mod icon;
@@ -165,6 +167,7 @@ mod navigator;
 mod navrail;
 mod navscaffold;
 mod notifier;
+mod otpinput;
 mod overflowbar;
 mod overscroll;
 mod pageselector;
@@ -231,11 +234,13 @@ mod steps;
 mod stretch;
 #[cfg(feature = "svg")]
 mod svg;
+mod swipeactions;
 mod switch;
 mod table;
 mod tabs;
 mod text;
 mod textinput;
+mod wheelpicker;
 // External textures: video, camera, maps, native views (milestone 793).
 mod texture;
 mod theme;
@@ -433,8 +438,8 @@ pub use disabled::{
     DISABLED_CONTENT_OPACITY,
 };
 pub use dismiss::{
-    DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState, Dismissable,
-    Dismissible,
+    revealed_strip, DismissAxis, DismissDirection, DismissPhase, DismissSpec, DismissState,
+    Dismissable, Dismissible, RevealSpec,
 };
 pub use divider::{Divider, VerticalDivider, DIVIDER_SPACE, DIVIDER_THICKNESS};
 pub use dragdrop::{DragSource, DragTarget, Draggable, DropZone};
@@ -444,6 +449,7 @@ pub use dropdown::{DropdownButton, DropdownOption};
 pub use dropdownmenu::DropdownMenu;
 pub use dsl::{button, center, expanded, flexible, keyed, spacer, text};
 pub use editing::TextEditingController;
+pub use emptystate::{EmptyState, EmptyStateTheme};
 pub use expanded::{Expanded, FlexFit, Flexible};
 pub use expandrail::{
     ExpandableNavigationRail, ExpandableRailTheme, RailDestination, RAIL_COLLAPSED_WIDTH,
@@ -451,6 +457,7 @@ pub use expandrail::{
 };
 pub use expansionpanel::{ExpansionPanel, ExpansionPanelList};
 pub use fab::{FabSize, FloatingActionButton};
+pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
 pub use filetree::{
     FileNode, FileNodeKind, FileTree, FileTreeTheme, FILE_TREE_INDENT, FILE_TREE_ROW_HEIGHT,
 };
@@ -548,6 +555,9 @@ pub use navrail::{BottomBar, DestinationIcon, NavigationDestination, NavigationR
 pub use navscaffold::NavScaffold;
 pub use notifier::{ChangeNotifier, Listenable, Subscription, ValueNotifier};
 pub use opencontainer::{OpenContainer, OpenContainerTheme};
+pub use otpinput::{
+    OtpInput, OtpInputTheme, OtpKind, OTP_BOX_HEIGHT, OTP_BOX_WIDTH, OTP_GAP, OTP_GROUP_GAP,
+};
 pub use overflowbar::OverflowBar;
 pub use overscroll::{
     cross_axis as glow_cross_axis, edge_for, GlowEdge, OverscrollGlow, ScrollGlows,
@@ -675,6 +685,10 @@ pub use sticky::StickyHeader;
 pub use stretch::{OverscrollStretch, ScrollStretch};
 #[cfg(feature = "svg")]
 pub use svg::SvgPicture;
+pub use swipeactions::{
+    SwipeAction, SwipeActions, SwipeActionsTheme, SWIPE_ACTION_WIDTH, SWIPE_FULL_THRESHOLD,
+    SWIPE_ROW_HEIGHT,
+};
 pub use switch::Switch;
 pub use switcher::AnimatedSwitcher;
 pub use system_ui::{AnnotatedRegion, SystemBars, SystemUiOverlayStyle};
@@ -738,6 +752,9 @@ pub use webview::{
     WEB_VIEW_DEFAULT_HEIGHT, WEB_VIEW_TYPE,
 };
 pub use wheel::{ListWheel, RowOnWheel, WheelGeometry};
+pub use wheelpicker::{
+    WheelColumn, WheelPicker, WheelPickerTheme, WHEEL_ITEM_EXTENT, WHEEL_VISIBLE_ROWS,
+};
 pub use widget::{
     CellFn, DragMode, DragTrack, FillAxes, FilterContext, ReorderAxis, ThumbDrag, Widget,
 };
