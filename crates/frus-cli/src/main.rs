@@ -34,6 +34,7 @@ mod hot;
 mod installer;
 mod json;
 mod keys;
+mod locate;
 mod mcp;
 mod permissions;
 mod platforms;

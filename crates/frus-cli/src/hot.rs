@@ -30,7 +30,7 @@ use crate::project::Project;
 /// Where the fixed `dx` comes from: the fix on top of the 0.7.10 release, which matches the
 /// patch protocol of frus's `hot-reload` feature.
 const ENGINE_REPO: &str = "https://github.com/KalybosPro/dioxus";
-const ENGINE_REV: &str = "c5b307e0ead8e50e269531a3fcd96fbc2228df27";
+const ENGINE_REV: &str = "c5438d614cac6e539c5f4fbbc0022db04d5181fb";
 
 /// What building the engine needs and this machine lacks, as what to do about it: on Linux it
 /// links OpenSSL, whose headers a package manager installs, which frus cannot do without the
@@ -63,6 +63,15 @@ pub(crate) fn engine_path() -> PathBuf {
     engine_root()
         .join("bin")
         .join(if cfg!(windows) { "dx.exe" } else { "dx" })
+}
+
+/// The engine's command, its compiles incremental whatever the environment says: a patch
+/// recompiles the application's crate, and with `CARGO_INCREMENTAL=0` inherited from a shell
+/// that took 20 s instead of 2 (milestone 816).
+pub(crate) fn engine_command(engine: &Path) -> Command {
+    let mut command = Command::new(engine);
+    command.env("CARGO_INCREMENTAL", "1");
+    command
 }
 
 /// The patch engine, installed first if it is missing (a few minutes, once).

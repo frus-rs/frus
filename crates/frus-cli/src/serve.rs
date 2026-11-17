@@ -33,15 +33,17 @@ const DEVTOOLS_PATH: &str = "/__frus/devtools";
 
 /// The script added to the page under `frus run --hot`: it asks for the latest patch until the
 /// shell can take one (`window.__frusPatch`), then for each newer one. A page that loads asks
-/// from the start, and gets the latest: patches are cumulative.
+/// from the start, and gets the latest: patches are cumulative. Its first question says
+/// `started`: the application in a page is up, which is when `frus run` says a restart is done.
 const PATCH_BRIDGE: &str = r#"<script>(() => {
-  let after = 0, asking = false;
+  let after = 0, asking = false, started = true;
   setInterval(() => {
     if (asking || !window.__frusPatch) return;
     asking = true;
-    fetch('/__frus/patch?after=' + after, { cache: 'no-store' })
+    fetch('/__frus/patch?after=' + after + (started ? '&started' : ''), { cache: 'no-store' })
       .then((answer) => answer.text())
       .then((text) => {
+        started = false;
         if (!text) return;
         const at = text.indexOf('\n');
         after = Number(text.slice(0, at));
@@ -168,9 +170,9 @@ pub(crate) struct Site {
 }
 
 /// The latest hot-reload patch, as the engine sent it, and how many there were: what a page
-/// asks `/__frus/patch` for.
+/// asks `/__frus/patch` for. And how many times the application started in a page.
 #[derive(Clone, Default)]
-pub(crate) struct PatchSlot(Arc<Mutex<(u64, String)>>);
+pub(crate) struct PatchSlot(Arc<Mutex<(u64, String)>>, Arc<AtomicU64>);
 
 impl PatchSlot {
     /// A new patch, unless it is the latest again: the engine sends it to each client that
@@ -182,6 +184,12 @@ impl PatchSlot {
                 slot.1 = message;
             }
         }
+    }
+
+    /// How many times the application started in a page: its first question for a patch says
+    /// so (see `PATCH_BRIDGE`).
+    pub(crate) fn pages_started(&self) -> u64 {
+        self.1.load(Ordering::SeqCst)
     }
 
     /// `<number>\n<patch>` when there is one newer than `after`; nothing otherwise.
@@ -320,6 +328,9 @@ fn handle(
         return respond(&mut stream, "200 OK", "text/plain", build.as_bytes());
     }
     if path == PATCH_PATH {
+        if query.split('&').any(|part| part == "started") {
+            patches.1.fetch_add(1, Ordering::SeqCst);
+        }
         let after = query_value(query, "after").parse().unwrap_or(0);
         return respond(
             &mut stream,
@@ -730,6 +741,13 @@ mod tests {
         );
         assert!(ask("GET /__frus/commands HTTP/1.1\r\n\r\n").ends_with("\r\n\r\n"));
         assert!(page.contains("__frusCommand"), "{page}");
+        // The application started in a page: its first question for a patch says so, the next
+        // ones do not (milestone 816: when `R` on the web is done).
+        assert_eq!(server.patches.pages_started(), 0);
+        let first = ask("GET /__frus/patch?after=0&started HTTP/1.1\r\n\r\n");
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        ask("GET /__frus/patch?after=0 HTTP/1.1\r\n\r\n");
+        assert_eq!(server.patches.pages_started(), 1);
         // The page's picture, written where the run asked.
         let shot = dir.join("shot.png");
         server.expect_screenshot(shot.clone());

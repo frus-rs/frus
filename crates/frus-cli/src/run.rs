@@ -18,7 +18,9 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cargo::{self, Mode};
@@ -709,7 +711,7 @@ fn reload_while_hot() {
 fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> {
     let engine = crate::hot::engine()?;
     let shadow = crate::hot::shadow(project)?;
-    let mirror = mirror_sources(project, &shadow)?;
+    let (mirror, saves) = mirror_sources(project, &shadow)?;
     let link = DevLink::open()?;
     let (device, platform) = host_name(options);
     serve_devtools(link.relay(), project, &device, platform, options.mode);
@@ -722,9 +724,10 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
         .map(|address| address.port().to_string())
         .map_err(|e| format!("could not find a free port for the hot-reload engine: {e}"))?;
     let (lines_in, lines) = std::sync::mpsc::channel::<crate::hot::DxLine>();
+    let mut checks = error_check(project, &shadow, &target, "desktop", options, saves);
     let start = |link: &DevLink| -> Result<Child, String> {
         crate::hot::clear_dependency_archives(&target);
-        let mut command = Command::new(&engine);
+        let mut command = crate::hot::engine_command(&engine);
         command
             .args([
                 "serve",
@@ -771,6 +774,8 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
                     on_launch(&mut keys, project, &mut restarting);
                 }
                 DxLine::Patched { file, millis } => {
+                    // The sources compile: an error check under way has nothing left to find.
+                    checks.cancel();
                     let seconds = millis as f64 / 1000.0;
                     if report::is_machine() {
                         report::event(
@@ -783,8 +788,9 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
                 }
                 DxLine::Failed(why) => {
                     report::warn(&why);
-                    // The engine says what is wrong but not where: the compiler, asked again, does.
-                    locate_errors(project, &shadow, &target);
+                    // The engine says what is wrong but not where: the compiler, asked again
+                    // beside this loop, does (see `locate`).
+                    checks.start();
                 }
                 DxLine::Exited(why) if restarting.is_none() => {
                     crate::hot::stop(&mut dx);
@@ -798,6 +804,7 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
                 DxLine::Exited(_) | DxLine::Noise => {}
             }
         }
+        say_located(&mut checks);
         if let Some(at) = launched_at.filter(|_| !retouched) {
             if at.elapsed().unwrap_or_default() > Duration::from_secs(8) {
                 retouched = true;
@@ -830,6 +837,7 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
             Some(Action::Restart) => {
                 restarting = Some(Instant::now());
                 report::say("Restarting: building…");
+                checks.cancel();
                 crate::hot::stop(&mut dx);
                 link.disconnect();
                 dx = start(&link)?;
@@ -863,27 +871,66 @@ fn run_hot(project: &Project, options: &RunOptions) -> Result<ExitCode, String> 
 
 /// The application's sources, copied into the shadow package and kept in step while the run
 /// lasts (see `hot::Mirror`).
-fn mirror_sources(
-    project: &Project,
-    shadow: &Path,
-) -> Result<std::sync::Arc<std::sync::Mutex<crate::hot::Mirror>>, String> {
+/// With the mirror, how many times a change was copied: a save, as the error check counts them
+/// (see `locate`).
+fn mirror_sources(project: &Project, shadow: &Path) -> Result<Mirrored, String> {
     let mut mirror = crate::hot::Mirror::new(project.root.join("src"), shadow.join("src"));
     mirror
         .sync()
         .map_err(|e| format!("could not copy the sources: {e}"))?;
-    let mirror = std::sync::Arc::new(std::sync::Mutex::new(mirror));
+    let mirror = Arc::new(std::sync::Mutex::new(mirror));
+    let saves = Arc::new(AtomicU64::new(0));
     {
         let mirror = mirror.clone();
+        let saves = saves.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(250));
             if let Ok(mut mirror) = mirror.lock() {
-                if let Err(error) = mirror.sync() {
-                    report::warn(&format!("could not copy a changed source: {error}"));
+                match mirror.sync() {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        saves.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(error) => {
+                        report::warn(&format!("could not copy a changed source: {error}"))
+                    }
                 }
             }
         });
     }
-    Ok(mirror)
+    Ok((mirror, saves))
+}
+
+/// The sources' mirror, and how many saves it copied.
+type Mirrored = (Arc<std::sync::Mutex<crate::hot::Mirror>>, Arc<AtomicU64>);
+
+/// The check that says where a failed build went wrong, beside the loop (see `locate`).
+fn error_check(
+    project: &Project,
+    shadow: &Path,
+    target: &Path,
+    platform: &str,
+    options: &RunOptions,
+    saves: Arc<AtomicU64>,
+) -> crate::locate::ErrorCheck {
+    let plan = crate::locate::CheckPlan {
+        root: project.root.clone(),
+        shadow: shadow.to_path_buf(),
+        target: target.to_path_buf(),
+        bin: project.lib.clone(),
+        profile: crate::locate::engine_profile(platform, options.mode == Mode::Release),
+        features: hot_features(project),
+    };
+    crate::locate::ErrorCheck::new(crate::locate::runner(plan), saves)
+}
+
+/// Says the errors the check found, once it has.
+fn say_located(checks: &mut crate::locate::ErrorCheck) {
+    if let Some(errors) = checks.poll() {
+        for line in &errors {
+            report::warn(line);
+        }
+    }
 }
 
 /// Starts the engine, each line it prints read into `lines`.
@@ -949,49 +996,6 @@ fn on_launch(
             )));
         }
         None => {}
-    }
-}
-
-/// After a failed patch: `cargo check` on the shadow package, and each error it finds said with
-/// its place in the application's own files — the engine names the error, not where it is.
-fn locate_errors(project: &Project, shadow: &Path, target: &Path) {
-    let output = Command::new("cargo")
-        .args([
-            "check",
-            "--message-format=short",
-            "--bin",
-            &project.lib,
-            "--features",
-            &hot_features(project),
-        ])
-        .current_dir(shadow)
-        .env("CARGO_TARGET_DIR", target)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn();
-    let Ok(mut check) = output else {
-        return;
-    };
-    // Read aside, and the check waited for the way a build is: `q` stops it too. A check of a
-    // whole package can take minutes, and `q` was not heard during it.
-    let reader = check.stderr.take().map(|mut stderr| {
-        std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
-            text
-        })
-    });
-    if crate::cargo::wait_or_cancel(&mut check).is_err() {
-        return;
-    }
-    let text = reader.and_then(|r| r.join().ok()).unwrap_or_default();
-    let located: Vec<String> = text
-        .lines()
-        .filter_map(|line| crate::hot::located_error(line, shadow, &project.root))
-        .collect();
-    for line in &located {
-        report::warn(line);
     }
 }
 
@@ -1246,7 +1250,7 @@ fn run_android_hot(
             .and_then(|link| crate::platforms::Deeplink::parse(link).ok())
             .as_ref(),
     )?;
-    let mirror = mirror_sources(project, &shadow)?;
+    let (mirror, saves) = mirror_sources(project, &shadow)?;
     let link = DevLink::open()?;
     serve_devtools(
         Relay::adb(adb.clone(), serial, package),
@@ -1262,10 +1266,11 @@ fn run_android_hot(
         .map(|address| address.port())
         .map_err(|e| format!("could not find a free port for the hot-reload engine: {e}"))?;
     let (lines_in, lines) = std::sync::mpsc::channel::<crate::hot::DxLine>();
+    let mut checks = error_check(project, &shadow, &target, "android", options, saves);
     let port_text = port.to_string();
     let start = || -> Result<Child, String> {
         crate::hot::clear_dependency_archives(&target);
-        let mut command = Command::new(&engine);
+        let mut command = crate::hot::engine_command(&engine);
         command
             .args([
                 "serve",
@@ -1338,6 +1343,8 @@ fn run_android_hot(
                     launched_at.get_or_insert_with(std::time::SystemTime::now);
                 }
                 DxLine::Patched { file, millis } => {
+                    // The sources compile: an error check under way has nothing left to find.
+                    checks.cancel();
                     let seconds = millis as f64 / 1000.0;
                     if report::is_machine() {
                         report::event(
@@ -1350,12 +1357,13 @@ fn run_android_hot(
                 }
                 DxLine::Failed(why) => {
                     report::warn(&why);
-                    locate_errors(project, &shadow, &target);
+                    checks.start();
                 }
                 // The application's log is read from the device (above), not from the engine.
                 DxLine::App(..) | DxLine::Exited(_) | DxLine::Noise => {}
             }
         }
+        say_located(&mut checks);
         if let Some(at) = launched_at.filter(|_| !retouched) {
             if at.elapsed().unwrap_or_default() > Duration::from_secs(8) {
                 retouched = true;
@@ -1411,6 +1419,7 @@ fn run_android_hot(
             // builds what is saved, installs it and starts it, as on the desktop.
             Some(Action::Restart) => {
                 report::say("Restarting: building again…");
+                checks.cancel();
                 crate::hot::stop(&mut dx);
                 let _ = adb_on(&[
                     "shell",
@@ -1722,7 +1731,7 @@ fn run_web_hot(
     crate::setup::rust_target("wasm32-unknown-unknown")?;
     let engine = crate::hot::engine()?;
     let shadow = crate::hot::shadow(project)?;
-    let mirror = mirror_sources(project, &shadow)?;
+    let (mirror, saves) = mirror_sources(project, &shadow)?;
     let target = crate::hot::session_root(project)?.join("target");
     // The engine's own server: only its socket is used, by this run.
     let port = std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -1730,10 +1739,11 @@ fn run_web_hot(
         .map(|address| address.port())
         .map_err(|e| format!("could not find a free port for the hot-reload engine: {e}"))?;
     let (lines_in, lines) = std::sync::mpsc::channel::<crate::hot::DxLine>();
+    let mut checks = error_check(project, &shadow, &target, "wasm", options, saves);
     let port_text = port.to_string();
     let start = || -> Result<Child, String> {
         crate::hot::clear_dependency_archives(&target);
-        let mut command = Command::new(&engine);
+        let mut command = crate::hot::engine_command(&engine);
         command
             .args([
                 "serve",
@@ -1771,10 +1781,11 @@ fn run_web_hot(
             Ok(crate::hot::DxLine::Launched) => break,
             Ok(crate::hot::DxLine::Failed(why)) => {
                 report::warn(&format!("{why}: save a fix and it is built again"));
-                locate_errors(project, &shadow, &target);
+                checks.start();
             }
             _ => {}
         }
+        say_located(&mut checks);
     }
     let launched_at = std::time::SystemTime::now();
     let Some(built) = crate::hot::web_build_dir(&target, &project.lib) else {
@@ -1827,11 +1838,16 @@ fn run_web_hot(
     });
 
     let mut retouched = false;
+    // After `R`: when the page was told to reload, and how many times the application had
+    // started in a page then (see `serve::PatchSlot::pages_started`).
+    let mut restarting: Option<(Instant, u64)> = None;
     let end = loop {
         while let Ok(line) = lines.try_recv() {
             use crate::hot::DxLine;
             match line {
                 DxLine::Patched { file, millis } => {
+                    // The sources compile: an error check under way has nothing left to find.
+                    checks.cancel();
                     let seconds = millis as f64 / 1000.0;
                     if report::is_machine() {
                         report::event(
@@ -1844,7 +1860,7 @@ fn run_web_hot(
                 }
                 DxLine::Failed(why) => {
                     report::warn(&why);
-                    locate_errors(project, &shadow, &target);
+                    checks.start();
                 }
                 // A change no patch can carry was built in full: the page reloads onto it, its
                 // states kept.
@@ -1854,6 +1870,15 @@ fn run_web_hot(
                 }
                 DxLine::App(text, true) => report::warn(&text),
                 DxLine::App(..) | DxLine::Exited(_) | DxLine::Noise => {}
+            }
+        }
+        say_located(&mut checks);
+        // The page is back once the application started in it again: then the restart is done,
+        // said as on the other devices.
+        if let Some((started, pages)) = restarting {
+            if server.patches.pages_started() > pages {
+                restarting = None;
+                restarted(Action::Restart, started, "");
             }
         }
         // The engine watches the files a few seconds after it starts: edits made before are
@@ -1884,8 +1909,9 @@ fn run_web_hot(
             Some(Action::Reload) => reload_while_hot(),
             // The page reloads afresh; the engine hands it the latest patch as it connects.
             Some(Action::Restart) => {
+                restarting = Some((Instant::now(), server.patches.pages_started()));
                 server.rebuilt(true);
-                report::say("Restarting: the page reloads, every state afresh.");
+                report::say("Restarting: the page reloads, every state afresh…");
             }
             Some(Action::Detach) => report::say(
                 "The page is served by frus run: it cannot go on without it. `q` ends both.",
