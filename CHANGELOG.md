@@ -25,7 +25,9 @@ any release may break.
   steps with Skip, a review step, the answers kept in `StepFormState`, a completion message, and
   steps that slide over the theme's motion durations. Both are themable
   (`theme.widgets.chat`, `theme.widgets.step_form`), their words replaceable (`ChatStrings`,
-  `StepFormStrings`), right to left and accessible. Also: `ListView::hold_position` keeps the rows
+  `StepFormStrings`) and said in the seven built-in languages (21 new `Localizations` entries:
+  `today_label`, `send_button_label`, `next_button_label`, `step_of_pattern` and the rest), right
+  to left and accessible. Also: `ListView::hold_position` keeps the rows
   in view in place when items arrive before them; `Key::LineBreak` (Shift+Enter) and
   `TextField::submit_on_enter`; `Steps` marks skipped and refused steps, can leave markers inert
   (`on_tap_where`), reads as a progress, and now puts its first step on the right in a

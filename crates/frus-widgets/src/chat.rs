@@ -154,7 +154,8 @@ impl ChatMessage {
     }
 }
 
-/// The words a conversation says, English unless told (milestone 815). `{n}` and `{name}`
+/// The words a conversation says (milestone 815): unless told, the installed
+/// [`localizations`](crate::localizations) table's, read when the strings are made. `{n}` and `{name}`
 /// are replaced where they appear.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatStrings {
@@ -192,22 +193,23 @@ pub struct ChatStrings {
 
 impl Default for ChatStrings {
     fn default() -> Self {
+        let words = crate::localizations::of();
         Self {
-            today: "Today".into(),
-            yesterday: "Yesterday".into(),
-            sending: "Sending".into(),
-            sent: "Sent".into(),
-            delivered: "Delivered".into(),
-            read: "Read".into(),
-            failed: "Not sent".into(),
-            retry: "Retry".into(),
-            jump: "Jump to the newest messages".into(),
-            new_messages: "{n} new".into(),
-            typing_one: "{name} is typing".into(),
-            typing_many: "{name} are typing".into(),
-            you: "You".into(),
-            placeholder: "Message".into(),
-            send: "Send".into(),
+            today: words.today_label().into(),
+            yesterday: words.yesterday_label().into(),
+            sending: words.message_sending_label().into(),
+            sent: words.message_sent_label().into(),
+            delivered: words.message_delivered_label().into(),
+            read: words.message_read_label().into(),
+            failed: words.message_not_sent_label().into(),
+            retry: words.retry_button_label().into(),
+            jump: words.jump_to_newest_label().into(),
+            new_messages: words.new_messages_pattern().into(),
+            typing_one: words.typing_one_pattern().into(),
+            typing_many: words.typing_many_pattern().into(),
+            you: words.you_label().into(),
+            placeholder: words.message_field_label().into(),
+            send: words.send_button_label().into(),
         }
     }
 }

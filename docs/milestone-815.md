@@ -19,7 +19,9 @@ Two sets of widgets that applications keep writing for themselves:
   direction over the theme's motion durations.
 
 Both are themable (`theme.widgets.chat`, `theme.widgets.step_form`) and each word they say can
-be changed (`ChatStrings`, `StepFormStrings`); both work right to left and in both brightnesses
+be changed (`ChatStrings`, `StepFormStrings`); unchanged, they are said in the reader's language from
+the seven built-in tables (21 new `Localizations` entries, milestone 813's guard holding each
+language to all of them); both work right to left and in both brightnesses
 and say what they are to a screen reader.
 
 ## Design

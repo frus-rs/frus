@@ -520,6 +520,113 @@ pub trait Localizations {
     fn uses_24_hour_clock(&self) -> bool {
         false
     }
+
+    /// **A conversation's heading over today's messages** (milestone 815).
+    fn today_label(&self) -> &str {
+        "Today"
+    }
+
+    /// And over yesterday's.
+    fn yesterday_label(&self) -> &str {
+        "Yesterday"
+    }
+
+    /// **A message's status** while it is on its way.
+    fn message_sending_label(&self) -> &str {
+        "Sending"
+    }
+
+    /// See [`message_sending_label`](Self::message_sending_label): it left.
+    fn message_sent_label(&self) -> &str {
+        "Sent"
+    }
+
+    /// See [`message_sending_label`](Self::message_sending_label): it arrived.
+    fn message_delivered_label(&self) -> &str {
+        "Delivered"
+    }
+
+    /// See [`message_sending_label`](Self::message_sending_label): it was read.
+    fn message_read_label(&self) -> &str {
+        "Read"
+    }
+
+    /// See [`message_sending_label`](Self::message_sending_label): it failed.
+    fn message_not_sent_label(&self) -> &str {
+        "Not sent"
+    }
+
+    /// **The button that tries again** after something failed.
+    fn retry_button_label(&self) -> &str {
+        "Retry"
+    }
+
+    /// **The button that brings a scrolled-up conversation back to its newest message.**
+    fn jump_to_newest_label(&self) -> &str {
+        "Jump to the newest messages"
+    }
+
+    /// **How many messages came in** while the reader was scrolled up: a pattern, `{n}`
+    /// standing for the count, written so that it reads right for one as for many.
+    fn new_messages_pattern(&self) -> &str {
+        "{n} new"
+    }
+
+    /// **Who is typing**, one person: a pattern, `{name}` standing for the name.
+    fn typing_one_pattern(&self) -> &str {
+        "{name} is typing"
+    }
+
+    /// And several: `{name}` stands for their names, joined.
+    fn typing_many_pattern(&self) -> &str {
+        "{name} are typing"
+    }
+
+    /// **What the reader is called** when their own messages are read out.
+    fn you_label(&self) -> &str {
+        "You"
+    }
+
+    /// **A message composer's empty field.**
+    fn message_field_label(&self) -> &str {
+        "Message"
+    }
+
+    /// **The button that sends a message.**
+    fn send_button_label(&self) -> &str {
+        "Send"
+    }
+
+    /// **The button that goes on to a form's next step.**
+    fn next_button_label(&self) -> &str {
+        "Next"
+    }
+
+    /// **The button that passes over an optional step.**
+    fn skip_button_label(&self) -> &str {
+        "Skip"
+    }
+
+    /// **The button that hands in a form's answers**, on its last step.
+    fn submit_button_label(&self) -> &str {
+        "Submit"
+    }
+
+    /// **The step that shows a form's answers** before they are handed in.
+    fn review_label(&self) -> &str {
+        "Review"
+    }
+
+    /// **Where a form is**: a pattern, `{n}` standing for the step and `{total}` for how
+    /// many there are.
+    fn step_of_pattern(&self) -> &str {
+        "Step {n} of {total}"
+    }
+
+    /// **Beside a step that may be left out.**
+    fn optional_label(&self) -> &str {
+        "Optional"
+    }
 }
 
 /// `month`, from one, as an index into a list of twelve — clamped, so a bad month cannot
@@ -862,6 +969,90 @@ impl Localizations for French {
     fn uses_24_hour_clock(&self) -> bool {
         true
     }
+
+    fn today_label(&self) -> &str {
+        "Aujourd'hui"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "Hier"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "Envoi en cours"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "Envoyé"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "Distribué"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "Lu"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "Non envoyé"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "Réessayer"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "Aller aux derniers messages"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "Nouveaux : {n}"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name} est en train d'écrire"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name} sont en train d'écrire"
+    }
+
+    fn you_label(&self) -> &str {
+        "Vous"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "Message"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "Envoyer"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "Suivant"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "Passer"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "Valider"
+    }
+
+    fn review_label(&self) -> &str {
+        "Vérification"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "Étape {n} sur {total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "Facultatif"
+    }
 }
 
 /// **The German table** (milestone 813).
@@ -1161,6 +1352,90 @@ impl Localizations for German {
 
     fn uses_24_hour_clock(&self) -> bool {
         true
+    }
+
+    fn today_label(&self) -> &str {
+        "Heute"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "Gestern"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "Wird gesendet"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "Gesendet"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "Zugestellt"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "Gelesen"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "Nicht gesendet"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "Erneut versuchen"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "Zu den neuesten Nachrichten"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "Neu: {n}"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name} schreibt"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name} schreiben"
+    }
+
+    fn you_label(&self) -> &str {
+        "Du"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "Nachricht"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "Senden"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "Weiter"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "Überspringen"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "Absenden"
+    }
+
+    fn review_label(&self) -> &str {
+        "Überprüfen"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "Schritt {n} von {total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "Optional"
     }
 }
 
@@ -1464,6 +1739,90 @@ impl Localizations for Spanish {
     fn uses_24_hour_clock(&self) -> bool {
         true
     }
+
+    fn today_label(&self) -> &str {
+        "Hoy"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "Ayer"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "Enviando"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "Enviado"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "Entregado"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "Leído"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "No enviado"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "Reintentar"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "Ir a los mensajes más recientes"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "Nuevos: {n}"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name} está escribiendo"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name} están escribiendo"
+    }
+
+    fn you_label(&self) -> &str {
+        "Tú"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "Mensaje"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "Enviar"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "Siguiente"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "Omitir"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "Finalizar"
+    }
+
+    fn review_label(&self) -> &str {
+        "Revisar"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "Paso {n} de {total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "Opcional"
+    }
 }
 
 /// **The Japanese table** (milestone 813).
@@ -1751,6 +2110,90 @@ impl Localizations for Japanese {
 
     fn uses_24_hour_clock(&self) -> bool {
         true
+    }
+
+    fn today_label(&self) -> &str {
+        "今日"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "昨日"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "送信中"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "送信済み"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "配信済み"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "既読"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "未送信"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "再試行"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "最新のメッセージへ移動"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "新着 {n} 件"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name}さんが入力中"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name}さんたちが入力中"
+    }
+
+    fn you_label(&self) -> &str {
+        "あなた"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "メッセージ"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "送信"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "次へ"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "スキップ"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "完了"
+    }
+
+    fn review_label(&self) -> &str {
+        "確認"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "ステップ {n}/{total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "任意"
     }
 }
 
@@ -2064,6 +2507,90 @@ impl Localizations for Thai {
     fn uses_24_hour_clock(&self) -> bool {
         true
     }
+
+    fn today_label(&self) -> &str {
+        "วันนี้"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "เมื่อวาน"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "กำลังส่ง"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "ส่งแล้ว"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "ส่งถึงแล้ว"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "อ่านแล้ว"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "ส่งไม่สำเร็จ"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "ลองอีกครั้ง"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "ไปที่ข้อความล่าสุด"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "ใหม่ {n} ข้อความ"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name} กำลังพิมพ์"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name} กำลังพิมพ์อยู่"
+    }
+
+    fn you_label(&self) -> &str {
+        "คุณ"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "ข้อความ"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "ส่ง"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "ถัดไป"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "ข้าม"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "เสร็จสิ้น"
+    }
+
+    fn review_label(&self) -> &str {
+        "ตรวจสอบ"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "ขั้นตอนที่ {n} จาก {total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "ไม่บังคับ"
+    }
 }
 
 /// **The Vietnamese table** (milestone 813).
@@ -2361,6 +2888,90 @@ impl Localizations for Vietnamese {
     fn uses_24_hour_clock(&self) -> bool {
         true
     }
+
+    fn today_label(&self) -> &str {
+        "Hôm nay"
+    }
+
+    fn yesterday_label(&self) -> &str {
+        "Hôm qua"
+    }
+
+    fn message_sending_label(&self) -> &str {
+        "Đang gửi"
+    }
+
+    fn message_sent_label(&self) -> &str {
+        "Đã gửi"
+    }
+
+    fn message_delivered_label(&self) -> &str {
+        "Đã nhận"
+    }
+
+    fn message_read_label(&self) -> &str {
+        "Đã xem"
+    }
+
+    fn message_not_sent_label(&self) -> &str {
+        "Chưa gửi được"
+    }
+
+    fn retry_button_label(&self) -> &str {
+        "Thử lại"
+    }
+
+    fn jump_to_newest_label(&self) -> &str {
+        "Đến tin nhắn mới nhất"
+    }
+
+    fn new_messages_pattern(&self) -> &str {
+        "{n} tin mới"
+    }
+
+    fn typing_one_pattern(&self) -> &str {
+        "{name} đang nhập"
+    }
+
+    fn typing_many_pattern(&self) -> &str {
+        "{name} đang cùng nhập"
+    }
+
+    fn you_label(&self) -> &str {
+        "Bạn"
+    }
+
+    fn message_field_label(&self) -> &str {
+        "Tin nhắn"
+    }
+
+    fn send_button_label(&self) -> &str {
+        "Gửi"
+    }
+
+    fn next_button_label(&self) -> &str {
+        "Tiếp"
+    }
+
+    fn skip_button_label(&self) -> &str {
+        "Bỏ qua"
+    }
+
+    fn submit_button_label(&self) -> &str {
+        "Hoàn tất"
+    }
+
+    fn review_label(&self) -> &str {
+        "Xem lại"
+    }
+
+    fn step_of_pattern(&self) -> &str {
+        "Bước {n}/{total}"
+    }
+
+    fn optional_label(&self) -> &str {
+        "Không bắt buộc"
+    }
 }
 
 /// **The languages the framework has its own words in**, as language subtags: what
@@ -2597,6 +3208,30 @@ mod tests {
             ("month year", t.month_year(3, 2026)),
             ("short month day", t.short_month_day(8, 17)),
             ("long date", t.long_date(2026, 8, 17)),
+            ("today_label", t.today_label().into()),
+            ("yesterday_label", t.yesterday_label().into()),
+            ("message_sending_label", t.message_sending_label().into()),
+            ("message_sent_label", t.message_sent_label().into()),
+            (
+                "message_delivered_label",
+                t.message_delivered_label().into(),
+            ),
+            ("message_read_label", t.message_read_label().into()),
+            ("message_not_sent_label", t.message_not_sent_label().into()),
+            ("retry_button_label", t.retry_button_label().into()),
+            ("jump_to_newest_label", t.jump_to_newest_label().into()),
+            ("new_messages_pattern", t.new_messages_pattern().into()),
+            ("typing_one_pattern", t.typing_one_pattern().into()),
+            ("typing_many_pattern", t.typing_many_pattern().into()),
+            ("you_label", t.you_label().into()),
+            ("message_field_label", t.message_field_label().into()),
+            ("send_button_label", t.send_button_label().into()),
+            ("next_button_label", t.next_button_label().into()),
+            ("skip_button_label", t.skip_button_label().into()),
+            ("submit_button_label", t.submit_button_label().into()),
+            ("review_label", t.review_label().into()),
+            ("step_of_pattern", t.step_of_pattern().into()),
+            ("optional_label", t.optional_label().into()),
         ];
         out.extend(t.months().iter().map(|m| ("month", m.to_string())));
         out.extend(
@@ -2617,7 +3252,7 @@ mod tests {
             (
                 "fr",
                 &French,
-                &["OK", "Minute", "AM", "PM", "Licences", "Date"],
+                &["OK", "Minute", "AM", "PM", "Licences", "Date", "Message"],
             ),
             // "OK" is "OK" in German too, and so are "Minute", "April", "August", "September",
             // "November"; AM and PM stay for a clock German does not use.
@@ -2633,6 +3268,7 @@ mod tests {
                     "August",
                     "September",
                     "November",
+                    "Optional",
                 ],
             ),
             ("es", &Spanish, &[]),
@@ -2929,6 +3565,18 @@ mod tests {
                 .row(&["Ada", "5"]);
             let row = crate::widget::Widget::<()>::children(&table)[1].children()[0].announce();
             assert_eq!(row.as_deref(), Some("Ligne sélectionnée"));
+
+            // A conversation's and a questionnaire's words (milestone 815).
+            let chat = crate::ChatStrings::default();
+            assert_eq!(
+                (chat.send.as_str(), chat.today.as_str()),
+                ("Envoyer", "Aujourd'hui")
+            );
+            let form = crate::StepFormStrings::default();
+            assert_eq!(
+                (form.next.as_str(), form.back.as_str()),
+                ("Suivant", "Retour")
+            );
         });
     }
 

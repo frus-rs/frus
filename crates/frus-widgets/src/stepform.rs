@@ -272,7 +272,8 @@ pub enum StepProgress {
     None,
 }
 
-/// The words a [`StepForm`] says, English unless told. `{n}` and `{total}` are replaced.
+/// The words a [`StepForm`] says: unless told, the installed
+/// [`localizations`](crate::localizations) table's, read when the strings are made. `{n}` and `{total}` are replaced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StepFormStrings {
     /// The button back.
@@ -293,14 +294,15 @@ pub struct StepFormStrings {
 
 impl Default for StepFormStrings {
     fn default() -> Self {
+        let words = crate::localizations::of();
         Self {
-            back: "Back".into(),
-            next: "Next".into(),
-            skip: "Skip".into(),
-            finish: "Submit".into(),
-            review: "Review".into(),
-            step_of: "Step {n} of {total}".into(),
-            optional: "Optional".into(),
+            back: words.back_button_label().into(),
+            next: words.next_button_label().into(),
+            skip: words.skip_button_label().into(),
+            finish: words.submit_button_label().into(),
+            review: words.review_label().into(),
+            step_of: words.step_of_pattern().into(),
+            optional: words.optional_label().into(),
         }
     }
 }
