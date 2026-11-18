@@ -346,3 +346,143 @@ impl State for LoginState {
 The checking is a plain function of the state, so it is tested without a screen — see
 [Testing](testing.md). Sending the form to a server is an `async` handler: see
 [Talking to a server](network.md).
+
+### Rules of your own, and fields that depend on each other
+
+`Rule::new` turns any check into a rule. `matches` compares a field with one declared before it,
+and `field_with` hands a check the fields already declared. `errors()` lists every message, in
+order, for an `ErrorSummary` at the head of the form:
+
+```rust
+use frus::form::{Form, Rule};
+use frus::ErrorSummary;
+
+let no_spaces = Rule::new(|v: &str| v.contains(' ').then(|| "No spaces".to_string()));
+
+let form = Form::new()
+    .field("user", "ada lovelace", Rule::all([Rule::required("Required"), no_spaces]))
+    .field("password", "correct horse", Rule::min_len(8, "At least 8 characters"))
+    .matches("confirm", "correct hose", "password", "The passwords differ")
+    .field("start", "2026-03-01", Rule::required("Required"))
+    .field_with("end", "2026-01-01", |end, form| {
+        (Some(end) < form.value("start")).then(|| "Ends before it starts".to_string())
+    });
+
+assert_eq!(form.error("user"), Some("No spaces"));
+assert_eq!(form.error("confirm"), Some("The passwords differ"));
+assert_eq!(form.error("end"), Some("Ends before it starts"));
+let summary: ErrorSummary = ErrorSummary::new(form.errors().into_iter().map(|(_, message)| message));
+assert!(!summary.is_empty());
+```
+
+`ErrorSummary::links` makes each line a button, to focus the field it is about.
+
+### Helping the person fill it in
+
+A field can say what it holds, so that the keyboard, the system's autofill and password
+managers help; it can also refuse characters as they are typed:
+
+```rust
+use frus::{
+    AutofillGroup, AutofillHint, Capitalization, Column, KeyboardType, TextField, TextInputAction,
+};
+
+let address: AutofillGroup = AutofillGroup::new(
+    Column::new()
+        .spacing(12.0)
+        .child(
+            TextField::new("")
+                .label("Full name")
+                .autofill([AutofillHint::Name])
+                .capitalization(Capitalization::Words)
+                .action(TextInputAction::Next), // the keyboard's key moves to the next field
+        )
+        .child(
+            TextField::new("")
+                .label("Postcode")
+                .autofill([AutofillHint::PostalCode])
+                .input_filter(|c| c.is_ascii_alphanumeric().then(|| c.to_ascii_uppercase()))
+                .max_length(8),
+        )
+        .child(
+            TextField::new("")
+                .label("Phone")
+                .keyboard_type(KeyboardType::Phone)
+                .autofill([AutofillHint::TelephoneNumber])
+                .helper("We call only about the delivery"),
+        )
+        .child(TextField::new("").label("Quantity").digits_only()),
+);
+# let _ = address;
+```
+
+`AutofillGroup` tells the system the fields are one form, so it fills them together. On Android
+the autofill service offers them; on the web the hints become the input's `autocomplete`.
+
+## A form in steps
+
+`StepForm` asks a long form one step at a time: a progress at the top, Back and Next, a review
+at the end. Each step validates with the same `Form` rules, and **Next is refused** while the
+step is invalid. The answers live in a `StepFormState` the application keeps:
+
+```rust
+use frus::form::{Form, Rule};
+use frus::{
+    Callback, FormStep, State, StateContext, StatefulWidget, StateHandle, StepForm, StepFormState,
+    Text, TextField, Widget,
+};
+
+struct Survey;
+#[derive(Default)]
+struct SurveyState {
+    form: StepFormState,
+    sent: Option<StepFormState>,
+}
+
+impl StatefulWidget for Survey {
+    type State = SurveyState;
+    fn create_state(&self) -> SurveyState {
+        SurveyState::default()
+    }
+}
+
+/// A field bound to the answer `key`, showing its error once Next has refused it.
+fn field(handle: &StateHandle<SurveyState>, form: &StepFormState, key: &'static str) -> TextField {
+    let handle = handle.clone();
+    let field = TextField::new(form.answer(key)).label(key).on_input(move |text: String| {
+        let handle = handle.clone();
+        Callback::new(move || {
+            let text = text.clone();
+            handle.set_state(|s| s.form = s.form.with_answer(key, text))
+        })
+    });
+    match form.error(key) {
+        Some(error) => field.error(error),
+        None => field,
+    }
+}
+
+impl State for SurveyState {
+    type Widget = Survey;
+    fn build(&self, cx: &StateContext<Self>) -> Box<dyn Widget> {
+        let handle = cx.handle();
+        Box::new(
+            StepForm::new(&self.form, cx.handler(|s: &mut Self, next: StepFormState| s.form = next))
+                .step(
+                    FormStep::new("About you", move |form: &StepFormState| field(&handle, form, "name"))
+                        .validate(|form| {
+                            Form::new().field("name", form.answer("name"), Rule::required("Enter your name"))
+                        }),
+                )
+                .step(FormStep::new("Anything else?", |_| Text::new("Nothing more to ask.")).optional())
+                .summary(|form: &StepFormState| Text::new(format!("Name: {}", form.answer("name"))))
+                .on_complete(cx.handler(|s: &mut Self, done: StepFormState| s.sent = Some(done))),
+        )
+    }
+}
+# let _ = Survey;
+```
+
+`FormStep::check` validates what involves several answers at once; `.optional()` offers Skip;
+`StepForm::progress` chooses numbered steps, a bar or dots (by default, numbered steps on a wide
+window and a bar on a phone).

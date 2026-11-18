@@ -13,6 +13,24 @@ any release may break.
 
 ## [Unreleased]
 
+- **A guide for every subsystem** (J819). Ten new pages in `docs/guide/`: components and state
+  (hooks, `StatelessWidget`, `StatefulWidget`, sharing state, keys, restoration), the screen
+  (size classes, safe area, keyboard, system bars, orientation, simulated devices), text and
+  fonts (selection, bundled fonts as features, your own font, subsetting, right to left, text
+  size), accessibility (each platform's screen readers, `Semantics`, keyboard order, the reader's
+  settings), languages (resolution, Fluent files with `frus-l10n`, the framework's seven
+  languages, adding one), running and hot reload, the web, Android and iOS, and how a frame is
+  made (for contributors). Existing pages gained the widgets of the last waves: the
+  questionnaire, autofill and cross-field rules in `input.md`, the conversation and the file tree
+  in `lists.md`, the sidebar in `navigation.md`, rolling digits, marquee and KPI cards in
+  `animation.md`, the Apple-style widgets in `style.md`, the window's size, memory and menu bar
+  in `platform.md`. Fixed: `style.md` said `.max_lines(2).ellipsis()` cuts after two lines (it
+  cuts after one) and that `Text` takes the theme's body style; `layout.md` said a `Scaffold`
+  keeps its body clear of the system's bars (it keeps its bars clear, and describes the insets
+  to the body). Every new sample is a doctest. `frus` now re-exports `LocationStrategy`,
+  `location_of_link` and `link_among`, which the guides name and an application could not reach
+  through `frus`; the native views guide's doctest holder no longer shows up in
+  the API reference.
 - **A screenshot shows the application, not the debug layers; the README leads with Forge on a
   phone** (J820). `s` in `frus run` and DevTools' `screenshot` (and so `frus mcp`'s) photograph
   the frame without the performance panel, the inspector, debug paint and the repaint rainbow;

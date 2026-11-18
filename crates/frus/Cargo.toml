@@ -128,3 +128,5 @@ frus-text = { path = "../frus-text", version = "0.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # And its testing chapter renders a widget offscreen.
 frus-test = { path = "../frus-test", version = "0.5" }
+# The languages guide (`docs/guide/localization.md`) shows the application's own words.
+frus-l10n = { path = "../frus-l10n", version = "0.5" }

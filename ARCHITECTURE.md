@@ -151,7 +151,7 @@ Everything else in the crate is widgets — `button.rs`, `scroll.rs`, `datatable
         │                                    └─→ effect runs (thread or spawn_local)
         │                                          └─→ produces another Msg, loops back
         ▼
-  Application::view(&self, theme, w, h) -> Box<dyn Widget<Msg>>
+  Application::view(&self, theme) -> Box<dyn Widget<Msg>>     (or the components' build)
         │
         ▼
   frus-widgets  build_ui:
@@ -160,7 +160,7 @@ Everything else in the crate is widgets — `button.rs`, `scroll.rs`, `datatable
         │         paint walk ──→ Scene (flat primitive list)
         │         registries ──→ hit / focus / scroll / drag / semantics
         ▼
-  frus-gpu      Scene ──→ batched draw calls ──→ wgpu ──→ Vulkan / Metal / DX12 / WebGPU
+  frus-gpu      Scene ──→ batched draw calls ──→ wgpu ──→ Vulkan / Metal / DX12 / GL ES / WebGPU / WebGL 2
         │
         ▼
   pixels
@@ -193,15 +193,15 @@ Things that look like limitations and are in fact choices:
 
 - **No retained widget tree between frames.** The tree is rebuilt from `view` — or from the root component — and identity is carried by position and by `key()`. What a component keeps is held beside the tree, in the runtime's state store, and found again by that identity; `set_state` asks for a rebuild, it does not patch anything. This costs rebuild work. If it becomes real, the fix is memoization, not a mutable tree.
 - **`Box<dyn Widget<Msg>>` everywhere.** Dynamic dispatch is a real cost, and it's what makes heterogeneous children and a stable trait boundary possible. Measured, it has not been the bottleneck.
-- **One renderer backend.** `wgpu` covers Vulkan, Metal, DX12, and WebGPU. There is no software fallback, and adding one is not currently a goal.
+- **One renderer backend.** `wgpu` covers Vulkan, Metal, DX12, OpenGL ES (where Vulkan is unusable), WebGPU and WebGL 2. There is no software fallback, and adding one is not currently a goal.
 - **Layout is taffy, text is cosmic-text.** These are hard, well-solved problems. We wrap them; we don't reimplement them.
 - **`unsafe` only at the platform edge.** The framework core is safe Rust.
 
 ## Reading the milestone notes
 
-276 numbered documents in [`docs/`](docs/README.md), one per milestone, each recording the objective, the alternatives weighed, the decision, the implementation, how it was verified, and what was deliberately left out.
+Over 800 numbered documents in [`docs/`](docs/README.md), one per milestone, each recording the objective, the alternatives weighed, the decision, the implementation, how it was verified, and what was deliberately left out.
 
-When you're about to ask "why on earth is it done this way?" — `grep docs/` first. The answer is usually there, along with the option that was rejected and the reason. They are currently written in French; translating them is a genuinely valuable contribution.
+When you're about to ask "why on earth is it done this way?" — `grep docs/` first. The answer is usually there, along with the option that was rejected and the reason. They are written in English. The user guide, [`docs/guide/`](docs/guide/README.md), says how to use what they built; [How a frame is made](docs/guide/rendering.md) follows one frame through these crates.
 
 Useful entry points:
 

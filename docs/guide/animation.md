@@ -225,6 +225,25 @@ let intro: Staggered = Staggered::column().child(text("Welcome")).child(text("Le
 from, and on which preset — so an application names its own once and reuses them. Every pattern
 and preset respects reduced motion: with it on, things are simply there, or simply gone.
 
+## Numbers that roll, text that scrolls
+
+`RollingDigits` shows a number whose digits roll to each new value, as an odometer's do.
+`Marquee` scrolls a line that does not fit sideways in a loop, and stays still when it fits.
+`KpiCard` puts a figure, its change and a sparkline on a dashboard card. All three hold still
+under reduced motion.
+
+```rust
+use frus::{KpiCard, KpiTrend, Marquee, RollingDigits};
+
+let total: RollingDigits = RollingDigits::new(1299.5).decimals(2).prefix("$");
+let title: Marquee = Marquee::text("A very long song title that will not fit");
+let visitors: KpiCard = KpiCard::new("Visitors")
+    .digits(RollingDigits::new(12_480.0))
+    .delta("-320 today", KpiTrend::Down)
+    .sparkline([9.0, 12.0, 11.0, 14.0, 13.0, 12.4]);
+# let _ = (total, title, visitors);
+```
+
 ## What frus animates for you
 
 Several movements need no code: the page transition when the router pushes or pops a screen

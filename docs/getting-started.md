@@ -42,6 +42,8 @@ frus run
 
 ## State, in three sizes
 
+[Components and state](guide/components.md) has the long version, with every hook.
+
 **A hook**, for a function component: `use_state`, `use_ref`, `use_memo`, `use_effect`. They are
 matched to their values by the order they are called in, so call them unconditionally and in
 the same order every time.

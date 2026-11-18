@@ -377,3 +377,96 @@ fn no_projects() -> Box<dyn Widget> {
     )
 }
 ```
+
+## A conversation
+
+`ChatList` shows a conversation: it rests at the newest message and follows new ones as they
+arrive, unless the reader has scrolled up to read, in which case it keeps their place and offers
+a button back down that says how many came in. Messages are grouped by sender and time, with
+dates between days, the status of what was sent (sending, sent, delivered, read, failed with a
+retry), and who is typing. `ChatComposer` is where a message is written: it grows to six lines
+and sends only something.
+
+```rust
+use frus::{
+    Column, ChatComposer, ChatList, ChatListState, ChatMessage, Expanded, MessageStatus, State,
+    StateContext, StatefulWidget, Widget,
+};
+use std::rc::Rc;
+
+struct Conversation;
+struct ConversationState {
+    messages: Rc<Vec<ChatMessage>>,
+    list: ChatListState,
+    draft: String,
+}
+
+impl StatefulWidget for Conversation {
+    type State = ConversationState;
+    fn create_state(&self) -> ConversationState {
+        ConversationState {
+            messages: Rc::new(vec![
+                ChatMessage::incoming("1", "ada", "Did the build pass?", 1_700_000_000),
+                ChatMessage::outgoing("2", "It did.", 1_700_000_060).status(MessageStatus::Read),
+            ]),
+            list: ChatListState::new(),
+            draft: String::new(),
+        }
+    }
+}
+
+impl ConversationState {
+    fn send(&mut self) {
+        let id = (self.messages.len() + 1).to_string();
+        let text = std::mem::take(&mut self.draft);
+        Rc::make_mut(&mut self.messages)
+            .push(ChatMessage::outgoing(id, text, 1_700_000_120).status(MessageStatus::Sending));
+    }
+}
+
+impl State for ConversationState {
+    type Widget = Conversation;
+    fn build(&self, cx: &StateContext<Self>) -> Box<dyn Widget> {
+        let list = ChatList::new(
+            self.messages.clone(),
+            &self.list,
+            cx.handler(|s: &mut Self, next: ChatListState| s.list = next),
+        )
+        .typing(["Ada"]);
+        let composer = ChatComposer::new(&self.draft, cx.handler(|s: &mut Self, text: String| s.draft = text))
+            .on_send(cx.callback(ConversationState::send));
+        Box::new(Column::new().child(Expanded::new(list)).child(composer))
+    }
+}
+# let _ = Conversation;
+```
+
+Only the rows in view are built, however long the conversation. `MessageBubble` and
+`TypingIndicator` are the parts, for a layout of your own; `theme.widgets.chat` styles them all
+and `ChatStrings` replaces their words.
+
+## A tree of files
+
+`FileTree` shows folders and files: a chevron opens a folder, a row selects, Right and Left
+open and close from the keyboard, and a folder whose children are not loaded yet shows a loading
+row until the application gives them.
+
+```rust
+use frus::{FileNode, FileTree};
+
+#[derive(Clone)]
+enum Msg {
+    Toggle(u64, bool),
+    Select(u64),
+}
+
+let tree: FileTree<Msg> = FileTree::new(vec![
+    FileNode::folder(1, "src", [FileNode::file(2, "main.rs"), FileNode::lazy_folder(3, "widgets")]),
+    FileNode::file(4, "Cargo.toml"),
+])
+.expanded([1])
+.selected(Some(2))
+.on_toggle(Msg::Toggle)
+.on_select(Msg::Select);
+# let _ = tree;
+```

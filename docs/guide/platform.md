@@ -21,6 +21,7 @@ frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "
 | [Taskbar badge and progress](#the-taskbar-badge-and-progress) | `taskbar` | ✓ | — | — |
 | [Global shortcuts](#global-shortcuts) | `global-shortcuts` | ✓ | — | — |
 | [The application's icon](#the-applications-icon) | — | ✓ | ✓ | ✓ |
+| [The window: size, memory, menu bar](#the-window) | — | ✓ | — | — |
 | [One instance at a time](#one-instance-at-a-time) | — | ✓ | — | — |
 | [Permissions](#permissions) | — | ✓ | ✓ | ✓ |
 | [Preferences](#preferences) | — | ✓ | ✓ | ✓ |
@@ -363,6 +364,55 @@ or to retry once a network comes back, never to decide that a request will work.
 | macOS | The path the system routes traffic through (`NWPathMonitor`). |
 | Linux | The interface of the default route (`/proc/net/route`), looked at every two seconds. |
 | Web | `navigator.onLine` and its `online`/`offline` events; the connection's type where the browser gives it (Chrome on Android). |
+
+## The window
+
+On the desktop the application is one window. It opens at the size the application asks for, and
+afterwards where the person left it: its size, its position, maximized or not, are kept when it
+closes and given back the next time, fitted to the screens there are then (a window whose
+screen is gone opens centred on the main one). A kiosk or a fixed-size tool turns that off:
+
+```rust
+use frus::{text, FrusApp};
+
+let app = FrusApp::from_fn(|_| Box::new(text("Kiosk")))
+    .title("Kiosk")
+    .window_size(1024.0, 768.0) // the first size, in logical pixels
+    .remember_window(false); // always open at that size
+# let _ = app;
+```
+
+The window is never smaller than 360 by 280. On Wayland the system places windows itself, so
+only the size and the maximized state are kept there. A browser tab has no window of its own:
+these settings change nothing on the web.
+
+**A menu bar** (File, Edit, View…) belongs to the window, not to a page: it stays while pages
+change under it. Put it around the pages with `FrusApp::builder`. On Windows it then sits on the
+title bar's line, as in a code editor, while the system keeps the window's icon, its three
+buttons and the dragging and double-clicking of the empty part of the line; elsewhere it sits
+under the title bar.
+
+```rust
+use frus::{text, Callback, FrusApp, GoRoute, GoRouter, MenuBar, MenuPath, SubmenuButton, WindowMenuBar};
+
+let router = GoRouter::new(vec![GoRoute::new("/", |_, _| text("home"))]);
+let app = FrusApp::router(router).builder(|cx, pages| {
+    // Which menu is open: the window's to keep, as the bar is.
+    let menus = cx.use_state(MenuPath::closed);
+    let set = menus.clone();
+    let bar = MenuBar::new(&menus.get(), move |path: MenuPath| {
+        let set = set.clone();
+        Callback::new(move || set.set(path.clone()))
+    })
+    .menu(SubmenuButton::new("File"))
+    .menu(SubmenuButton::new("Edit"));
+    Box::new(WindowMenuBar::new(bar, pages))
+});
+# let _ = app;
+```
+
+The menus, their items, shortcuts and submenus are in [Screens, navigation and
+dialogs](navigation.md#menus-cards-and-panels-over-the-screen).
 
 ## One instance at a time
 
