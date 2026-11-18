@@ -389,11 +389,12 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Status:** partial
 - **What you hit:** Where there is no Vulkan driver, or only the Android emulator's, frus draws
   through OpenGL ES by itself. A device whose Vulkan driver exists but draws wrongly or crashes
-  is still drawn through Vulkan: there is no list of known-bad drivers and no recovery from a
-  lost device.
+  is still drawn through Vulkan: there is no list of known-bad drivers. A device lost while the
+  application runs is recovered (milestone 686); a driver that draws wrongly without losing the
+  device is not detected.
 - **Workaround:** Set `WGPU_BACKEND=gl` for such a device.
 - **Evidence:** [#217](https://github.com/frus-rs/frus/issues/217),
-  [docs/milestone-697.md](docs/milestone-697.md),
+  [docs/milestone-686.md](docs/milestone-686.md), [docs/milestone-697.md](docs/milestone-697.md),
   [crates/frus-gpu/src/renderer.rs](crates/frus-gpu/src/renderer.rs)
 
 ### L-024 Pipelines are compiled at every launch outside Vulkan
@@ -409,7 +410,7 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Workaround:** Load custom shaders before the screen that shows them.
 - **Evidence:** [#217](https://github.com/frus-rs/frus/issues/217),
   [docs/milestone-684.md](docs/milestone-684.md),
-  [docs/milestone-697.md](docs/milestone-697.md),
+  [docs/milestone-686.md](docs/milestone-686.md), [docs/milestone-697.md](docs/milestone-697.md),
   [docs/milestone-792.md](docs/milestone-792.md)
 
 ### L-025 No OpenGL ES 2 rendering
