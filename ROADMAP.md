@@ -120,6 +120,8 @@ If something here interests you, **comment on the matching issue** (or open one)
 
 What does not exist is everything around it: distribution, tooling, more platforms, and the ecosystem.
 
+**What frus cannot do today** is listed in [LIMITATIONS.md](LIMITATIONS.md): every known limitation under a stable id, with the platforms it affects, the workaround if there is one, its status and the evidence for it. This roadmap says what is being built; that registry says what is missing now.
+
 | | Desktop | Android | Web | iOS | macOS native |
 |---|---|---|---|---|---|
 | Rendering | ✅ | ✅ | ✅ | — | — |
