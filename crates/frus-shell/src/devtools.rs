@@ -165,6 +165,29 @@ pub(crate) fn parse(body: &str) -> Result<Call, String> {
     })
 }
 
+/// Whether a `screenshot` request asks for the debug layers too — the inspector, debug
+/// paint, the repaint rainbow, the performance panel — with `{"overlays": true}`. Left out,
+/// the picture is the application alone, as it looks to the person using it (milestone 820).
+#[cfg_attr(not(desktop), allow(dead_code))]
+pub(crate) fn wants_overlays(params: &Value) -> bool {
+    params
+        .get("overlays")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// How many times larger than the window a `screenshot` is drawn, `{"scale": 2}`: a picture
+/// for a page or a store listing sharper than the monitor the window is on. Between 0.25 and
+/// 4; 1 when left out (milestone 820).
+#[cfg_attr(not(desktop), allow(dead_code))]
+pub(crate) fn screenshot_scale(params: &Value) -> f32 {
+    params
+        .get("scale")
+        .and_then(Value::as_f64)
+        .filter(|s| s.is_finite())
+        .map_or(1.0, |s| s.clamp(0.25, 4.0) as f32)
+}
+
 /// The answer to request `id`: its result, or why there is none.
 pub(crate) fn answer(id: &Value, outcome: Result<Value, String>) -> String {
     match outcome {
@@ -863,6 +886,37 @@ mod tests {
         assert_eq!(
             read(answer(&json!(4), Err("no".into()))),
             json!({"id": 4, "error": "no"})
+        );
+    }
+
+    #[test]
+    fn a_screenshot_leaves_the_debug_layers_out_unless_asked() {
+        let asked = |body: &str| wants_overlays(&parse(body).unwrap().params);
+        assert!(!asked(r#"{"id":1,"method":"screenshot"}"#));
+        assert!(!asked(r#"{"id":1,"method":"screenshot","params":{}}"#));
+        assert!(!asked(
+            r#"{"id":1,"method":"screenshot","params":{"overlays":false}}"#
+        ));
+        assert!(asked(
+            r#"{"id":1,"method":"screenshot","params":{"overlays":true}}"#
+        ));
+    }
+
+    #[test]
+    fn a_screenshot_can_be_drawn_larger() {
+        let scale = |body: &str| screenshot_scale(&parse(body).unwrap().params);
+        assert_eq!(scale(r#"{"id":1,"method":"screenshot"}"#), 1.0);
+        assert_eq!(
+            scale(r#"{"id":1,"method":"screenshot","params":{"scale":3}}"#),
+            3.0
+        );
+        assert_eq!(
+            scale(r#"{"id":1,"method":"screenshot","params":{"scale":100}}"#),
+            4.0
+        );
+        assert_eq!(
+            scale(r#"{"id":1,"method":"screenshot","params":{"scale":0}}"#),
+            0.25
         );
     }
 

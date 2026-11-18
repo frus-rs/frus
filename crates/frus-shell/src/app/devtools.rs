@@ -520,27 +520,46 @@ pub(super) fn paint_rainbow(
 }
 
 /// Answers the screenshots asked for with `frame`, the frame just drawn: `width` by `height`
-/// physical pixels, drawn again offscreen as `s` does.
+/// physical pixels, drawn again offscreen as `s` does. A request is answered with `clean`, the
+/// frame without the debug layers, when the frame kept one, unless its `overlays` parameter
+/// is `true`; its `scale` draws the picture that many times larger (milestone 820).
 #[cfg(desktop)]
 pub(super) fn answer_screenshots(
     requests: Vec<dt::Request>,
     frame: &Scene,
+    clean: Option<&Scene>,
     width: f32,
     height: f32,
 ) {
-    if requests.is_empty() {
-        return;
-    }
-    let (w, h) = (
-        width.round().max(1.0) as u32,
-        height.round().max(1.0) as u32,
-    );
-    let drawn = frus_gpu::render_offscreen(frame, w, h, frus_gpu::backdrop());
+    // Each picture drawn once, however many requests ask for it.
+    let mut drawn: Vec<(bool, u32, Option<frus_gpu::OffscreenFrame>)> = Vec::new();
     for request in requests {
-        let id = dt::parse(&request.body)
-            .map(|c| c.id)
-            .unwrap_or(Value::Null);
-        let outcome = match &drawn {
+        let call = dt::parse(&request.body).ok();
+        let id = call.as_ref().map(|c| c.id.clone()).unwrap_or(Value::Null);
+        let params = call.map(|c| c.params).unwrap_or(Value::Null);
+        let overlays = dt::wants_overlays(&params);
+        let scale = dt::screenshot_scale(&params);
+        let at = match drawn
+            .iter()
+            .position(|(o, s, _)| *o == overlays && *s == scale.to_bits())
+        {
+            Some(at) => at,
+            None => {
+                let scene = photographed(frame, clean, overlays);
+                let (w, h) = (
+                    (width * scale).round().max(1.0) as u32,
+                    (height * scale).round().max(1.0) as u32,
+                );
+                let image = if scale == 1.0 {
+                    frus_gpu::render_offscreen(scene, w, h, frus_gpu::backdrop())
+                } else {
+                    frus_gpu::render_offscreen(&scene.scaled(scale), w, h, frus_gpu::backdrop())
+                };
+                drawn.push((overlays, scale.to_bits(), image));
+                drawn.len() - 1
+            }
+        };
+        let outcome = match &drawn[at].2 {
             Some(image) => Ok(json!({
                 "format": "png",
                 "width": image.width,
