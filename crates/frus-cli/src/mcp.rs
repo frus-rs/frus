@@ -152,7 +152,9 @@ const TOOLS: &str = r#"[
  "description": "A screenshot of the app as an image (PNG). On Android it is the device's whole screen. Downscaled so its longest side is at most max_size pixels (default 1024); the text says how image pixels map to the logical pixels tap takes.",
  "inputSchema": {"type": "object", "properties": {APP,
    "max_size": {"type": "number", "description": "Longest side in pixels; 0 keeps the full size. Default 1024."},
-   "save_to": {"type": "string", "description": "Also save the full-size PNG to this file."}}},
+   "save_to": {"type": "string", "description": "Also save the full-size PNG to this file."},
+   "overlays": {"type": "boolean", "description": "Keep the debug layers turned on (inspector, debug paint, repaint rainbow, performance panel) in the picture. Default false: the app alone, as its user sees it. Desktop only; elsewhere the picture is what the screen shows."},
+   "scale": {"type": "number", "description": "Desktop only: draw the picture this many times larger than the window (0.25 to 4), for a sharper image to publish. Combine with max_size 0 or save_to."}}},
  "annotations": {"readOnlyHint": true}},
 {"name": "set_animation_speed",
  "description": "Slow animations down (or speed them up) to watch or capture them: 1 is normal, 0.1 is ten times slower.",
@@ -1749,7 +1751,16 @@ Errors:
 
     fn screenshot(&mut self, args: &Value) -> ToolResult {
         let max = arg_f64(args, "max_size").map_or(1024, |m| m.max(0.0) as u32);
-        let shot = self.app(args, "screenshot", object([]))?;
+        let mut params = object([]);
+        if let Value::Object(members) = &mut params {
+            if arg_bool(args, "overlays") {
+                members.push(("overlays".to_string(), Value::Bool(true)));
+            }
+            if let Some(scale) = arg_f64(args, "scale") {
+                members.push(("scale".to_string(), Value::Number(scale)));
+            }
+        }
+        let shot = self.app(args, "screenshot", params)?;
         let data = shot
             .get("data")
             .and_then(Value::as_str)

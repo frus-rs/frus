@@ -19,19 +19,64 @@ One codebase → desktop, Android, and the web. GPU-rendered. Built from compone
 [![Widget gallery](https://img.shields.io/badge/🧩_Widget_gallery-8250df?style=for-the-badge)](https://frus-rs.github.io/frus/)
 [![API reference](https://img.shields.io/badge/📚_API_reference-bf8700?style=for-the-badge)](https://docs.rs/frus)
 
-[Website](https://frus.dev) · [Quick start](#quick-start) · [Learn](#learn-frus) · [Guide](docs/guide/README.md) · [Gallery](#what-it-looks-like) · [Live widget gallery](https://frus-rs.github.io/frus/) · [Architecture](#architecture) · [Status](#project-status) · [Contributing](CONTRIBUTING.md) · [Français](README.fr.md)
+[Website](https://frus.dev) · [Quick start](#quick-start) · [Features](#features) · [Guide](docs/guide/README.md) · [Limitations](LIMITATIONS.md) · [Examples](frus-examples/) · [Live widget gallery](https://frus-rs.github.io/frus/) · [Contributing](CONTRIBUTING.md) · [Français](README.fr.md)
 
 <br>
 
-<img src="docs/media/tour.gif" alt="Four screens of the demo application, entered and left through frus's spring route transitions" width="620">
+<table>
+<tr>
+<td><img src="docs/media/forge-projects.png" alt="Forge on a phone: the list of projects, each with its progress and its team" width="200"></td>
+<td><img src="docs/media/forge-board.png" alt="Forge on a phone: a project's board, its tasks in columns" width="200"></td>
+<td><img src="docs/media/forge-overview.png" alt="Forge on a phone: a project's overview, with its completion bar and its stat cards" width="200"></td>
+<td><img src="docs/media/forge-task.png" alt="Forge on a phone: a task's details, with its status, its priority, its assignee, its labels and a comment box" width="200"></td>
+</tr>
+</table>
 
-<sub>The sample application moving between four of its screens. Every pixel — the layout, the type, the charts, the springs — is drawn by frus on the GPU.</sub>
+<sub><a href="frus-examples/forge">Forge</a>, a project-management application from the examples, on a simulated phone. Every pixel is drawn by frus on the GPU.</sub>
 
 </div>
 
 ---
 
-## What is frus?
+## Quick start
+
+**Prerequisites:** Rust **1.88** or newer (the minimum supported version, checked in CI) and a GPU with Vulkan, Metal, or DX12 drivers.
+
+```sh
+cargo install frus-cli          # once: the `frus` command
+frus doctor                     # what this machine has for each platform, and what it lacks
+frus create my_app              # a project for the desktops, Android and the web, with its CI
+cd my_app
+frus run                        # on this computer; `frus run -d android`, `-d web`, `-d iphone-15`
+```
+
+While it runs, the application's log is in the terminal on every platform, and each change you
+save is patched into the running application — on the desktop, the web and Android — with every
+state where it was; `R` restarts it afresh. The first run installs the patch engine (about twenty
+minutes, once). `frus run --no-hot` restarts to reload instead: `r` rebuilds and brings the
+application back with the state of every component that keeps one. Whatever a command needs and
+the machine lacks — a Rust target, the Android SDK, wasm-bindgen — it installs first.
+
+The generated project depends on the published [`frus`](https://crates.io/crates/frus) crate (`frus = "0.5"`). `frus create my_app --frus-path <checkout>` builds it against a checkout of this repository instead; [`docs/getting-started.md`](docs/getting-started.md) has the options.
+
+### Try the samples in this repository
+
+```sh
+git clone https://github.com/frus-rs/frus
+cd frus
+
+cd crates/frus-hello && frus run       # the counter below (`-d android`, `-d web` too)
+cd ../frus-demo && frus run            # a larger todo/kanban app
+cd ../frus-transforms && frus run      # animation and transform showcase
+cd ../.. && cargo test --workspace     # ~2,180 tests; the rendering ones need a GPU
+```
+
+The [examples](frus-examples/) are complete projects, each built on its own: a counter, forms,
+navigation, HTTP, a WebSocket connection, sign-in, a widget tour, and Forge, front end and back end.
+
+## Features
+
+### What is frus?
 
 frus is a greenfield attempt at a UI framework designed in Rust from day one: **the entire framework — renderer, layout, widgets, gestures, theming, animation, accessibility — is Rust**. There is no embedded VM, no second language for app logic, and no platform channel between your code and the pixels.
 
@@ -59,7 +104,7 @@ frus::main!(FrusApp::from_fn(counter));
 
 That is a complete, runnable application. `frus run` on the desktop, `frus run -d android` on a phone, `frus run -d web` in the browser — the source does not change.
 
-### Components, state, controllers, routes
+#### Components, state, controllers, routes
 
 A widget with nothing to remember is a `StatelessWidget`; one with something to keep is a `StatefulWidget` whose `State` outlives the rebuilds — with `init_state`, `did_update_widget`, `dispose` and a `set_state` you can call from any handler. A plain function can keep state too, with `use_state`, `use_ref`, `use_memo` and `use_effect`.
 
@@ -86,7 +131,7 @@ frus::main!(FrusApp::router(router));
 
 The router keeps a stack of pages, slides between them, answers the back gesture, follows redirects, and keeps a covered page's state until it is popped.
 
-### Why another UI framework?
+#### Why another UI framework?
 
 | | |
 |---|---|
@@ -96,28 +141,7 @@ The router keeps a stack of pages, slides between them, answers the back gesture
 | **Everything is overridable** | Widgets ship themed defaults, never hardcoded ones. If a widget paints it, you can restyle it or swap the slot. |
 | **One command, cargo underneath** | `frus run`, `frus build`, `frus test` on every platform, and whatever the machine lacks is installed on the way. An application stays an ordinary crate: no custom package manager, no generated build directory, and `cargo build` / `cargo test` still work. |
 
-## Learn frus
-
-New here? Run the [getting-started page](docs/getting-started.md) — the smallest application,
-state, `async` work, a phone — then read **[the guide](docs/guide/README.md)**, one topic per
-page, every example a complete program that frus's own test suite compiles:
-
-| Topic | What you will write |
-| --- | --- |
-| [Laying out a screen](docs/guide/layout.md) | Rows and columns, boxes, stacks, scrolling, a layout that follows the width |
-| [Text, colour and the theme](docs/guide/style.md) | Type, colour roles, light and dark, restyling one widget or every widget of a kind |
-| [Taking input](docs/guide/input.md) | Text fields, checkboxes, switches, sliders, dropdowns, a form that checks itself |
-| [Lists and grids](docs/guide/lists.md) | Ten thousand rows, rows of any height, pull to refresh, swipe to remove |
-| [Screens, navigation and dialogs](docs/guide/navigation.md) | Routes, redirects, the `Scaffold`, dialogs, snack bars |
-| [Talking to a server](docs/guide/network.md) | Typed JSON requests, loading a screen's data, sending a form |
-| [Animation](docs/guide/animation.md) | Values that move, switching widgets, animations you drive |
-| [Testing](docs/guide/testing.md) | Testing the logic, a page used as a person uses it, the pixels |
-| [The system around the application](docs/guide/platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts |
-
-Every widget is also in the [live widget gallery](https://frus-rs.github.io/frus/), with the
-code that builds it, and the [example applications](frus-examples/) are complete projects.
-
-## What it looks like
+### What it looks like
 
 All of this is one application — `crates/frus-demo` — and one source tree.
 
@@ -155,41 +179,10 @@ forking it.
 window uses: <code>cargo run -p frus-demo --features shots --bin shots -- docs/media</code>.
 They are regenerated after a change rather than slowly going stale.</sub>
 
-## Quick start
+<img src="docs/media/tour.gif" alt="Four screens of the demo application, entered and left through frus's spring route transitions" width="620">
 
-**Prerequisites:** Rust **1.88** or newer — the minimum supported version, checked in CI — and a GPU with Vulkan, Metal, or DX12 drivers.
+<sub>The sample application moving between four of its screens. Every pixel — the layout, the type, the charts, the springs — is drawn by frus on the GPU.</sub>
 
-```sh
-cargo install frus-cli                 # once: the `frus` command
-git clone https://github.com/frus-rs/frus
-cd frus
-
-cd crates/frus-hello && frus run       # the counter above (`-d android`, `-d web` too)
-cd ../frus-demo && frus run            # a larger todo/kanban app
-cd ../frus-transforms && frus run      # animation and transform showcase
-cd ../.. && cargo test --workspace     # ~2,180 tests; the rendering ones need a GPU
-```
-
-### Start your own app
-
-The `frus` command starts a project wired for the desktops, Android and the web, with its CI and its release workflow:
-
-```sh
-cargo install frus-cli          # once
-frus doctor                     # what this machine has for each platform, and what it lacks
-frus create my_app
-cd my_app
-frus run                        # on this computer; `frus run -d android`, `-d web`, `-d <device>`
-```
-
-While it runs, the application's log is in the terminal on every platform, and each change you
-save is patched into the running application — on the desktop, the web and Android — with every
-state where it was; `R` restarts it afresh. The first run installs the patch engine (about twenty
-minutes, once). `frus run --no-hot` restarts to reload instead: `r` rebuilds and brings the
-application back with the state of every component that keeps one. Whatever a command needs and
-the machine lacks — a Rust target, the Android SDK, wasm-bindgen — it installs first.
-
-The generated project depends on the published [`frus`](https://crates.io/crates/frus) crate (`frus = "0.5"`). `frus create my_app --frus-path <checkout>` builds it against a checkout of this repository instead; [`docs/getting-started.md`](docs/getting-started.md) has the options.
 
 ### The `frus` tool
 
@@ -271,6 +264,44 @@ cutout-size = [34, 34]
 
 It is a preview: the layout, the insets and the behaviour are the device's; its fonts, its
 graphics driver, its native services and its speed are not. Run on a real device before you ship.
+
+## Learn more
+
+- **[The guide](docs/guide/README.md)**: one topic per page, every example a complete program (below).
+- **[Limitations](LIMITATIONS.md)**: what frus does not do yet, said plainly before you choose it.
+- **[Examples](frus-examples/)**: complete applications, Forge among them.
+- **[frus.dev](https://frus.dev)**: the website, in English and French.
+- **[Live widget gallery](https://frus-rs.github.io/frus/)** and the **[API reference](https://docs.rs/frus)**.
+
+### Learn frus
+
+New here? Run the [getting-started page](docs/getting-started.md) — the smallest application,
+state, `async` work, a phone — then read **[the guide](docs/guide/README.md)**, one topic per
+page, every example a complete program that frus's own test suite compiles:
+
+| Topic | What you will write |
+| --- | --- |
+| [Laying out a screen](docs/guide/layout.md) | Rows and columns, boxes, stacks, scrolling, a layout that follows the width |
+| [Text, colour and the theme](docs/guide/style.md) | Type, colour roles, light and dark, restyling one widget or every widget of a kind |
+| [Taking input](docs/guide/input.md) | Text fields, checkboxes, switches, sliders, dropdowns, a form that checks itself |
+| [Lists and grids](docs/guide/lists.md) | Ten thousand rows, rows of any height, pull to refresh, swipe to remove |
+| [Screens, navigation and dialogs](docs/guide/navigation.md) | Routes, redirects, the `Scaffold`, dialogs, snack bars |
+| [Talking to a server](docs/guide/network.md) | Typed JSON requests, loading a screen's data, sending a form |
+| [Animation](docs/guide/animation.md) | Values that move, switching widgets, animations you drive |
+| [Testing](docs/guide/testing.md) | Testing the logic, a page used as a person uses it, the pixels |
+| [The system around the application](docs/guide/platform.md) | File dialogs, dropped files, notifications, the tray, the taskbar, global shortcuts |
+
+Every widget is also in the [live widget gallery](https://frus-rs.github.io/frus/), with the
+code that builds it, and the [example applications](frus-examples/) are complete projects.
+
+### Documentation
+
+- [Getting started](docs/getting-started.md) — write and run your first app
+- [The guide](docs/guide/README.md) — layout, style, input, lists, navigation, network, animation and testing, each with examples that compile
+- [Structuring an application](docs/app-structure.md) — splitting a growing app across modules
+- [Architecture](ARCHITECTURE.md) — how the crates fit together
+- [Roadmap](ROADMAP.md) — what's next and where help is wanted
+- [Design notes index](docs/README.md) — 501 notes, one per milestone: the analysis, the alternatives considered, the decision, and why. This is the project's real memory.
 
 ## Architecture
 
@@ -365,15 +396,6 @@ cargo fmt --all
 Every change ships with tests; every non-trivial change ships with a design note. Discussion happens in [issues](https://github.com/frus-rs/frus/issues) and [discussions](https://github.com/frus-rs/frus/discussions) — English or French, both fine.
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Documentation
-
-- [Getting started](docs/getting-started.md) — write and run your first app
-- [The guide](docs/guide/README.md) — layout, style, input, lists, navigation, network, animation and testing, each with examples that compile
-- [Structuring an application](docs/app-structure.md) — splitting a growing app across modules
-- [Architecture](ARCHITECTURE.md) — how the crates fit together
-- [Roadmap](ROADMAP.md) — what's next and where help is wanted
-- [Design notes index](docs/README.md) — 501 notes, one per milestone: the analysis, the alternatives considered, the decision, and why. This is the project's real memory.
 
 ## License
 

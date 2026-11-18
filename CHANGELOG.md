@@ -8,10 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 818 so far, each documenting the objective, the alternatives
+> record — one per step, 820 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A screenshot shows the application, not the debug layers; the README leads with Forge on a
+  phone** (J820). `s` in `frus run` and DevTools' `screenshot` (and so `frus mcp`'s) photograph
+  the frame without the performance panel, the inspector, debug paint and the repaint rainbow;
+  `{"overlays": true}` keeps them, and `{"scale": n}` draws the picture up to four times larger
+  than the window. A simulated device's outline stays: it is the device, not a debug layer.
+  Release builds paint none of these layers. The README now opens with two lines on frus, four
+  pictures of the Forge example on a simulated phone, the quick start, the features, then the
+  links (guide, `LIMITATIONS.md`, examples, frus.dev); `README.fr.md` follows it.
 
 - **`LIMITATIONS.md`: every known limitation in one place** (J818). 54 entries, each under a
   stable id (`L-001` to `L-054`) that is never renumbered or reused, grouped by area (the
