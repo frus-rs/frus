@@ -4483,6 +4483,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // And DevTools, to answer about the widgets or highlight one (milestone 788).
                 #[cfg(debug_assertions)]
                 let inspected = inspected || self.devtools.wants_nodes();
+                // A screenshot is due: the frame without the debug layers (the inspector,
+                // debug paint, the repaint rainbow, the performance panel) is kept beside the
+                // one shown, and photographed instead of it (milestone 820). Only then: the
+                // copy is not free.
+                let shooting = self.screenshot_due();
+                let mut clean: Option<Scene> = None;
                 let (ui, scene) = if inspected {
                     let (ui, nodes) = frus_widgets::build_ui_inspected(
                         tree,
@@ -4504,6 +4510,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     let highlighted = self.devtools_highlight(&nodes).copied();
                     #[cfg(not(debug_assertions))]
                     let highlighted: Option<frus_widgets::InspectorNode> = None;
+                    if shooting && (self.inspector || self.debug.outlines || highlighted.is_some())
+                    {
+                        clean = Some(ui.scene().scaled(scale));
+                    }
                     let mut scene = if self.inspector || highlighted.is_some() {
                         // The card goes over the application's text, which a scene draws after
                         // its shapes: the application's frame as one layer, under it.
@@ -4559,6 +4569,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // time they are painted again.
                 #[cfg(debug_assertions)]
                 let scene = if self.devtools.rainbow {
+                    if shooting && clean.is_none() {
+                        clean = Some(scene.clone());
+                    }
                     self.devtools.rainbow_frames = self.devtools.rainbow_frames.wrapping_add(1);
                     devtools::paint_rainbow(
                         &scene,
@@ -4594,40 +4607,33 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 }
                 // A see-through frame starts transparent: the window's background under
                 // everything but the line the system paints (milestone 643).
-                let scene = if self.renderer.as_ref().is_some_and(Renderer::sees_through) {
-                    backdrop_under(scene, width * scale, height * scale, self.system_line())
+                let (scene, clean) = if self.renderer.as_ref().is_some_and(Renderer::sees_through) {
+                    let line = self.system_line();
+                    (
+                        backdrop_under(scene, width * scale, height * scale, line),
+                        clean.map(|c| backdrop_under(c, width * scale, height * scale, line)),
+                    )
                 } else {
-                    scene
+                    (scene, clean)
                 };
                 // What the keys of `frus run` asked of this frame (milestone 668).
                 if std::mem::take(&mut self.debug.semantics_dump) {
                     log::info!(target: "frus::inspector", "semantics, in reading order:
 {}", dump_semantics(ui.semantics()));
                 }
-                let scene = if self.debug.performance {
-                    // The application's frame as one layer, the panel over it: in a scene of
-                    // its own, the application's text would be drawn over the panel's
-                    // rectangle — the renderer draws a scene's shapes, then its text.
-                    let mut scene = on_top_of(&scene);
-                    let costs = self.debug.last_costs.as_ref().map(|(costs, _)| costs);
-                    // Below the status bar, where the system draws its own.
-                    let top = self.last_insets.padding.top * scale;
-                    paint_performance(
-                        &mut scene,
-                        costs,
-                        &self.debug.history,
-                        self.debug.fps,
-                        width * scale,
-                        top,
-                        scale,
-                    );
-                    scene
+                let (scene, clean) = if self.debug.performance {
+                    let clean = match clean {
+                        None if shooting => Some(scene.clone()),
+                        clean => clean,
+                    };
+                    (self.performance_over(&scene, width, scale), clean)
                 } else {
-                    scene
+                    (scene, clean)
                 };
                 // A simulated device: the application's frame inside the device's screen,
-                // the device around it (milestone 721).
-                let (scene, shot) = match (&self.simulated, self.placement()) {
+                // the device around it (milestone 721). The clean copy is framed the same
+                // way: the device is not a debug layer.
+                let framed = |scene: Scene| match (&self.simulated, self.placement()) {
                     (Some(simulated), Some(placement)) => {
                         let edges = self.last_insets.padding;
                         // The status bar's icons read against what the application has
@@ -4655,17 +4661,27 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     }
                     _ => (scene, (width * scale, height * scale)),
                 };
+                let (scene, shot) = framed(scene);
+                let clean = clean.map(|c| framed(c).0);
                 #[cfg(desktop)]
                 if let Some(path) = self.debug.screenshot.take() {
-                    write_screenshot(&scene, shot.0, shot.1, &path);
+                    write_screenshot(
+                        photographed(&scene, clean.as_ref(), false),
+                        shot.0,
+                        shot.1,
+                        &path,
+                    );
                 }
                 #[cfg(all(desktop, debug_assertions))]
                 devtools::answer_screenshots(
                     std::mem::take(&mut self.devtools.screenshots),
                     &scene,
+                    clean.as_ref(),
                     shot.0,
                     shot.1,
                 );
+                #[cfg(not(desktop))]
+                let _ = clean;
                 #[cfg(not(desktop))]
                 let _ = shot;
                 let mut device_lost = false;
@@ -5137,6 +5153,58 @@ fn dump_semantics(nodes: &[(WidgetId, Rect, frus_widgets::SemanticsProperties)])
         out.push_str("  (empty)\n");
     }
     out
+}
+
+/// The frame a screenshot is drawn from (milestone 820): the one without the debug layers
+/// when the frame kept one, unless `overlays` asks for what is on screen. A frame that kept
+/// no clean copy had no debug layer to leave out.
+#[cfg_attr(not(desktop), allow(dead_code))]
+pub(crate) fn photographed<'a>(
+    shown: &'a Scene,
+    clean: Option<&'a Scene>,
+    overlays: bool,
+) -> &'a Scene {
+    match clean {
+        Some(clean) if !overlays => clean,
+        _ => shown,
+    }
+}
+
+impl<A: Application> App<A> {
+    /// Whether this frame is photographed: `s` in `frus run`, or a DevTools `screenshot`
+    /// waiting for it. Only a desktop takes its own pictures; a page reads its canvas and
+    /// Android the device's screen.
+    fn screenshot_due(&self) -> bool {
+        if !cfg!(desktop) {
+            return false;
+        }
+        #[cfg(debug_assertions)]
+        if !self.devtools.screenshots.is_empty() {
+            return true;
+        }
+        self.debug.screenshot.is_some()
+    }
+
+    /// `scene` with the performance panel (`P`) over it, below the status bar.
+    fn performance_over(&self, scene: &Scene, width: f32, scale: f32) -> Scene {
+        // The application's frame as one layer, the panel over it: in a scene of its own,
+        // the application's text would be drawn over the panel's rectangle — the renderer
+        // draws a scene's shapes, then its text.
+        let mut over = on_top_of(scene);
+        let costs = self.debug.last_costs.as_ref().map(|(costs, _)| costs);
+        // Below the status bar, where the system draws its own.
+        let top = self.last_insets.padding.top * scale;
+        paint_performance(
+            &mut over,
+            costs,
+            &self.debug.history,
+            self.debug.fps,
+            width * scale,
+            top,
+            scale,
+        );
+        over
+    }
 }
 
 /// The performance panel, in the top right corner of a `width`×`height` frame drawn at
@@ -19594,5 +19662,92 @@ mod field_drag_tests {
             "the drag selected: {caret} {anchor:?}"
         );
         assert_eq!(offset(&d), 0.0, "and scrolled nothing");
+    }
+}
+
+/// **A screenshot leaves the debug layers out** (milestone 820): what `s` and DevTools'
+/// `screenshot` photograph is the application as the person using it sees it, without the
+/// performance panel (or the inspector, debug paint, the repaint rainbow) the developer turned
+/// on; `{"overlays": true}` asks for the frame as it is on screen.
+#[cfg(test)]
+mod screenshot_tests {
+    use super::{photographed, App};
+    use crate::FrusApp;
+    use frus_widgets::{BuildContext, Color, Primitive, Rect, Scene, Text, Widget};
+
+    fn page(_: &BuildContext) -> Box<dyn Widget> {
+        Box::new(Text::new("page"))
+    }
+
+    /// The application's own frame: a pale page.
+    fn application() -> Scene {
+        let mut scene = Scene::new();
+        scene.fill_rect(Rect::new(0.0, 0.0, 400.0, 300.0), Color::WHITE);
+        scene
+    }
+
+    fn texts(scene: &Scene) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(primitives: &[Primitive], out: &mut Vec<String>) {
+            for primitive in primitives {
+                match primitive {
+                    Primitive::Text { text, .. } => out.push(text.clone()),
+                    Primitive::Layer { primitives, .. } => walk(primitives, out),
+                    _ => {}
+                }
+            }
+        }
+        walk(scene.primitives(), &mut out);
+        out
+    }
+
+    #[test]
+    fn the_performance_panel_is_on_screen_but_not_in_the_picture() {
+        let mut shell = App::detached(FrusApp::from_fn(page));
+        shell.debug.performance = true;
+        let clean = application();
+        let shown = shell.performance_over(&clean, 400.0, 1.0);
+        let panel = texts(&shown);
+        assert!(
+            !panel.is_empty() && texts(&clean).is_empty(),
+            "the panel paints its lines over the frame: {panel:?}"
+        );
+
+        let picture = photographed(&shown, Some(&clean), false);
+        assert_eq!(
+            picture.primitives(),
+            clean.primitives(),
+            "no panel primitive"
+        );
+        let asked = photographed(&shown, Some(&clean), true);
+        assert_eq!(
+            asked.primitives(),
+            shown.primitives(),
+            "overlays: true keeps it"
+        );
+        // A frame with no debug layer kept no copy: it is photographed as shown.
+        assert!(std::ptr::eq(photographed(&shown, None, false), &shown));
+
+        // And in pixels, where a GPU is at hand: the panel's corner is the page's white in
+        // the picture, the panel's dark on screen.
+        let (Some(on_screen), Some(in_picture)) = (
+            frus_gpu::render_offscreen(&shown, 400, 300, Color::BLACK),
+            frus_gpu::render_offscreen(picture, 400, 300, Color::BLACK),
+        ) else {
+            return;
+        };
+        let at = |frame: &frus_gpu::OffscreenFrame, x: usize, y: usize| {
+            let i = (y * frame.width as usize + x) * 4;
+            [frame.rgba[i], frame.rgba[i + 1], frame.rgba[i + 2]]
+        };
+        let differing = (0..300)
+            .flat_map(|y| (0..400).map(move |x| (x, y)))
+            .filter(|&(x, y)| at(&on_screen, x, y) != at(&in_picture, x, y))
+            .count();
+        assert!(differing > 0, "the panel is drawn on screen");
+        let all_white = (0..300)
+            .flat_map(|y| (0..400).map(move |x| (x, y)))
+            .all(|(x, y)| at(&in_picture, x, y) == [255, 255, 255]);
+        assert!(all_white, "the picture holds the page alone");
     }
 }
