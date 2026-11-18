@@ -39,6 +39,8 @@ You don't need to know `wgpu` to be useful here.
 
 Browse [good first issues](https://github.com/frus-rs/frus/labels/good%20first%20issue) and [help wanted](https://github.com/frus-rs/frus/labels/help%20wanted), or read [ROADMAP.md](ROADMAP.md) for the larger open areas.
 
+[LIMITATIONS.md](LIMITATIONS.md) lists every known limitation of frus under a stable id (`L-001`, …), with its platforms, workaround, status and evidence. When your change lifts one, set its status to `fixed in X.Y.Z` in the same pull request rather than deleting the entry; when you find a new one, add it with the next free id. `cargo test -p frus --test limitations` checks the file.
+
 **Nothing is claimed until someone says so.** Comment on the issue before you start, so two people don't build the same thing.
 
 ## Setting up

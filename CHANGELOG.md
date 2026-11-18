@@ -32,6 +32,18 @@ any release may break.
   through `frus`; the native views guide's doctest holder no longer shows up in
   the API reference.
 
+- **`LIMITATIONS.md`: every known limitation in one place** (J818). 54 entries, each under a
+  stable id (`L-001` to `L-054`) that is never renumbered or reused, grouped by area (the
+  platforms, platform services, native views, rendering, text, input, accessibility, widgets,
+  tooling and hot reload, packaging), with the platforms affected, what a developer runs into,
+  the workaround if there is one, a status (`open`, `partial`, `fixed in X.Y.Z`) and the evidence:
+  the issue, the milestone note, the guide page or the code. Mined from the open issues, the
+  roadmap, the guides and the "Not done" sections of the milestone notes, and each item checked
+  against the code on `master`; items a later milestone had already answered were left out. A
+  lifted limitation keeps its entry with its status changed. A new test,
+  `cargo test -p frus --test limitations`, checks that the ids are well-formed, unique and
+  without gaps, that every entry has its fields and a known status, and that every cited file
+  exists. Linked from `CONTRIBUTING.md` and `ROADMAP.md`.
 - **A conversation: `ChatList`, `MessageBubble`, `TypingIndicator`, `ChatComposer`; and a
   questionnaire: `StepForm`, `FormStep`** (J815). The conversation rests at its newest message
   and follows it as messages arrive; a reader who scrolled up keeps their place, and a button
