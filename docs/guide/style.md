@@ -7,7 +7,9 @@ wins.
 
 ## Text
 
-`Text` takes its size, weight and colour from the theme's body style unless you say otherwise.
+`Text` takes its size, weight and colour from where it is (an app bar's title, a button's
+label) and otherwise 16 pixels, regular, in the theme's `on_surface`, unless you say otherwise.
+[Text and fonts](text.md) has more: rich text, selection, fonts, right to left.
 
 ```rust
 use frus::{Column, FontWeight, Text, TextAlign, Widget};
@@ -28,8 +30,9 @@ fn article() -> Box<dyn Widget> {
 }
 ```
 
-`.heading()` also tells screen readers that the line is a heading. `.max_lines(2).ellipsis()`
-cuts long text with "…"; `Text::new(..).selectable()` lets the reader select and copy it.
+`.heading()` also tells screen readers that the line is a heading. `.ellipsis()` keeps the text
+on one line and cuts it with "…"; `.wrap().max_lines(2).overflow(TextOverflow::Ellipsis)` cuts
+it after two lines; `Text::new(..).selectable()` lets the reader select and copy it.
 
 The theme's **type roles** — `display_large` down to `label_small` — are what a screen should
 use for its titles and body text, so that every screen of the application agrees:
@@ -101,42 +104,9 @@ registers, so register a face for every script it shows, or the character is dra
 ### The framework's own words in the reader's language
 
 Some words on screen come from frus rather than from your application: a back arrow's label, a
-date picker's title and month names, the Cut, Copy, Paste and Select all bar over a selection,
-a table's "Rows per page". frus has them in **English, French, German, Spanish, Japanese, Thai
-and Vietnamese**. List the languages your application has, and frus speaks the one the device
-resolves to:
-
-```rust
-use frus::{localizations, Locale, Localizations};
-
-// What an application's `supported_locales` returns.
-let supported = vec![Locale::new("en"), Locale::new("es"), Locale::new("ja")];
-// A phone set to Mexican Spanish resolves to `es`...
-let resolved = frus::locale::resolve(&[Locale::with_country("es", "MX")], &supported);
-assert_eq!(resolved, Locale::new("es"));
-// ...and frus says its words in Spanish, with the week starting on Monday.
-let words = localizations::for_locale(&resolved);
-assert_eq!(words.cancel_button_label(), "Cancelar");
-assert_eq!(words.month_year(8, 2026), "agosto de 2026");
-assert_eq!(words.first_day_of_week_index(), 1);
-// A language frus has no words in gets English.
-assert_eq!(localizations::for_locale(&Locale::new("sw")).cancel_button_label(), "Cancel");
-```
-
-The tables carry more than words: which day a calendar's week starts on, the order a date is
-typed in (`17.08.2026` in German, `2026/08/17` in Japanese), how a month and year are written
-together, how a number's thousands are grouped, and whether the clock has twenty-four hours
-(`uses_24_hour_clock`, which an application can use to pick a time picker's `hour12()`). Thai
-dates use the Gregorian year. To change some of the words, or to add a language, implement
-`Localizations` — every entry has an English default — and return it from the application's
-`localizations`.
-
-**Japanese and Thai need a font with their letters.** The bundled face has every letter of the
-other five languages but none of these two. On the desktop and on Android the system's own fonts
-draw them, so there is nothing to ship. On the **web** register a face for each with
-`frus::fonts::add_font` — a subset of Noto Sans JP or Noto Sans Thai — or they are drawn as
-boxes. No such font is bundled by default: each is megabytes, and most applications never show
-the script.
+date picker's months, the Cut, Copy and Paste bar. frus has them in seven languages and speaks
+the one the device resolves to. [Languages](localization.md) covers choosing the language, the
+application's own words, and changing or adding the framework's.
 
 ## Colours from the theme
 
@@ -323,6 +293,38 @@ fn dark_panel() -> Box<dyn Widget> {
         Button::new("Inside a dark theme").on_press(|| {}),
     ))
 }
+```
+
+## Apple-style widgets
+
+Beside the widgets above, frus has Apple-style ones that look and move as iOS's do:
+`CupertinoButton` (plain, tinted, filled), `CupertinoSwitch`, `CupertinoNavigationBar` (with a
+large title), `CupertinoTabBar`, `CupertinoAlertDialog`, `CupertinoActionSheet` and
+`CupertinoActivityIndicator`. They work on every platform. Their colours come from the theme,
+and `with_cupertino_override_theme` changes what they take differently from it. An **adaptive**
+widget picks the style of the theme's platform: the Apple one under iOS and macOS, the other
+one elsewhere.
+
+```rust
+use frus::{
+    Color, CupertinoButton, CupertinoButtonSize, CupertinoThemeData, Switch, TargetPlatform,
+    Theme, Widget,
+};
+
+fn ios_theme() -> Theme {
+    Theme::from_seed(Color::hex("#0F766E"), false)
+        .with_platform(TargetPlatform::Ios)
+        .with_cupertino_override_theme(CupertinoThemeData::new().primary_color(Color::hex("#0A84FF")))
+}
+
+fn controls(on: bool) -> Vec<Box<dyn Widget>> {
+    vec![
+        Box::new(CupertinoButton::new("Continue").filled().size(CupertinoButtonSize::Large).on_press(|| {})),
+        // A CupertinoSwitch under ios_theme(), a Switch elsewhere.
+        Box::new(Switch::adaptive(on).on_toggle(|_on: bool| {})),
+    ]
+}
+# let _ = (ios_theme, controls);
 ```
 
 ## Icons and pictures

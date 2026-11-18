@@ -420,3 +420,31 @@ tabs that each keep a stack of screens of their own, see
 widget gallery (`frus-examples/widgets`, under Navigation) has each one, and
 `frus-examples/navigation` is a shop of eight screens built on the router: nested routes,
 names, queries, a guard and a page that is not found.
+
+### A sidebar
+
+`Sidebar` is side navigation in groups for a desktop or a tablet. It folds into a rail of icons
+with tooltips, and with a `body` it becomes a drawer over a scrim on a narrow window, closed by
+Back:
+
+```rust
+use frus::{Icons, Sidebar, Text};
+
+#[derive(Clone)]
+enum Msg {
+    Go(usize),
+    Toggle,
+}
+
+let open = true;
+let shell: Sidebar<Msg> = Sidebar::new(0, Msg::Go)
+    .group("Workspace")
+    .item(Icons::DASHBOARD, "Overview")
+    .item(Icons::INBOX, "Inbox")
+    .group("Settings")
+    .item(Icons::SETTINGS, "Preferences")
+    .expanded(open)
+    .on_toggle(Msg::Toggle)
+    .body(Text::new("The page"));
+# let _ = shell;
+```

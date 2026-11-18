@@ -204,5 +204,7 @@ fn adaptive() -> Box<dyn Widget> {
 }
 ```
 
-`SafeArea::new(child)` keeps content clear of the status bar, the notch and the gesture bar;
-a `Scaffold` (see [Navigation](navigation.md)) does it for you.
+`SafeArea::new(child)` keeps content clear of the status bar, the notch and the gesture bar. A
+`Scaffold` (see [Navigation](navigation.md)) keeps its bars clear of them, and lets its body
+reach the edges: wrap the body in a `SafeArea` when its content must stay clear.
+[The screen](screen.md) has the rest: size classes, the keyboard, orientation, the system bars.

@@ -8,10 +8,29 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 817 so far, each documenting the objective, the alternatives
+> record — one per step, 819 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A guide for every subsystem** (J819). Ten new pages in `docs/guide/`: components and state
+  (hooks, `StatelessWidget`, `StatefulWidget`, sharing state, keys, restoration), the screen
+  (size classes, safe area, keyboard, system bars, orientation, simulated devices), text and
+  fonts (selection, bundled fonts as features, your own font, subsetting, right to left, text
+  size), accessibility (each platform's screen readers, `Semantics`, keyboard order, the reader's
+  settings), languages (resolution, Fluent files with `frus-l10n`, the framework's seven
+  languages, adding one), running and hot reload, the web, Android and iOS, and how a frame is
+  made (for contributors). Existing pages gained the widgets of the last waves: the
+  questionnaire, autofill and cross-field rules in `input.md`, the conversation and the file tree
+  in `lists.md`, the sidebar in `navigation.md`, rolling digits, marquee and KPI cards in
+  `animation.md`, the Apple-style widgets in `style.md`, the window's size, memory and menu bar
+  in `platform.md`. Fixed: `style.md` said `.max_lines(2).ellipsis()` cuts after two lines (it
+  cuts after one) and that `Text` takes the theme's body style; `layout.md` said a `Scaffold`
+  keeps its body clear of the system's bars (it keeps its bars clear, and describes the insets
+  to the body). Every new sample is a doctest. `frus` now re-exports `LocationStrategy`,
+  `location_of_link` and `link_among`, which the guides name and an application could not reach
+  through `frus`; the native views guide's doctest holder no longer shows up in
+  the API reference.
 
 - **A conversation: `ChatList`, `MessageBubble`, `TypingIndicator`, `ChatComposer`; and a
   questionnaire: `StepForm`, `FormStep`** (J815). The conversation rests at its newest message

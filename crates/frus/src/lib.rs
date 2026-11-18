@@ -60,6 +60,7 @@ pub struct GuideAnimation;
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/shaders.md")]
 pub struct GuideShaders;
+#[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/native-views.md")]
 pub struct GuideNativeViews;
 #[cfg(all(doctest, feature = "webview"))]
@@ -95,6 +96,32 @@ pub struct GuidePurchases;
 #[doc = include_str!("../../../docs/guide/platform.md")]
 pub struct GuidePlatform;
 
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/text.md")]
+pub struct GuideText;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/localization.md")]
+pub struct GuideLocalization;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/accessibility.md")]
+pub struct GuideAccessibility;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/screen.md")]
+pub struct GuideScreen;
+
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/components.md")]
+pub struct GuideComponents;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/running.md")]
+pub struct GuideRunning;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/web.md")]
+pub struct GuideWeb;
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/mobile.md")]
+pub struct GuideMobile;
+
 // Widgets, theming, layout, and the DSL (`row!` / `column!`) — all of `frus-widgets`.
 pub use frus_widgets::*;
 
@@ -104,6 +131,10 @@ pub use frus_shell::{
     app_data_dir, AppIcon, Application, Command, FrusApp, GlobalShortcut, Lifecycle, RemoteData,
     Subscription, Taskbar, TaskbarProgress, Tray, DECORATIVE_FRAME_RATE,
 };
+
+// Named by the guide's web and phone pages (milestone 819): how the address bar writes a
+// location, and turning a link into a location.
+pub use frus_shell::{link_among, location_of_link, LocationStrategy};
 
 // Utility re-exports for the thin binary and for the entry-point macro (so the application
 // does not have to declare `anyhow` / `log` itself).
