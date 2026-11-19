@@ -8072,6 +8072,13 @@ impl<A: Application> App<A> {
         // (milestone 753): a reload, or a tab the browser discarded and opened again.
         if self.runtime.restoration.is_enabled() {
             if let Some(bytes) = crate::restoration::load(self.history.index()) {
+                // Said as Android says it, so a developer can tell a restored page from a
+                // fresh one in the console (milestone 821).
+                log::info!(
+                    "restoring the state the tab kept ({} bytes, history entry {})",
+                    bytes.len(),
+                    self.history.index()
+                );
                 self.runtime.restoration.restore(&bytes);
             }
         }

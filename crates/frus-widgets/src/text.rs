@@ -17,8 +17,7 @@ use crate::interaction::{Key, Status};
 use crate::runtime::Edit;
 use crate::selectiontoolbar::{SelectionToolbar, ToolbarContext, ToolbarItem};
 use crate::textinput::{
-    caret_key_in, handle_at, handles_in, move_caret, paint_handle, paint_handles, selection_box_in,
-    word_range, ToolbarBuild,
+    caret_key_in, handles_in, move_caret, paint_handles, selection_box_in, word_range, ToolbarBuild,
 };
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -210,8 +209,12 @@ pub(crate) fn paint_highlight(
 }
 
 /// The handles of a touch selection that hang from a text drawn at `bounds` with `layout`,
-/// painted over its words and outside its clip, since they hang past its last line: a
-/// selection area's that end in it, and its own while it is focused and `selectable`.
+/// painted over its words and outside its clip, since they hang past its last line: its own,
+/// while it is focused and `selectable`.
+///
+/// A selection area's handles are not painted here: the walk paints them, from the text's
+/// [`SelectableText::handle`](crate::SelectableText::handle), and lifts them over whatever
+/// the area paints after the text (milestone 821).
 pub(crate) fn paint_grips(
     layout: impl Fn() -> TextLayout,
     len: usize,
@@ -228,17 +231,6 @@ pub(crate) fn paint_grips(
         .fade(status.opacity);
     let offset = Point::new(bounds.x, bounds.y);
     let origin = Point::new(0.0, 0.0);
-    // The handles of a selection area's touch selection that hang from this text.
-    let (start, end) = status.region_grips;
-    if start.is_some() || end.is_some() {
-        let layout = layout();
-        for (index, is_start) in [(start, true), (end, false)] {
-            if let Some(index) = index {
-                let handle = handle_at(&layout, origin, index, is_start);
-                paint_handle(scene, handle, offset, color, is_start);
-            }
-        }
-    }
     if !(status.focused && status.handles && selectable) {
         return;
     }
