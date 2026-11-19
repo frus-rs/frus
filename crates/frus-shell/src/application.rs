@@ -58,6 +58,17 @@ pub trait Application {
     /// run: I/O, background tasks and the like. Use [`Command::none`] for none.
     fn update(&mut self, message: Self::Message) -> Command<Self::Message>;
 
+    /// Whether handling a message can change what [`view`](Application::view) builds, so that
+    /// the whole tree is built again after each one. `true`, the default, is right for an
+    /// application whose `view` reads the state `update` changes.
+    ///
+    /// An application made of components answers `false`: a handler changes a component's own
+    /// state, which marks that component, and the frame that follows builds it again and
+    /// nothing else (milestone 822). A message that marks nothing still builds the whole tree.
+    fn messages_rebuild_view(&self) -> bool {
+        true
+    }
+
     /// The effect to run **at startup**, such as an initial load.
     fn init(&mut self) -> Command<Self::Message> {
         Command::none()

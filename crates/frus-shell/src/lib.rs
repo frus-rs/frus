@@ -127,6 +127,8 @@ mod notification;
 mod notification_web;
 mod open_url;
 #[cfg(test)]
+mod rebuild_tests;
+#[cfg(test)]
 mod restoration_tests;
 // Asking the person for the camera, the microphone, the location (milestone 730).
 #[cfg(target_os = "macos")]

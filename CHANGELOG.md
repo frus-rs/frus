@@ -13,6 +13,17 @@ any release may break.
 
 ## [Unreleased]
 
+- **A component's own state builds that component, not the whole tree** (J822, #53). When
+  `UseState::set`/`update` or `StateHandle::set_state` changes a component's state, that
+  component is marked, and the next frame builds it again where it stands in the tree kept from
+  the last frame. It builds everything under it, and nothing else: the components around it
+  are kept, with their states and timers. A counter ticking in one leaf of a forty-row screen
+  now builds the leaf alone (build 0.26 ms to 0.10 ms in release). Everything else that asks for
+  a rebuild (`request_rebuild`, the theme, the surface, the locale, a preference, a hot patch)
+  still builds the whole tree. New: `take_rebuild()` and `Rebuild` (what the next frame has to
+  build), `Application::messages_rebuild_view` (default `true`, so Elm-style applications are
+  unchanged; `FrusApp` answers `false`), and `Driver::resize`, `arrive` and `costs` in
+  `frus_shell::testing`.
 - **The selection highlight is pinned by pictures; a selection area's handles stay on top; web
   restoration seen in a browser; the Apple look decided** (J821). Two new goldens: a
   `Text::selectable()` with part of its line selected by a finger, handles included, and a

@@ -75,6 +75,15 @@ fn thread_locals_are_reached_through_functions_compiled_once() {
 
     let mut wrong = Vec::new();
     for file in &files {
+        // A test module in a file of its own (`tests.rs`, `*_tests.rs`) is declared under
+        // `#[cfg(test)]` by its parent and never reaches an application.
+        if file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("tests.rs"))
+        {
+            continue;
+        }
         let text = std::fs::read_to_string(file).unwrap().replace("\r\n", "\n");
         let lines: Vec<&str> = text.lines().collect();
         let names = thread_locals(&lines);

@@ -458,6 +458,11 @@ impl Application for FrusApp {
         Command::none()
     }
 
+    /// A handler changes components' state, which marks them: they are what is built again.
+    fn messages_rebuild_view(&self) -> bool {
+        false
+    }
+
     fn init(&mut self) -> Command<Callback> {
         if let Some(start) = self.on_start.take() {
             start();
