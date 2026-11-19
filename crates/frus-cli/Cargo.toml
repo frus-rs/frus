@@ -24,9 +24,15 @@ name = "frus"
 path = "src/main.rs"
 doc = false
 
-# No dependencies, on purpose: a tool installed with `cargo install` is compiled on the
-# developer's machine, and everything it does fits in the standard library.
+# Few dependencies, on purpose: a tool installed with `cargo install` is compiled on the
+# developer's machine, and nearly everything it does fits in the standard library.
 [dependencies]
+# Cutting fonts down to the characters an application shows (milestone 823): the font subsetter
+# of the fontations project, which keeps what a shaper needs (the substitutions a script's letters
+# reach, positioning, variable axes). Pure Rust; the one thing here worth not writing again.
+skera = "0.10"
+# The font types skera's interface is written in, at the version it uses.
+read-fonts = { version = "0.47", default-features = false, features = ["std"] }
 
 # For the tests only, and left out when published: the simulated devices listed here are
 # checked against the core's own list, which the shell simulates.

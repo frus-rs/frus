@@ -125,7 +125,7 @@ place is the block given to `frus::main!`:
 use frus::{FontFamily, FrusApp, Text};
 
 fn app(regular: Vec<u8>, bold: Vec<u8>) -> FrusApp {
-    // In an application: include_bytes!("../fonts/Inter-Regular.ttf").to_vec()
+    // In an application: frus::fonts::include_font!("../fonts/Inter-Regular.ttf").to_vec()
     frus::fonts::add_font(regular);
     frus::fonts::add_font(bold);
     // Every text that names no family is drawn in Inter...
@@ -146,22 +146,68 @@ The family is the name written **inside** the font file. A near miss is forgiven
 spacing, or one extra word: `"Inter"` finds `"Inter 24pt"`), and a name that matches nothing logs
 a warning and draws in the first family you registered rather than nothing.
 
-### Making the binary smaller: a subset
+### The release build carries only the characters you can show
 
-A font cut down to the letters an application shows weighs a few dozen kilobytes instead of a
-megabyte or more. With `fontTools` (`pip install fonttools`), once per face:
+A face covers thousands of characters and an application draws a few hundred. `frus build`, in
+release, cuts every font down to the characters the application can show, frus's bundled faces
+and your own alike, and embeds the cut copies. Nothing to install and nothing to run: it happens
+on every target (`apk`, `appbundle`, `web`, `desktop`, `installer`), and the build says what it
+kept:
 
-```sh
-cat src/*.rs > used.txt
-python -m fontTools.subset DejaVuSans.ttf \
-  --unicodes=U+0020-007E,U+00A0-00FF --text-file=used.txt \
-  --no-hinting --notdef-outline --output-file=fonts/DejaVuSans-Subset.ttf
+```text
+Fonts: 3.3 MB → 607 kB, cut to the characters the application can show (Latin, Kana, Han, Thai).
 ```
 
-Then turn the bundled face off and register the subset as above. Text that comes from a server
-or from the reader is not in your sources: name its ranges in `--unicodes`. A letter the subset
-lacks is drawn as a box, never a crash, so look at every screen once in each language before
-shipping. [Starting a frus application](../getting-started.md) has the measured sizes.
+Embed your own faces with `include_font!` instead of `include_bytes!`, so the cut reaches them
+too. It takes the same path, relative to the file that writes it:
+
+```rust,ignore
+frus::main!({
+    use frus::fonts::{add_font, include_font};
+    add_font(include_font!("../fonts/Inter-Regular.ttf").to_vec());
+    add_font(include_font!("../fonts/Inter-Bold.ttf").to_vec());
+    frus::fonts::set_default_family("Inter");
+    app()
+});
+```
+
+What is kept is chosen by **language**, because the text people see is mostly not in your
+sources: a name they type, a title from a server, a translation loaded later.
+
+- **Latin**, whole, Vietnamese included, with punctuation, currency signs and letterlike symbols.
+- **The scripts of your languages**: those listed in the manifest, those your code names
+  (`Locale::new("ar")`), and the languages the widgets speak by themselves (English, French,
+  German, Spanish, Japanese, Thai, Vietnamese).
+- **The symbols the widgets draw**: a stepper's minus, arrows, check marks.
+- **Every character written in your sources' strings**, an icon font's code points included.
+
+A character outside all of that is drawn as the font's box, never a crash, and the log names it
+once:
+
+```text
+WARN frus_text: U+0416 (Ж) is drawn as a box: no loaded font has it. ...
+```
+
+Say what else to keep in `Cargo.toml`:
+
+```toml
+[package.metadata.frus.fonts]
+locales = ["ar", "el"]             # Arabic and Greek, for text that comes at run time
+ranges = ["U+2600-26FF"]           # code points, one or a range
+text = "★☆"                        # characters, written out
+keep = ["assets/fonts/Icons.ttf"]  # these fonts stay whole
+features = ["ss01"]                # OpenType features asked for outside a `font_feature("…")`
+# subset = false                   # every font stays whole
+```
+
+The OpenType features a shaper applies by itself are kept (ligatures, kerning, marks, the
+joining forms of Arabic), and so is every feature your code names with `.font_feature("tnum", 1)`.
+A stylistic set nobody turns on goes, with its alternate glyphs; `features = ["*"]` keeps them
+all.
+
+`frus build --no-font-subset` keeps every font whole for one build, and `frus fonts` prints what a
+release build keeps of each font and what it weighs, without building. `cargo build`, `frus run`
+and debug builds embed the fonts whole.
 
 ## Right to left
 

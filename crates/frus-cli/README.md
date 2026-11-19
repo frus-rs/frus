@@ -18,7 +18,8 @@ frus run -d web           # in a browser
 | `frus create <dir>` | writes a new application |
 | `frus devices` | lists what the application can run on now |
 | `frus run [-d <device>]` | builds it, starts it there, and shows its log in the terminal |
-| `frus build apk\|web\|desktop` | builds what you ship, in release |
+| `frus build apk\|web\|desktop` | builds what you ship, in release, its fonts cut to the characters it can show |
+| `frus fonts` | what a release build keeps of each font, and what it then weighs |
 | `frus mcp` | an MCP server: an AI coding agent runs, inspects and drives the application |
 
 `frus create` writes an application that runs on Windows, macOS, Linux, Android and the web
@@ -210,6 +211,13 @@ frus build desktop    # the program for this computer
 ```
 
 Release by default; `--debug` for a debug build.
+
+A release build cuts every font embedded with `frus::fonts::include_font!`, frus's bundled faces
+included, down to the characters the application can show: Latin, the scripts of its languages,
+the symbols the widgets draw and the text of its sources. `frus fonts` prints what it keeps and
+what each font then weighs; `[package.metadata.frus.fonts]` adds languages, ranges and features
+or keeps a font whole, and `--no-font-subset` keeps them all whole for one build (`frus help
+fonts`).
 
 On Windows, `frus build desktop` puts `dxcompiler.dll` and `dxil.dll` beside the program: DXC,
 DirectX 12's shader compiler, with which the program starts about half a second sooner than with

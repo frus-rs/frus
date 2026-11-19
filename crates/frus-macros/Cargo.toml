@@ -1,0 +1,19 @@
+[package]
+name = "frus-macros"
+description = "frus — compile-time macros: a font embedded so that a release build can carry it cut down"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/frus-macros"
+keywords = ["gui", "fonts", "subset", "macro"]
+categories = ["gui", "text-processing"]
+
+[lib]
+proc-macro = true
+
+# No dependencies: the macro reads one string literal, and `proc_macro` is enough for that.
+[dependencies]

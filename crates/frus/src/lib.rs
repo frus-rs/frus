@@ -179,7 +179,7 @@ pub use frus_widgets::{asset, column, row};
 /// to. An application that ships its own can drop the bundled ones through the
 /// `bundled-*` features — see the "Shipping" section of the getting-started guide.
 pub mod fonts {
-    pub use frus_text::{add_font, set_default_family, set_monospace_family};
+    pub use frus_text::{add_font, include_font, set_default_family, set_monospace_family};
 }
 
 // External textures (milestone 793): `textures()`, `Texture` and `ExternalTexture` come with

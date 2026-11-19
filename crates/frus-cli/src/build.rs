@@ -21,6 +21,8 @@ pub(crate) struct Request {
     pub format: Option<crate::installer::Format>,
     /// `--flavor`, `--define`, `--build-name`, `--build-number` (milestone 790).
     pub variant: crate::variant::Variant,
+    /// Whether a release build cuts its fonts down; `--no-font-subset` says no (milestone 823).
+    pub font_subset: bool,
 }
 
 /// What `frus build` makes.
@@ -76,6 +78,7 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
         split_per_abi,
         format,
         variant,
+        font_subset,
     } = request;
     if split_per_abi && target != Target::Apk {
         return Err("--split-per-abi goes with `frus build apk`".into());
@@ -89,6 +92,8 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
     variant.apply(mode, &mut project, &here)?;
     crate::variant::export(&project);
     say_variant(&project, mode);
+    // The fonts, cut to what the application can show, for every target (milestone 823).
+    crate::fonts::for_build(&project, mode, font_subset);
     match target {
         Target::Apk if split_per_abi => {
             let apk = cargo::cargo_apk(&project, mode, None)?;
