@@ -121,6 +121,9 @@ use crate::widget::Widget;
 
 thread_local! {
     static REBUILD: Cell<bool> = const { Cell::new(false) };
+    /// Whether a rebuild was asked for by something other than a component's own state: the
+    /// whole tree is built again (milestone 822).
+    static FULL: Cell<bool> = const { Cell::new(false) };
     static DEPTH: Cell<u32> = const { Cell::new(0) };
     static INTERVALS: RefCell<Vec<Interval>> = const { RefCell::new(Vec::new()) };
     static BACK_BLOCKS: Cell<u32> = const { Cell::new(0) };
@@ -170,12 +173,47 @@ pub fn intervals() -> Vec<Interval> {
     INTERVALS.with(|intervals| intervals.borrow().clone())
 }
 
-/// Asks the shell to rebuild the tree on its next frame. Anything that changed what a
-/// component would build — [`StateHandle::set_state`], a hook's `set`, a controller —
-/// calls this; an application rarely does.
+/// Asks the shell to rebuild the **whole** tree on its next frame. Anything that changed what
+/// components may build without belonging to one of them — a controller, a setting, a value
+/// shared between components — calls this; an application rarely does.
+///
+/// A component's own state does not: [`StateHandle::set_state`] and a hook's `set` mark that
+/// component, and only it is built again (milestone 822).
 #[inline(never)]
 pub fn request_rebuild() {
     REBUILD.with(|flag| flag.set(true));
+    FULL.with(|flag| flag.set(true));
+}
+
+/// A component's own state changed: it is marked, and the next frame builds the components
+/// marked, not the tree.
+#[inline(never)]
+fn request_component_rebuild() {
+    REBUILD.with(|flag| flag.set(true));
+}
+
+/// What the next frame has to build, as [`take_rebuild`] answers it (milestone 822).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rebuild {
+    /// Nothing was asked for.
+    Nothing,
+    /// Only components whose own state changed: each is built again where it stands, and
+    /// what they did not build is kept as it was.
+    Components,
+    /// Something outside the components changed: the whole tree is built again.
+    Tree,
+}
+
+/// What was asked for since the last time this was called, and forgets it: the shell reads
+/// this at the top of every frame, and builds the components marked or the whole tree.
+#[inline(never)]
+pub fn take_rebuild() -> Rebuild {
+    let full = FULL.with(|flag| flag.replace(false));
+    match (REBUILD.with(|flag| flag.replace(false)), full) {
+        (false, _) => Rebuild::Nothing,
+        (true, false) => Rebuild::Components,
+        (true, true) => Rebuild::Tree,
+    }
 }
 
 /// Whether a rebuild has been asked for and not yet taken. Asking does not consume it.
@@ -184,11 +222,54 @@ pub fn rebuild_requested() -> bool {
     REBUILD.with(|flag| flag.get())
 }
 
-/// Whether a rebuild was asked for since the last time this was called, and forgets it.
-/// The shell reads this at the top of every frame.
+/// Whether a rebuild was asked for since the last time this was called, and forgets it —
+/// [`take_rebuild`], when it does not matter what has to be built.
 #[inline(never)]
 pub fn take_rebuild_request() -> bool {
-    REBUILD.with(|flag| flag.replace(false))
+    take_rebuild() != Rebuild::Nothing
+}
+
+/// How many timers the build has asked for so far.
+#[inline(never)]
+fn interval_count() -> usize {
+    INTERVALS.with(|intervals| intervals.borrow().len())
+}
+
+/// The timers asked for since there were `from`.
+#[inline(never)]
+fn intervals_since(from: usize) -> Vec<Interval> {
+    INTERVALS.with(|intervals| intervals.borrow().get(from..).unwrap_or_default().to_vec())
+}
+
+/// How many components have blocked the back gesture so far in this build.
+#[inline(never)]
+fn back_block_count() -> u32 {
+    BACK_BLOCKS.with(|blocks| blocks.get())
+}
+
+/// What one component's build asked of the frame, beyond the widgets: its timers, and whether
+/// it stands in the way of going back. A component that is kept rather than built again asks
+/// it again (milestone 822).
+#[derive(Default)]
+struct Asked {
+    intervals: Vec<Interval>,
+    back_blocks: u32,
+}
+
+impl Asked {
+    #[inline(never)]
+    fn again(&self) {
+        if !self.intervals.is_empty() {
+            INTERVALS.with(|intervals| {
+                intervals
+                    .borrow_mut()
+                    .extend(self.intervals.iter().cloned())
+            });
+        }
+        if self.back_blocks > 0 {
+            BACK_BLOCKS.with(|blocks| blocks.set(blocks.get() + self.back_blocks));
+        }
+    }
 }
 
 /// How many components deep the transparent chain being expanded is. A component that
@@ -309,6 +390,21 @@ impl StateStore {
         // nothing.
         self.held.borrow_mut().clear();
         self.flush_effects();
+    }
+
+    /// The rebuild under way, or the last one: what a kept component compares with the one
+    /// it was last reached in.
+    fn epoch(&self) -> u64 {
+        self.epoch.get()
+    }
+
+    /// The component at `key` was kept rather than built again: its state is reached all the
+    /// same, and outlives the sweep.
+    fn touch(&self, key: StateKey) {
+        if let Some(entry) = self.entries.borrow_mut().get_mut(&key) {
+            entry.epoch = self.epoch.get();
+            entry.owner = self.row();
+        }
     }
 
     /// A list built on demand is building its row `row` (milestone 748): the states the
@@ -507,6 +603,8 @@ impl StateStore {
                 Some(entry) if entry.kind == kind => {
                     entry.epoch = self.epoch.get();
                     entry.owner = self.row();
+                    // Built again: what marked it is answered.
+                    entry.hooks.dirty.set(false);
                     return entry.hooks.clone();
                 }
                 Some(_) => entries.remove(&key),
@@ -548,6 +646,7 @@ impl StateStore {
                 })
         };
         if let Some((Some(state), hooks)) = found {
+            hooks.dirty.set(false);
             let cell = state
                 .downcast::<StateCell<W::State>>()
                 .unwrap_or_else(|_| unreachable!("an entry's kind says what its state is"));
@@ -562,10 +661,12 @@ impl StateStore {
         if let Some(stale) = stale {
             stale.dispose_all();
         }
+        let hooks = Rc::new(Hooks::default());
         let cell = Rc::new(StateCell {
             state: RefCell::new(widget.create_state()),
             widget: RefCell::new(widget),
             mounted: Cell::new(true),
+            dirty: hooks.dirty.clone(),
         });
         // A restart handed over what this state saved: given back before `init_state`.
         let name = std::any::type_name::<W::State>();
@@ -573,7 +674,6 @@ impl StateStore {
         if let Some(saved) = saved {
             cell.state.borrow_mut().restore(&saved);
         }
-        let hooks = Rc::new(Hooks::default());
         let leaving = cell.clone();
         let saving = cell.clone();
         self.entries.borrow_mut().insert(
@@ -690,6 +790,9 @@ const ORDER: &str = "hooks were called in a different order than on the last bui
 struct Hooks {
     slots: RefCell<Vec<Slot>>,
     disposed: Cell<bool>,
+    /// Whether the component's own state changed since it was last built: set by a
+    /// [`UseState`] or a [`StateHandle`], answered by the next build (milestone 822).
+    dirty: Rc<Cell<bool>>,
 }
 
 enum Slot {
@@ -775,12 +878,15 @@ impl<F: FnOnce() + 'static> IntoCleanup for F {
 /// which is what lets a handler own one.
 pub struct UseState<T> {
     pub(crate) cell: Rc<RefCell<T>>,
+    /// The mark of the component that owns it: a change builds that component again.
+    dirty: Rc<Cell<bool>>,
 }
 
 impl<T> Clone for UseState<T> {
     fn clone(&self) -> Self {
         Self {
             cell: self.cell.clone(),
+            dirty: self.dirty.clone(),
         }
     }
 }
@@ -799,16 +905,19 @@ impl<T: 'static> UseState<T> {
         read(&self.cell.borrow())
     }
 
-    /// Replaces the value, and asks for a rebuild.
+    /// Replaces the value, and asks for the component that owns it to be built again.
     pub fn set(&self, value: T) {
         *self.cell.borrow_mut() = value;
-        request_rebuild();
+        self.dirty.set(true);
+        request_component_rebuild();
     }
 
-    /// Changes the value in place, and asks for a rebuild.
+    /// Changes the value in place, and asks for the component that owns it to be built
+    /// again.
     pub fn update(&self, change: impl FnOnce(&mut T)) {
         change(&mut self.cell.borrow_mut());
-        request_rebuild();
+        self.dirty.set(true);
+        request_component_rebuild();
     }
 }
 
@@ -958,10 +1067,12 @@ impl<'a> BuildContext<'a> {
     /// }
     /// ```
     pub fn use_state<T: 'static>(&self, init: impl FnOnce() -> T) -> UseState<T> {
-        let cell = self
-            .hooks()
-            .value(self.next_slot(), || RefCell::new(init()));
-        UseState { cell }
+        let hooks = self.hooks();
+        let cell = hooks.value(self.next_slot(), || RefCell::new(init()));
+        UseState {
+            cell,
+            dirty: hooks.dirty.clone(),
+        }
     }
 
     /// Asks the list this component is a row of — or is somewhere inside a row of — to keep
@@ -1311,6 +1422,8 @@ pub(crate) struct StateCell<S: State> {
     state: RefCell<S>,
     widget: RefCell<Rc<S::Widget>>,
     mounted: Cell<bool>,
+    /// The component's mark: a `set_state` builds it again (milestone 822).
+    dirty: Rc<Cell<bool>>,
 }
 
 /// A way to reach a widget's state from outside its `build`: from a handler, a listener, a
@@ -1328,7 +1441,8 @@ impl<S: State> Clone for StateHandle<S> {
 }
 
 impl<S: State> StateHandle<S> {
-    /// Changes the state, and asks for a rebuild.
+    /// Changes the state, and asks for this widget to be built again — this one and what it
+    /// builds, not the components around it (milestone 822).
     ///
     /// Does nothing once the widget has left the tree: a timer that outlives its widget
     /// finds nothing to change.
@@ -1343,7 +1457,8 @@ impl<S: State> StateHandle<S> {
                  from inside another `set_state`. Change state from a handler, not while building"
             ),
         }
-        request_rebuild();
+        self.cell.dirty.set(true);
+        request_component_rebuild();
     }
 
     /// Reads the state.
@@ -1433,7 +1548,9 @@ impl<S: State> StateContext<'_, '_, S> {
 // The node
 // ---------------------------------------------------------------------------------------
 
-type Builder<Msg> = Box<dyn FnOnce(&BuildContext) -> Box<dyn Widget<Msg>>>;
+/// A component's build: kept, since a component marked by its own state is built again where
+/// it stands (milestone 822).
+type Builder<Msg> = Box<dyn Fn(&BuildContext) -> Box<dyn Widget<Msg>>>;
 
 /// A component in the tree: a widget that is built into another when the tree is.
 ///
@@ -1485,6 +1602,7 @@ impl Component<Callback> {
 
     /// A stateful component.
     pub fn stateful<W: StatefulWidget>(widget: W) -> Self {
+        let widget = Rc::new(widget);
         Self::from_builder(
             TypeId::of::<W>(),
             Box::new(move |cx: &BuildContext| {
@@ -1492,7 +1610,7 @@ impl Component<Callback> {
                     cell,
                     hooks,
                     previous,
-                } = cx.runtime.states.mount(cx.key, Rc::new(widget));
+                } = cx.runtime.states.mount(cx.key, widget.clone());
                 let _ = cx.hooks.set(hooks);
                 let state_cx = StateContext { cx, cell: &cell };
                 if previous.is_none() {
@@ -1500,6 +1618,8 @@ impl Component<Callback> {
                 }
                 match previous {
                     None => cell.state.borrow_mut().init_state(&state_cx),
+                    // Built again for its own state's sake: the configuration is the same one.
+                    Some(old) if Rc::ptr_eq(&old, &widget) => {}
                     Some(old) => cell.state.borrow_mut().did_update_widget(&old, &state_cx),
                 }
                 let built = build_state(&*cell.state.borrow(), &state_cx);
@@ -1515,8 +1635,12 @@ impl<Msg> Component<Msg> {
             inner: LazyChild {
                 kind,
                 scope: crate::restoration::current_scope(),
-                build: RefCell::new(Some(build)),
-                built: OnceCell::new(),
+                build,
+                built: Built(std::cell::UnsafeCell::new(None)),
+                retired: RefCell::new(None),
+                dirty: RefCell::new(None),
+                reached: Cell::new(0),
+                asked: RefCell::new(Asked::default()),
                 unbuilt: Unbuilt,
             },
             key: None,
@@ -1536,36 +1660,109 @@ impl<Msg> Component<Msg> {
     }
 }
 
-/// The child a component builds, made the first time the tree reaches it.
+/// The child a component builds, made the first time the tree reaches it, and made again
+/// where it stands when the component's own state marks it (milestone 822).
 struct LazyChild<Msg> {
     kind: TypeId,
     /// The restoration scope the component was made in: what it builds is built in it.
     scope: crate::restoration::Scope,
-    build: RefCell<Option<Builder<Msg>>>,
-    built: OnceCell<Box<dyn Widget<Msg>>>,
+    build: Builder<Msg>,
+    built: Built<Msg>,
+    /// What this component built before its latest build, kept until a later rebuild reaches
+    /// it: nothing read from the old child during the walk that replaced it is left dangling.
+    retired: RefCell<Option<Box<dyn Widget<Msg>>>>,
+    /// The mark its own state sets, once it has built with hooks or a state.
+    dirty: RefCell<Option<Rc<Cell<bool>>>>,
+    /// The rebuild that last reached it, as [`StateStore`] counts them.
+    reached: Cell<u64>,
+    /// What its latest build asked of the frame beyond the widgets.
+    asked: RefCell<Asked>,
     unbuilt: Unbuilt,
 }
 
+/// Where a component keeps what it built.
+///
+/// Read as a shared reference by every walk, and **replaced** only by [`LazyChild::expand`]:
+/// at the first visit of a rebuild to a component its own state has marked, before that walk
+/// has read anything below it. What it replaces is not dropped there but retired, so that
+/// even a reference into the old child taken earlier in that walk stays valid until a later
+/// rebuild, when no walk of the earlier one can still be under way: a frame's walks borrow
+/// the tree, and the next rebuild needs it again.
+struct Built<Msg>(std::cell::UnsafeCell<Option<Box<dyn Widget<Msg>>>>);
+
+impl<Msg> Built<Msg> {
+    fn get(&self) -> Option<&(dyn Widget<Msg> + 'static)> {
+        // SAFETY: the slot is only written by `replace`, under the rule above, which never
+        // overlaps a reference to the slot itself; a reference to the child it held lives on
+        // in `retired`.
+        unsafe { (*self.0.get()).as_deref() }
+    }
+
+    /// Puts `child` in, and hands back what was there.
+    ///
+    /// # Safety
+    ///
+    /// No reference to the slot itself may be alive: only [`LazyChild::expand`] calls this,
+    /// through `&self`, and keeps what it hands back alive until a later rebuild.
+    unsafe fn replace(&self, child: Box<dyn Widget<Msg>>) -> Option<Box<dyn Widget<Msg>>> {
+        // SAFETY: the caller guarantees what the function's contract says.
+        unsafe { (*self.0.get()).replace(child) }
+    }
+}
+
 impl<Msg> LazyChild<Msg> {
-    /// Builds the child if it has not been, then lets *it* expand: what it built may be a
-    /// component too.
+    /// Builds the child if it has not been — or again, if this component's own state marked
+    /// it since — then lets *it* expand: what it built may be a component too.
+    ///
+    /// A component built in an earlier rebuild and not marked is **kept** (milestone 822): its
+    /// state is reached as if it had been built, the timers it asked for are asked for again,
+    /// and nothing it built is made again. That is what the tree retained from the last frame
+    /// holds everywhere a rebuild of the components alone does not reach.
     fn expand(&self, id: WidgetId, runtime: &Runtime, theme: &Theme) {
+        let states = &runtime.states;
+        let epoch = states.epoch();
         if self.built.get().is_none() {
-            let build = self.build.borrow_mut().take();
-            if let Some(build) = build {
-                // What the build makes — the components, the fields, the lists — belongs
-                // to this component's restoration scope.
-                let _scope = crate::restoration::enter_scope(self.scope.clone());
-                let cx =
-                    BuildContext::new((id, depth()), self.kind, runtime, theme, self.scope.clone());
-                let child = build(&cx);
-                crate::rebuilds::note(id);
-                let _ = self.built.set(child);
+            self.build_child(id, runtime, theme);
+        } else if self.reached.get() != epoch {
+            // Last rebuild's retired child: no walk of that one is under way any more.
+            drop(self.retired.borrow_mut().take());
+            let marked = self
+                .dirty
+                .borrow()
+                .as_ref()
+                .is_some_and(|dirty| dirty.get());
+            if marked {
+                self.build_child(id, runtime, theme);
+            } else {
+                states.touch((id, depth()));
+                self.asked.borrow().again();
             }
         }
+        self.reached.set(epoch);
         if let Some(child) = self.built.get() {
             let _deeper = Deeper::enter();
             child.expand(id, runtime, theme);
+        }
+    }
+
+    /// Runs the build, and keeps what it made and what it asked.
+    fn build_child(&self, id: WidgetId, runtime: &Runtime, theme: &Theme) {
+        // What the build makes — the components, the fields, the lists — belongs
+        // to this component's restoration scope.
+        let _scope = crate::restoration::enter_scope(self.scope.clone());
+        let cx = BuildContext::new((id, depth()), self.kind, runtime, theme, self.scope.clone());
+        let (intervals, back_blocks) = (interval_count(), back_block_count());
+        let child = (self.build)(&cx);
+        *self.asked.borrow_mut() = Asked {
+            intervals: intervals_since(intervals),
+            back_blocks: back_block_count().saturating_sub(back_blocks),
+        };
+        *self.dirty.borrow_mut() = cx.hooks.get().map(|hooks| hooks.dirty.clone());
+        crate::rebuilds::note(id);
+        // SAFETY: called from `expand` only, before the walk reads anything below this
+        // component; what was there is retired, not dropped.
+        if let Some(old) = unsafe { self.built.replace(child) } {
+            *self.retired.borrow_mut() = Some(old);
         }
     }
 
@@ -1579,7 +1776,7 @@ impl<Msg> LazyChild<Msg> {
     /// component stands (milestone 729). Inherent, so that the transparent macro's
     /// `self.inner.built_child()` reaches this rather than the built widget's own.
     fn built_child(&self) -> Option<&dyn Widget<Msg>> {
-        self.built.get().map(|child| child.as_ref())
+        self.built.get()
     }
 
     fn build_themed(&self, theme: &Theme) {
@@ -1593,13 +1790,12 @@ impl<Msg> LazyChild<Msg> {
             Some(child) => child.children(),
             None => {
                 #[cfg(debug_assertions)]
-                if self.build.borrow().is_some() {
-                    panic!(
-                        "a component's children were read before it was built: a traversal \
-                         reached this tree before the walk that builds components did. Call \
-                         `build_deferred(tree, &theme, &runtime)` on it first"
-                    );
-                }
+                panic!(
+                    "a component's children were read before it was built: a traversal \
+                     reached this tree before the walk that builds components did. Call \
+                     `build_deferred(tree, &theme, &runtime)` on it first"
+                );
+                #[cfg(not(debug_assertions))]
                 &[]
             }
         }
@@ -1611,7 +1807,7 @@ impl<Msg> Deref for LazyChild<Msg> {
 
     fn deref(&self) -> &(dyn Widget<Msg> + 'static) {
         match self.built.get() {
-            Some(child) => child.as_ref(),
+            Some(child) => child,
             None => &self.unbuilt,
         }
     }
@@ -1948,7 +2144,15 @@ mod tests {
         });
         frame(&runtime, &root);
         assert!(back_blocked(), "an open menu is in the way");
+        // Kept rather than built again, it says so again.
+        frame(&runtime, &root);
+        assert!(back_blocked(), "a kept component still stands in the way");
         open.set(false);
+        let asked = open.clone();
+        let root = component(move |cx| {
+            cx.block_back(asked.get());
+            Box::new(Container::new().width(4.0).height(4.0))
+        });
         frame(&runtime, &root);
         assert!(!back_blocked(), "each build says it afresh");
     }
@@ -2369,5 +2573,255 @@ mod tests {
         frame(&runtime, &root);
         assert_eq!(width(&root), Dimension::Length(42.0));
         assert!(runtime.states.service::<String>().is_none());
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Milestone 822: what a component's own state marks is what is built again
+    // -----------------------------------------------------------------------------------
+
+    type Counter = Rc<Cell<u32>>;
+    type Out = Rc<RefCell<Option<UseState<i32>>>>;
+
+    fn counter() -> Counter {
+        Rc::new(Cell::new(0))
+    }
+
+    /// A leaf that keeps a count, says how often it was built, and hands its count out.
+    fn leaf(built: &Counter, out: &Out) -> Component {
+        let (built, out) = (built.clone(), out.clone());
+        component(move |cx| {
+            built.set(built.get() + 1);
+            let count = cx.use_state(|| 0);
+            cx.use_interval(std::time::Duration::from_secs(1), || {});
+            *out.borrow_mut() = Some(count.clone());
+            Box::new(
+                Container::new()
+                    .width(10.0 + count.get() as f32)
+                    .height(4.0),
+            )
+        })
+    }
+
+    /// A screen: a component around a leaf and a sibling, each counting its builds.
+    fn screen(outer: &Counter, sibling: &Counter, leaf_built: &Counter, out: &Out) -> Component {
+        let (outer, sibling, leaf_built, out) = (
+            outer.clone(),
+            sibling.clone(),
+            leaf_built.clone(),
+            out.clone(),
+        );
+        component(move |cx| {
+            outer.set(outer.get() + 1);
+            cx.use_state(|| 1u8);
+            let sibling = sibling.clone();
+            Box::new(
+                Flex::column()
+                    .child(leaf(&leaf_built, &out))
+                    .child(component(move |_| {
+                        sibling.set(sibling.get() + 1);
+                        Box::new(Container::new().width(30.0).height(4.0))
+                    })),
+            )
+        })
+    }
+
+    /// The first child's box, as the walk that lays it out reads it.
+    fn first_width(root: &dyn Widget) -> Dimension {
+        root.children()[0].style().width
+    }
+
+    /// **A state change in a leaf builds the leaf and nothing else**, in the tree kept from
+    /// the frame before; its state, its sibling's and its parent's are all kept, and the
+    /// timers the components asked for are still asked for.
+    #[test]
+    fn a_leaf_s_own_state_builds_the_leaf_alone() {
+        let runtime = Runtime::default();
+        let (outer, sibling, built) = (counter(), counter(), counter());
+        let out: Out = Rc::default();
+        let root = screen(&outer, &sibling, &built, &out);
+        frame(&runtime, &root);
+        assert_eq!((outer.get(), sibling.get(), built.get()), (1, 1, 1));
+        let states = runtime.states.len();
+        assert_eq!(intervals().len(), 1);
+
+        let _ = take_rebuild();
+        out.borrow().as_ref().unwrap().update(|n| *n += 5);
+        assert_eq!(
+            take_rebuild(),
+            Rebuild::Components,
+            "only a component asked"
+        );
+        frame(&runtime, &root);
+        assert_eq!(
+            (outer.get(), sibling.get(), built.get()),
+            (1, 1, 2),
+            "the leaf was built again, and only the leaf"
+        );
+        assert_eq!(
+            first_width(&root),
+            Dimension::Length(15.0),
+            "with its count"
+        );
+        assert_eq!(runtime.states.len(), states, "every state was kept");
+        assert_eq!(
+            intervals().len(),
+            1,
+            "and the leaf's timer is asked for once"
+        );
+
+        // A frame with nothing marked builds nothing, and lets nothing go.
+        frame(&runtime, &root);
+        assert_eq!((outer.get(), sibling.get(), built.get()), (1, 1, 2));
+        assert_eq!(runtime.states.len(), states);
+        assert_eq!(
+            intervals().len(),
+            1,
+            "a kept component's timer is asked again"
+        );
+        assert_eq!(
+            out.borrow().as_ref().unwrap().get(),
+            5,
+            "its state is the same"
+        );
+    }
+
+    /// **A parent built again builds what it holds**: its children are new configurations,
+    /// which the framework cannot compare, so they are built — and their states are kept.
+    #[test]
+    fn a_parent_s_state_builds_its_subtree_and_keeps_the_states() {
+        let runtime = Runtime::default();
+        let (built, out): (Counter, Out) = (counter(), Rc::default());
+        let (log, life_out) = (log(), handle());
+        let parent: Rc<RefCell<Option<UseState<u32>>>> = Rc::default();
+        let (b, o, l, lo, p) = (
+            built.clone(),
+            out.clone(),
+            log.clone(),
+            life_out.clone(),
+            parent.clone(),
+        );
+        let root = component(move |cx| {
+            let tag = cx.use_state(|| 1u32);
+            *p.borrow_mut() = Some(tag.clone());
+            Box::new(
+                Flex::column()
+                    .child(leaf(&b, &o))
+                    .child(life(tag.get(), &l, &lo)),
+            )
+        });
+        frame(&runtime, &root);
+        assert_eq!(taken(&log), ["init 1"]);
+        out.borrow().as_ref().unwrap().set(3);
+        life_out
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .set_state(|s| s.count = 2);
+        parent.borrow().as_ref().unwrap().set(2);
+        frame(&runtime, &root);
+        assert_eq!(built.get(), 2, "the leaf was built with its parent, once");
+        assert_eq!(
+            taken(&log),
+            ["update 1->2"],
+            "the stateful child was told its configuration changed, and kept"
+        );
+        assert_eq!(
+            out.borrow().as_ref().unwrap().get(),
+            3,
+            "the leaf kept its count"
+        );
+        assert_eq!(life_out.borrow().as_ref().unwrap().read(|s| s.count), 2);
+    }
+
+    /// **`set_state` builds the stateful widget again with the same configuration**: it is
+    /// not told the configuration changed, and what is around it is not built.
+    #[test]
+    fn set_state_builds_the_stateful_widget_alone() {
+        let runtime = Runtime::default();
+        let (log, out, outer) = (log(), handle(), counter());
+        let (l, o, c) = (log.clone(), out.clone(), outer.clone());
+        let root = component(move |_| {
+            c.set(c.get() + 1);
+            Box::new(Flex::column().child(life(1, &l, &o)))
+        });
+        frame(&runtime, &root);
+        assert_eq!(taken(&log), ["init 1"]);
+        out.borrow().as_ref().unwrap().set_state(|s| s.count = 7);
+        frame(&runtime, &root);
+        assert!(
+            taken(&log).is_empty(),
+            "no did_update_widget: the widget is the same"
+        );
+        assert_eq!(outer.get(), 1, "the parent was not built");
+        assert_eq!(
+            first_width(&root),
+            Dimension::Length(17.0),
+            "the state's new build is in the tree"
+        );
+    }
+
+    /// **A whole build after rebuilds of the marked alone** — what a hot patch, a theme or a
+    /// new surface asks for — builds every component again, from the tree `view` makes, and
+    /// every state is kept.
+    #[test]
+    fn a_whole_build_after_marked_ones_builds_everything_and_keeps_the_states() {
+        let runtime = Runtime::default();
+        let (outer, sibling, built) = (counter(), counter(), counter());
+        let out: Out = Rc::default();
+        let root = screen(&outer, &sibling, &built, &out);
+        frame(&runtime, &root);
+        out.borrow().as_ref().unwrap().set(4);
+        frame(&runtime, &root);
+        assert_eq!((outer.get(), sibling.get(), built.get()), (1, 1, 2));
+        let states = runtime.states.len();
+
+        let fresh = screen(&outer, &sibling, &built, &out);
+        frame(&runtime, &fresh);
+        assert_eq!(
+            (outer.get(), sibling.get(), built.get()),
+            (2, 2, 3),
+            "everything built again"
+        );
+        assert_eq!(runtime.states.len(), states);
+        assert_eq!(
+            out.borrow().as_ref().unwrap().get(),
+            4,
+            "the count was kept"
+        );
+        assert_eq!(first_width(&fresh), Dimension::Length(14.0));
+    }
+
+    /// **A key keeps its place through a rebuild of the marked**: the keyed leaf is built
+    /// again under its key, through the wrapper that carries it.
+    #[test]
+    fn a_keyed_leaf_is_built_again_through_its_key() {
+        let runtime = Runtime::default();
+        let (built, out, outer): (Counter, Out, Counter) = (counter(), Rc::default(), counter());
+        let (b, o, c) = (built.clone(), out.clone(), outer.clone());
+        let root = component(move |_| {
+            c.set(c.get() + 1);
+            Box::new(Flex::column().child(keyed("leaf", leaf(&b, &o))))
+        });
+        frame(&runtime, &root);
+        out.borrow().as_ref().unwrap().set(2);
+        frame(&runtime, &root);
+        assert_eq!((outer.get(), built.get()), (1, 2));
+        assert_eq!(first_width(&root), Dimension::Length(12.0));
+    }
+
+    /// What a request asks for: a component's state marks it, anything else the tree.
+    #[test]
+    fn a_request_says_what_is_to_be_built() {
+        let _ = take_rebuild();
+        assert_eq!(take_rebuild(), Rebuild::Nothing);
+        request_component_rebuild();
+        assert!(rebuild_requested());
+        assert_eq!(take_rebuild(), Rebuild::Components);
+        request_component_rebuild();
+        request_rebuild();
+        assert_eq!(take_rebuild(), Rebuild::Tree, "the whole tree wins");
+        request_rebuild();
+        assert!(take_rebuild_request());
+        assert_eq!(take_rebuild(), Rebuild::Nothing, "taken once, both flags");
     }
 }

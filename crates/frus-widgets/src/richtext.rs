@@ -1098,7 +1098,8 @@ mod tests {
     }
 
     /// **A touch selection's handles hang from the paragraph**: a selection area's two ends,
-    /// painted after the words.
+    /// answered by the paragraph and painted by the walk, which lifts them over what the area
+    /// paints after it (milestone 821) — so the paragraph's own paint has none.
     #[test]
     fn the_handles_of_an_area_hang_from_a_paragraph() {
         let paths = |status: Status| {
@@ -1113,7 +1114,7 @@ mod tests {
             region_grips: (Some(6), Some(10)),
             ..Status::default()
         };
-        assert_eq!(paths(grips), 2);
+        assert_eq!(paths(grips), 0, "the walk paints them");
         let words = Widget::<()>::selectable_text(&mixed()).expect("a paragraph with words");
         let handle = words.handle(300.0, 6, true);
         assert!(handle.rect.height > 0.0, "{handle:?}");
