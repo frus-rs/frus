@@ -40,6 +40,9 @@ pub(crate) struct Project {
     /// The lines of `[package.metadata.frus.permissions]`, `(key, value as written)`: read by
     /// [`Project::permissions`] (milestone 744).
     pub permission_lines: Vec<(String, String)>,
+    /// The lines of `[package.metadata.frus.fonts]`, `(key, value as written)`: read by
+    /// `fonts::Settings::parse` (milestone 823).
+    pub font_lines: Vec<(String, String)>,
     /// The flavors the manifest declares, `[package.metadata.frus.flavors.<name>]`
     /// (milestone 790).
     pub flavors: Vec<crate::variant::Flavor>,
@@ -129,6 +132,7 @@ impl Project {
         let mut devices: Vec<Vec<String>> = Vec::new();
         let mut version = None;
         let mut permission_lines = Vec::new();
+        let mut font_lines = Vec::new();
         let mut flavors: Vec<crate::variant::Flavor> = Vec::new();
         let mut features = Vec::new();
         let mut has_profile_profile = false;
@@ -180,6 +184,9 @@ impl Project {
                 }
                 (permissions::SECTION, _) => {
                     permission_lines.push((key.to_string(), value.to_string()));
+                }
+                (crate::fonts::SECTION, _) => {
+                    font_lines.push((key.to_string(), value.to_string()));
                 }
                 ("package.metadata.android.sdk", "target_sdk_version") => {
                     android_target_sdk = value.split('#').next().unwrap_or("").trim().parse().ok();
@@ -250,6 +257,7 @@ impl Project {
             devices: devices.into_iter().map(|pairs| pairs.join(";")).collect(),
             version,
             permission_lines,
+            font_lines,
             flavors,
             features,
             has_profile_profile,

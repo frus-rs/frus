@@ -30,6 +30,7 @@ mod devlink;
 mod devtools;
 mod doctor;
 mod emulators;
+mod fonts;
 mod hot;
 mod installer;
 mod json;
@@ -73,6 +74,7 @@ Usage:
   frus test [<filter>] [-v]           the tests, said briefly: a summary, each failure at its place
   frus analyze [--fix]                clippy and rustfmt, everything to fix listed together
   frus size <target|file>             what the shipped binary is made of, crate by crate
+  frus fonts [--locale <tag>]         what a release build keeps of the fonts, and what they weigh
   frus daemon                         JSON lines for an editor: devices, as they come and go
   frus mcp                            an MCP server: AI agents run, inspect and drive the application
   frus help [<command>]               print this, or a command's options
@@ -207,6 +209,10 @@ Options:
                            fonts and assets inside it: a table here, the whole as JSON
                            (see `frus help size`)
       --compare <json>     with --analyze-size: what changed since that analysis
+      --no-font-subset     embed the fonts whole; a release build otherwise keeps of
+                           each the characters the application can show (Latin, the
+                           scripts of its languages, the text of its sources; more in
+                           [package.metadata.frus.fonts], see `frus help fonts`)
   -h, --help               print this
 
 Examples:
@@ -238,6 +244,43 @@ Examples:
   frus size desktop
   frus build apk --analyze-size
   frus size web --compare target/frus-size/web-01.json
+";
+
+const FONTS_USAGE: &str = "\
+frus fonts — what a release build keeps of the fonts, and what they weigh
+
+Usage:
+  frus fonts [--locale <tag>]...
+
+`frus build` in release (or --profile) cuts every font embedded with
+`frus::fonts::include_font!`, frus's bundled faces included, down to the characters the
+application can show:
+
+  - Latin, whole (Vietnamese too), with punctuation, currency signs and symbols;
+  - the scripts of its languages: those the manifest lists, those its code names
+    (`Locale::new(\"ar\")`), and the widgets' own (en, fr, de, es, ja, th, vi);
+  - the symbols the widgets draw (the stepper's minus, arrows, check marks);
+  - every character written in its sources' strings, an icon font's code points included.
+
+A character outside them is drawn as a box, and the log names it once. The manifest adds
+to them, or turns the cut off:
+
+  [package.metadata.frus.fonts]
+  locales = [\"ar\", \"el\"]            # their scripts are kept
+  ranges = [\"U+2600-26FF\"]          # code points, one or a range
+  text = \"★☆\"                      # characters, written out
+  keep = [\"assets/fonts/Icons.ttf\"] # these fonts stay whole
+  features = [\"ss01\"]               # OpenType features asked for outside font_feature()
+  subset = false                     # every font stays whole
+
+The features a shaper applies by itself are kept, and every one the code names with
+`.font_feature(\"tnum\", 1)`; `features = [\"*\"]` keeps them all.
+
+`frus build --no-font-subset` keeps them whole for one build. A debug build never cuts.
+
+Options:
+      --locale <tag>       a language to keep besides the manifest's (repeatable)
+  -h, --help               print this
 ";
 
 const DEVICES_USAGE: &str = "\
@@ -322,6 +365,11 @@ enum Command {
     /// `frus build <target> --analyze-size`, `frus size` (milestone 791).
     Size(size::Options),
     SizeHelp,
+    /// `frus fonts` (milestone 823).
+    Fonts {
+        locales: Vec<String>,
+    },
+    FontsHelp,
 }
 
 fn main() -> ExitCode {
@@ -379,6 +427,11 @@ fn main() -> ExitCode {
         }
         Ok(Command::Build(request)) => outcome(build::build(request)),
         Ok(Command::Size(options)) => outcome(size::size(&options)),
+        Ok(Command::Fonts { locales }) => outcome(fonts::report(&locales)),
+        Ok(Command::FontsHelp) => {
+            print!("{FONTS_USAGE}");
+            ExitCode::SUCCESS
+        }
         Ok(Command::SizeHelp) => {
             print!("{SIZE_USAGE}");
             ExitCode::SUCCESS
@@ -417,6 +470,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
             Some("emulators") => Ok(Command::EmulatorsHelp),
             Some("mcp") => Ok(Command::McpHelp),
             Some("size") => Ok(Command::SizeHelp),
+            Some("fonts") => Ok(Command::FontsHelp),
             Some(other) => Err(format!("no command `{other}`")),
         },
         Some("-V" | "--version" | "version") => Ok(Command::Version),
@@ -465,6 +519,7 @@ fn parse(args: Vec<OsString>) -> Result<Command, String> {
         },
         Some("build") => parse_build(args),
         Some("size") => parse_size(args),
+        Some("fonts") => parse_fonts(args),
         _ => Err(format!("no command `{}`", command.to_string_lossy())),
     }
 }
@@ -705,6 +760,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
     let mut format = None;
     let mut analyze = false;
     let mut compare = None;
+    let mut font_subset = true;
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -727,6 +783,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
             "-h" | "--help" => return Ok(Command::BuildHelp),
             "--split-per-abi" if inline.is_none() => split_per_abi = true,
             "--analyze-size" if inline.is_none() => analyze = true,
+            "--no-font-subset" if inline.is_none() => font_subset = false,
             "--compare" => set_once(
                 &mut compare,
                 PathBuf::from(value("--compare")?),
@@ -770,7 +827,30 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         split_per_abi,
         format,
         variant,
+        font_subset,
     }))
+}
+
+/// `frus fonts [--locale <tag>]…`.
+fn parse_fonts(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut locales = Vec::new();
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        let text = arg.to_string_lossy().into_owned();
+        match text.split_once('=') {
+            Some(("--locale", tag)) => locales.push(tag.to_string()),
+            _ => match text.as_str() {
+                "-h" | "--help" => return Ok(Command::FontsHelp),
+                "--locale" => locales.push(
+                    args.next()
+                        .and_then(|a| a.into_string().ok())
+                        .ok_or("--locale needs a language: --locale ar")?,
+                ),
+                other => return Err(format!("frus fonts has no option `{other}`")),
+            },
+        }
+    }
+    Ok(Command::Fonts { locales })
 }
 
 /// `frus size <apk|web|desktop|file> [--compare old.json]`.

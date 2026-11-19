@@ -510,6 +510,9 @@ struct BoundaryData<Msg> {
     text_stops: Vec<crate::TextStop>,
     semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
     system_ui: Vec<(Rect, crate::SystemUiOverlayStyle)>,
+    /// The lifted primitives painted in the subtree and not put back yet, each with its place
+    /// **relative to the subtree's first primitive**.
+    lifted: Vec<(usize, Vec<Primitive>)>,
 }
 
 /// Lengths of the builder's collections on entering a boundary: the lower bounds of the
@@ -3103,6 +3106,12 @@ struct Builder<'a, Msg> {
     /// its widget — which may have a say over the bar.
     area: Option<WidgetId>,
     area_widget: Option<&'a dyn Widget<Msg>>,
+    /// Primitives painted **above** what is painted after them (milestone 821): the handles of
+    /// a selection area's touch selection, each with the scene length where it was painted. A
+    /// handle hangs below its text, over whatever comes next — the next text's highlight among
+    /// it — so it is set aside here and put back at the end of the area, or of the group
+    /// (layer, clip) it was painted in, whichever closes first. See [`Builder::split_scene`].
+    lifted: Vec<(usize, Vec<Primitive>)>,
     /// Whether the bar over a selection area's selection has been placed this frame: it goes
     /// against the first text the selection covers, and only that one.
     region_bar_placed: bool,
@@ -3376,6 +3385,26 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// Captures the output produced since `snap` (the collections' *tail slices*) into a
     /// [`BoundaryData`]. Returns `None` — hence **not cacheable** — when the subtree pushed an
     /// overlay or touched the modal focus scope (global state that cannot be captured here).
+    /// Puts back the lifted primitives painted since the scene was `start` long, on top of
+    /// everything painted since — the end of the selection area, or of the frame.
+    fn flush_lifted(&mut self, start: usize) {
+        let keep = self.lifted.iter().take_while(|(at, _)| *at < start).count();
+        for (_, prims) in self.lifted.split_off(keep) {
+            for p in prims {
+                self.scene.push_primitive(p);
+            }
+        }
+    }
+
+    /// The primitives painted since the scene was `start` long, taken out to be grouped (a
+    /// layer, a clip) or dropped: the lifted ones painted in that range go with them, last,
+    /// so a handle stays above the rest of its group and inside it — faded, clipped or turned
+    /// with it — and a hidden subtree's handles are hidden with it.
+    fn split_scene(&mut self, start: usize) -> Vec<Primitive> {
+        self.flush_lifted(start);
+        self.scene.split_off(start)
+    }
+
     fn capture_since(&self, snap: &Snapshot) -> Option<BoundaryData<Msg>> {
         // A hover card is decided as the walk passes it, from the pointer and the time: a
         // replayed subtree would leave it as it was (milestone 809).
@@ -3402,12 +3431,24 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             text_stops: self.text_stops[snap.text_stops..].to_vec(),
             semantics: self.semantics[snap.semantics..].to_vec(),
             system_ui: self.system_ui[snap.system_ui..].to_vec(),
+            lifted: self
+                .lifted
+                .iter()
+                .filter(|(at, _)| *at >= snap.scene)
+                .map(|(at, prims)| (at - snap.scene, prims.clone()))
+                .collect(),
         })
     }
 
     /// Replays a boundary from the cache: primitives already formed (clip/owner baked in) and
     /// interaction maps, appended as is.
     fn splice_boundary(&mut self, data: BoundaryData<Msg>) {
+        let base = self.scene.len();
+        self.lifted.extend(
+            data.lifted
+                .into_iter()
+                .map(|(at, prims)| (base + at, prims)),
+        );
         for p in data.prims {
             self.scene.push_primitive(p);
         }
@@ -3494,7 +3535,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
 
         // Everything the two screens painted, so the originals can be taken out and the
         // travelling copies laid on top.
-        let painted = self.scene.split_off(scene_base);
+        let painted = self.split_scene(scene_base);
         let mut hidden: std::collections::HashSet<u64> = std::collections::HashSet::new();
         for (_, _, widget, from_id, to_id) in &flights {
             for id in subtree_ids(*widget, *to_id) {
@@ -3713,7 +3754,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if barrier.paint {
             // The clip is baked into each primitive when it is pushed, so dropping the tail
             // leaves nothing for the next sibling to repair.
-            let _hidden = self.scene.split_off(base.scene);
+            let _hidden = self.split_scene(base.scene);
         }
         if barrier.semantics {
             self.semantics.truncate(base.semantics);
@@ -4008,7 +4049,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             if opacity < 0.999 {
                 let start = self.scene.primitives().len();
                 self.walk_node(widget, id, translation, clip, rects, index);
-                let group = self.scene.split_off(start);
+                let group = self.split_scene(start);
                 self.scene.push_primitive(Primitive::Layer {
                     primitives: group,
                     opacity,
@@ -4034,13 +4075,13 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             if opacity < 0.001 {
                 let start = self.scene.primitives().len();
                 self.walk_node(widget, id, translation, clip, rects, index);
-                let _unseen = self.scene.split_off(start);
+                let _unseen = self.split_scene(start);
                 return;
             }
             if opacity < 0.999 {
                 let start = self.scene.primitives().len();
                 self.walk_node(widget, id, translation, clip, rects, index);
-                let group = self.scene.split_off(start);
+                let group = self.split_scene(start);
                 self.scene.push_primitive(Primitive::Layer {
                     primitives: group,
                     opacity,
@@ -4073,7 +4114,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // would shave the edge off every blur.
             let start = self.scene.primitives().len();
             self.walk_node(widget, id, translation, clip, rects, index);
-            let group = self.scene.split_off(start);
+            let group = self.split_scene(start);
             let (group, filter, clip_box) = fold_filter(group, filter, clip);
             self.scene.push_primitive(Primitive::Layer {
                 primitives: group,
@@ -4103,7 +4144,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             let clip_box = clip.intersect(box_rect);
             let start = self.scene.primitives().len();
             self.walk_node(widget, id, translation, clip_box, rects, index);
-            let group = self.scene.split_off(start);
+            let group = self.split_scene(start);
             // A clip around a filter is **one** layer, not two. It matters most for a
             // backdrop: the reference's own advice is to wrap one in a clip to give it
             // its shape, and a backdrop pushed a level down would be filtering the
@@ -4172,7 +4213,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             self.walk_node(widget, id, translation, clip, rects, index);
             // Wraps the range of primitives — painted flat — in a layer transformed by `M`
             // (scale/rotation applied at compositing time).
-            let group = self.scene.split_off(p0);
+            let group = self.split_scene(p0);
             self.scene.push_primitive(Primitive::Layer {
                 primitives: group,
                 opacity: 1.0,
@@ -4251,7 +4292,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             return;
         };
         let (p0, base) = mark;
-        let group = self.scene.split_off(p0);
+        let group = self.split_scene(p0);
         self.scene.push_primitive(Primitive::Layer {
             primitives: group,
             opacity: 1.0,
@@ -4286,7 +4327,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let base = self.xform_base();
         let mut child_index = 0;
         self.walk(child, cid, translation, clip, child_rects, &mut child_index);
-        let group = self.scene.split_off(p0);
+        let group = self.split_scene(p0);
         self.scene.push_primitive(Primitive::Layer {
             primitives: group,
             opacity: 1.0,
@@ -4327,7 +4368,13 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let outer_area = outer
             .as_ref()
             .filter(|before| !before.widgets.text.selectable && self.theme.widgets.text.selectable)
-            .map(|_| (self.area.replace(id), self.area_widget.replace(widget)));
+            .map(|_| {
+                (
+                    self.area.replace(id),
+                    self.area_widget.replace(widget),
+                    self.scene.len(),
+                )
+            });
         // The scoped surface, held for this subtree exactly as the layout walk holds it —
         // a widget that paints from `MediaQuery::of()` must see the same description it
         // was measured against, or the two disagree by whatever the scope removed.
@@ -4360,7 +4407,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if let Some(parent) = outer_hover {
             self.hover_parent = parent;
         }
-        if let Some((area, area_widget)) = outer_area {
+        if let Some((area, area_widget, start)) = outer_area {
+            // Its handles over everything it painted (milestone 821).
+            self.flush_lifted(start);
             self.area = area;
             self.area_widget = area_widget;
         }
@@ -4432,6 +4481,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         widget.paint(draw_rect, status, &self.theme, &mut self.scene);
         // A widget may have tightened the clip (TextField, for one): it is restored here.
         self.scene.set_clip(clip);
+        self.lift_region_grips(widget, draw_rect, &status);
         // A part of the screen saying what the system bars over it should look like, kept
         // with its box: the shell asks which ones lie under each bar (#46).
         if let Some(style) = widget.system_ui_style() {
@@ -5606,7 +5656,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                             .about(centre)
                             // And then up or down to where the cylinder actually put it.
                             .then(Affine::translation(0.0, row.offset - flat));
-                        let group = self.scene.split_off(before);
+                        let group = self.split_scene(before);
                         self.scene.push_primitive(Primitive::Layer {
                             primitives: group,
                             opacity: row.opacity.clamp(0.0, 1.0),
@@ -6223,7 +6273,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// keep the reading order. A sticky header over its section (milestone 602), a pinned
     /// sliver header over the content scrolling under it (milestone 780).
     fn raise_segment(&mut self, start: &BarrierBase, mid: &BarrierBase) {
-        let mut primitives = self.scene.split_off(start.scene);
+        let mut primitives = self.split_scene(start.scene);
         after(&mut primitives, 0, mid.scene - start.scene);
         for primitive in primitives {
             self.scene.push_primitive(primitive);
@@ -6412,6 +6462,40 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         status
     }
 
+    /// The handles of a selection area's touch selection that hang from this text, painted
+    /// with its theme's handle colour and **lifted** (milestone 821): they hang below the text,
+    /// over whatever the walk paints next, and the next text's highlight used to cover them.
+    fn lift_region_grips(
+        &mut self,
+        widget: &dyn Widget<Msg>,
+        draw_rect: Rect,
+        status: &crate::interaction::Status,
+    ) {
+        let (start, end) = status.region_grips;
+        if start.is_none() && end.is_none() {
+            return;
+        }
+        let Some(text) = widget.selectable_text() else {
+            return;
+        };
+        let color = self
+            .theme
+            .widgets
+            .text_selection
+            .handle_color_in(&self.theme)
+            .fade(status.opacity);
+        let mark = self.scene.len();
+        let origin = Point::new(draw_rect.x, draw_rect.y);
+        for (index, is_start) in [(start, true), (end, false)] {
+            if let Some(index) = index {
+                let handle = text.handle(draw_rect.width, index, is_start);
+                crate::textinput::paint_handle(&mut self.scene, handle, origin, color, is_start);
+            }
+        }
+        let grips = self.scene.split_off(mark);
+        self.lifted.push((mark, grips));
+    }
+
     /// The generic focus ring (for widgets that do not draw their own).
     fn draw_focus_ring(
         &mut self,
@@ -6516,7 +6600,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let mark = (self.scene.primitives().len(), self.xform_base());
         self.render_screen(screen, id, bounds, (off_x, off_y), clip);
         let (p0, base) = mark;
-        let group = self.scene.split_off(p0);
+        let group = self.split_scene(p0);
         // A page not yet faded in is still a layer, at nothing: a hero on it is about to
         // fly from it, and the flight takes it out of here.
         let centre = Point::new(
@@ -7127,7 +7211,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 let p0 = self.scene.primitives().len();
                 let base = self.xform_base();
                 self.walk(content, oid, pos, window, &rects, &mut index);
-                let group = self.scene.split_off(p0);
+                let group = self.split_scene(p0);
                 self.scene.push_primitive(Primitive::Layer {
                     primitives: group,
                     opacity: opacity.max(0.0),
@@ -7493,6 +7577,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         text_stops: Vec::new(),
         area: None,
         area_widget: None,
+        lifted: Vec::new(),
         region_bar_placed: false,
         reorderables: Vec::new(),
         interactives: Vec::new(),
@@ -7539,6 +7624,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         &rects,
         &mut index,
     );
+    builder.flush_lifted(0);
 
     // Overlays (floating menus, modals, tooltips) above everything else. (Their walk restarts
     // from depth 0: roots as far as the inspector is concerned.)

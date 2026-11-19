@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 822 so far, each documenting the objective, the alternatives
+> record — one per step, 823 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -24,6 +24,33 @@ any release may break.
   build), `Application::messages_rebuild_view` (default `true`, so Elm-style applications are
   unchanged; `FrusApp` answers `false`), and `Driver::resize`, `arrive` and `costs` in
   `frus_shell::testing`.
+- **The selection highlight is pinned by pictures; a selection area's handles stay on top; web
+  restoration seen in a browser; the Apple look decided** (J821). Two new goldens: a
+  `Text::selectable()` with part of its line selected by a finger, handles included, and a
+  `SelectionArea` selection running from a plain text into a `RichText` of mixed weights and
+  sizes. Beside each, the highlight's pixels are checked by number: the theme's selection token
+  blended over the background in linear light. **Fixed**: a selection area's start handle,
+  hanging below its line, was half covered by the next text's highlight, painted later in the
+  walk; the walk now paints an area's handles itself and puts them back over everything the area
+  painted after them (inside any layer they were painted in, and through the paint cache). On
+  the web, a page restored from the tab's storage now says so in the console, as Android does.
+  `ROADMAP.md` records the Apple-look decision: the Apple-style widgets and adaptive controls
+  frus offers, what is welcome next, and what is out of scope.
+- **A release build carries only the glyphs the application can show** (J823, #20). `frus build`
+  in release cuts every font embedded with the new `frus::fonts::include_font!` (frus's seven
+  bundled faces embed themselves through it) down to Latin, the scripts of the application's
+  languages (`[package.metadata.frus.fonts] locales`, every `Locale::new("…")` in its code, and
+  the widgets' seven), the symbols the widgets draw, and every character written in its sources;
+  on every target, with nothing to install. The counter's fonts go from 3.3 MB to 607 kB:
+  its APK from 6.59 to 5.18 MB, its gzipped `.wasm` from 5.18 to 3.77 MB, its Windows program
+  from 16.0 to 13.2 MB. The manifest adds `ranges`, `text`, `features`, `keep` (fonts left
+  whole) and `subset = false`; `frus build --no-font-subset` keeps them whole for one build;
+  `frus fonts` prints what a release keeps of each font. Debug builds,
+  `frus run` and `cargo build` embed the fonts whole. The cut keeps what the shaper needs (the
+  substitutions an Arabic letter's forms reach, positioning, hinting, variable axes, every name),
+  through `skera`, the fontations project's subsetter, a new dependency of `frus-cli`. A character
+  no loaded font has is now named in the log, once, instead of only drawing a box. New crate:
+  `frus-macros`.
 - **A guide for every subsystem** (J819). Ten new pages in `docs/guide/`: components and state
   (hooks, `StatelessWidget`, `StatefulWidget`, sharing state, keys, restoration), the screen
   (size classes, safe area, keyboard, system bars, orientation, simulated devices), text and

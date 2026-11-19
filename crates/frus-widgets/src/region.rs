@@ -870,6 +870,77 @@ mod tests {
             assert_eq!(paths.iter().filter(|c| **c == primary).count(), 2);
         }
 
+        /// **The handles are painted over everything the area paints after them** (milestone
+        /// 821). The start handle hangs below its line, over the next text — and the next
+        /// text's highlight, painted later in the walk, used to cover its lower half. Seen in the
+        /// golden of a selection across two texts. Also held: a cached subtree replayed with the
+        /// same selection keeps its handles, on top.
+        #[test]
+        fn the_handles_are_painted_over_the_texts_after_them() {
+            let tree = SelectionArea::around(
+                Flex::column()
+                    .width(300.0)
+                    .child(
+                        Container::new()
+                            .repaint_boundary()
+                            .child(Flex::column().child(Text::new("first line").no_wrap())),
+                    )
+                    .child(Text::new("second line").no_wrap())
+                    .child(Text::new("third line").no_wrap()),
+            );
+            let mut rt = Runtime::default();
+            let theme = Theme::default();
+            let size = Size::new(300.0, 200.0);
+            let bare = build_ui::<()>(&tree, size, &rt, &theme);
+            let stops: Vec<TextStop> = bare.text_stops().to_vec();
+            assert_eq!(stops.len(), 3);
+            let lengths = [(stops[0].id, 10), (stops[1].id, 11), (stops[2].id, 10)];
+            let from = RegionPoint {
+                text: stops[0].id,
+                index: 2,
+            };
+            let to = RegionPoint {
+                text: stops[2].id,
+                index: 5,
+            };
+            rt.region =
+                Some(RegionSelection::new(stops[0].area, from, to, &lengths).with_bar(false));
+            if let Some(selection) = rt.region.as_mut() {
+                selection.handles = true;
+            }
+            let order = |ui: &crate::Ui<()>| {
+                let mut last_highlight = None;
+                let mut handles = Vec::new();
+                for (i, p) in ui.scene().primitives().iter().enumerate() {
+                    match p {
+                        crate::Primitive::Rect { color, .. } if *color == theme.selection => {
+                            last_highlight = Some(i);
+                        }
+                        crate::Primitive::Path {
+                            fill: Some(color), ..
+                        } if *color == theme.scheme.primary => handles.push(i),
+                        _ => {}
+                    }
+                }
+                (last_highlight.expect("a highlight"), handles)
+            };
+            for frame in ["painted", "replayed"] {
+                let ui = build_ui::<()>(&tree, size, &rt, &theme);
+                let (last_highlight, handles) = order(&ui);
+                assert_eq!(handles.len(), 2, "{frame}: both handles");
+                assert!(
+                    handles.iter().all(|&h| h > last_highlight),
+                    "{frame}: the handles {handles:?} come after the last highlight \
+                     {last_highlight}"
+                );
+            }
+            assert_eq!(
+                rt.paint_cache.borrow().last_frame_stats(),
+                (1, 0),
+                "the second frame replayed the boundary"
+            );
+        }
+
         /// **A rich paragraph takes part as a text does** (milestone 738): it is registered in
         /// its place among the area's texts, and a selection that passes through it highlights
         /// every one of its runs.

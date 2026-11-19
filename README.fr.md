@@ -194,7 +194,7 @@ On les régénère après un changement au lieu de les laisser se périmer.</sub
 | `frus doctor` | la chaîne d'outils, partie par partie : ce qui est prêt et ce qui manque ; `--fix` l'installe |
 | `frus devices` | cet ordinateur, les téléphones et émulateurs, les navigateurs, et les téléphones et tablettes simulés |
 | `frus run [-d <appareil>]` | construire, lancer, afficher le journal, avec le hot reload sur le bureau, le web et Android ; `--no-hot` pour redémarrer à la place |
-| `frus build <apk\|web\|desktop>` | ce que vous livrez, en release |
+| `frus build <apk\|web\|desktop>` | ce que vous livrez, en release, ses polices réduites aux caractères qu'elle peut afficher |
 | `frus emulators` | lister, lancer (`--launch`) et créer (`--create`) des émulateurs |
 | `frus clean` | supprimer les builds de l'application |
 | `frus test` | les tests : un résumé, chaque échec à sa place |

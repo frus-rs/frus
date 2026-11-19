@@ -87,5 +87,6 @@ because those elements have no position. See [Accessibility](accessibility.md).
 - **Threads.** Work that would run on a background thread elsewhere runs on the page's thread
   between frames; keep long computations short or split them.
 - **Size.** The application is downloaded on every first visit. `frus build web` builds for size;
-  `frus size web` says what the binary is made of, and dropping unused bundled fonts (see
-  [Text and fonts](text.md#the-fonts-frus-draws-with)) is the largest saving.
+  `frus size web` says what the binary is made of. The fonts are the largest part, and a release
+  `frus build web` cuts them to the characters the application can show (see
+  [Text and fonts](text.md#the-release-build-carries-only-the-characters-you-can-show)).
