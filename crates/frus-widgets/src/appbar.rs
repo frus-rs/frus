@@ -171,8 +171,7 @@ impl ToolbarPlan {
         // Every piece is as tall as it likes, up to the toolbar, and centred down it.
         let free = ChildConstraints::free().height(ChildAxis::AtMost(height));
 
-        // The leading, in its slot: the reference gives it a box of exactly the leading
-        // width, so an icon button's glyph sits 16 px from the edge and the title starts at
+        // The leading, in its slot: a box of exactly the leading width, so an icon button's glyph sits 16 px from the edge and the title starts at
         // 72 (milestone 611).
         let (leading_w, leading) = if self.has_leading {
             let constraints = match self.leading_width {
@@ -1178,8 +1177,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         let toolbar_height = height.unwrap_or(APP_BAR_HEIGHT);
         // The spacer that widens the leading's gap to `title_spacing`. With a leading, the
         // spacing sits between it and the title; without one, between the start edge and the
-        // title, as the reference's toolbar puts it. A centred title has no start to keep it
-        // from.
+        // title. A centred title has no start to keep it from.
         let spacer_w =
             if title.is_some() && (leading.is_some() || !center_title) && title_spacing > gap {
                 title_spacing - gap
@@ -1223,10 +1221,9 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         };
         // Unset, the actions follow the bar's icon theme; set, they part company with
         // the leading slot — a back arrow in the foreground colour beside actions in a
-        // muted one, which is the case the reference's `actionsIconTheme` exists for.
+        // muted one, which is the case a separate actions icon theme exists for.
         // Untold, the actions' glyphs are the scheme's `on_surface_variant`, a step quieter
-        // than the leading's `on_surface`: the reference's default `actionsIconTheme`
-        // (milestone 611).
+        // than the leading's `on_surface` (milestone 611).
         let actions_icons = actions_icon_theme.or(icon_theme).or(Some(IconTheme {
             color: Some(theme.scheme.on_surface_variant),
             size: None,
@@ -1245,17 +1242,14 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         }
         // The bar's title is the **heading** of the screen it names — the landmark a
         // screen reader's user jumps to — and now that is true of *every* title rather
-        // than only of one written as a string. The reference wraps the same way
-        // (`app_bar.dart:1071`), and milestone 401's `Semantics` wrapper is what lets a
-        // container state a role for a child it was handed already assembled.
+        // than only of one written as a string. Milestone 401's `Semantics` wrapper is what
+        // lets a container state a role for a child it was handed already assembled.
         //
         // **The type, handed down rather than applied.** The words are cut by the box they
         // are given instead of by arithmetic here: `soft_wrap: false` and an ellipsis, on a
-        // `Text` that never chose either, exactly as the reference sets them
-        // (`app_bar.dart:1084`). The box is the room the actions leave, the reference's
-        // `_AppBarTitleBox` (`app_bar.dart:1069`), worked out by the toolbar's layout.
-        // A bar with no title puts nothing here: the reference's toolbar is handed a `null`
-        // middle and builds none.
+        // `Text` that never chose either. The box is the room the actions leave, worked out
+        // by the toolbar's layout: a ceiling, so the title never pushes an action off the
+        // bar. A bar with no title puts nothing here and builds no middle at all.
         let has_title = title.is_some();
         if let Some(title) = title {
             let title: Box<dyn Widget<Msg>> = if exclude_header_semantics {
@@ -1325,7 +1319,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             row = row.child(piece, widget);
         }
 
-        // The toolbar proper: the row at the bar's height, the caller's or the reference's.
+        // The toolbar proper: the row at the bar's height, the caller's or the default 64.
         // The `bottom` sits under it inside the same background - it belongs to the bar,
         // rather than being something the application places beneath one. The bar is a
         // **fixed** height. It used to hug its content, which made the chrome a different

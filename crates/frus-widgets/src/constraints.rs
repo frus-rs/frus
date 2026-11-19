@@ -1089,8 +1089,8 @@ mod tests {
         red_box(root, Size::new(width, 600.0))
     }
 
-    /// **An intrinsic height is measured at the width it is shown at** (milestone 824), as
-    /// the reference's is: a paragraph that wraps onto several lines makes the box that
+    /// **An intrinsic height is measured at the width it is shown at** (milestone 824): a
+    /// paragraph that wraps onto several lines makes the box that
     /// tall. It used to be measured on one endless line, so the box was one line tall and
     /// the paragraph ran out of it.
     #[test]
@@ -1100,13 +1100,13 @@ mod tests {
         assert!(one_line.height > 1.0, "the box is drawn: {one_line:?}");
         assert!(
             wrapped.height > 2.5 * one_line.height,
-            "wrapped at 160 px, the paragraph is several lines, and so is the box:              {wrapped:?} against one line {one_line:?}"
+            "wrapped at 160 px, the paragraph is several lines, and so is the box: {wrapped:?} against one line {one_line:?}"
         );
     }
 
     /// **An intrinsic box is held to the room** (milestone 824): a content that would like
-    /// to be wider than its column is given the column, as the reference's `tighten` gives
-    /// it, instead of a box wider than the column.
+    /// to be wider than its column is given the column instead of a box wider than the
+    /// column.
     #[test]
     fn an_intrinsic_width_is_held_to_the_room() {
         let root = Flex::<()>::column().width(100.0).child(Intrinsic::width(

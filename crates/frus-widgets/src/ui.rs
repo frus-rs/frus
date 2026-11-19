@@ -5683,7 +5683,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 let (mut aw, mut free_x, mut fill_x) = back(transform.width, own.width, factor.0);
                 let (mut ah, mut free_y, mut fill_y) = back(transform.height, own.height, factor.1);
                 // An intrinsic box hands its child the extent it measured, rounded and held to
-                // the offer, on its own axis: the reference's `tighten` (milestone 824).
+                // the offer, on its own axis (milestone 824).
                 match widget.intrinsic() {
                     Some((crate::constraints::IntrinsicAxis::Width, _)) => {
                         (aw, free_x, fill_x) = (own.width.max(0.0), false, true);

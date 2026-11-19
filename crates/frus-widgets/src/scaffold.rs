@@ -1316,9 +1316,8 @@ impl<Msg: Clone + 'static> Scaffold<Msg> {
         // bar alone behind an app bar, and the bottom bar's declared height under the bottom
         // widgets. The shell's layout measures the app bar and the widgets below the body
         // before it lays the body out, and leaves their heights here; the body's description
-        // reads them, as the reference's `_BodyBuilder` reads `appBarHeight` and
-        // `bottomWidgetsHeight` (`scaffold.dart:969`). The body is laid out, fingerprinted and
-        // walked after the shell's layout has run, so all three see the same numbers.
+        // reads them: the top as far down as the bar reaches, the bottom as far up as the
+        // bottom widgets reach. The body is laid out, fingerprinted and walked after the shell's layout has run, so all three see the same numbers.
         let told: Rc<Cell<Option<TellBody>>> = Rc::new(Cell::new(None));
         let body_told = told.clone();
         let insets_top = insets.top;
@@ -2289,8 +2288,7 @@ mod tests {
     }
 
     /// **A body behind the app bar is told how tall the bar is** (milestone 824): the bar's
-    /// whole measured height, its status bar and its `bottom` included, as the reference's
-    /// `_BodyBuilder` tells it. A safe area in that body starts under the bar. It used to be
+    /// whole measured height, its status bar and its `bottom` included. A safe area in that body starts under the bar. It used to be
     /// told the status bar alone, because nothing had measured the bar when the body's
     /// description was decided, and a body padding itself by the bar's height had to know it.
     #[test]
