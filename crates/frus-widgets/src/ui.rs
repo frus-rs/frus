@@ -2315,6 +2315,9 @@ fn build_layout_scoped<'a, Msg>(
     let _scrolling = widget
         .scroll_behavior_override()
         .map(crate::ScrollConfiguration::install);
+    // And the values a `Scoped` puts in scope (milestone 825): a row a list builds below,
+    // or a deferred build, finds them.
+    let _values = crate::scoped::hold(widget, runtime);
     // A subtree that could not be composed until the theme was known (`ThemeBuilder`).
     // It has to happen **before** anything reads `children()`, and under the subtree's
     // own theme, which is why it sits after the swap above rather than at the call site.
@@ -4385,6 +4388,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let _scrolling = widget
             .scroll_behavior_override()
             .map(crate::ScrollConfiguration::install);
+        // The values a `Scoped` puts in scope (milestone 825): a list built on demand builds
+        // its rows in this walk, and a row's components find them.
+        let _values = crate::scoped::hold(widget, self.runtime);
         // A region the mouse enters and leaves: registered before its subtree, so that the
         // regions inside it name it as their parent (milestone 583).
         let outer_hover = match (widget.hover_region(), over) {
@@ -8037,6 +8043,8 @@ pub(crate) fn build_deferred_at<Msg>(
         let _scrolling = widget
             .scroll_behavior_override()
             .map(crate::ScrollConfiguration::install);
+        // The values a `Scoped` puts in scope, for the components below (milestone 825).
+        let _values = crate::scoped::hold(widget, runtime);
         widget.build_in(id, runtime, theme);
         for (index, child) in widget.children().iter().enumerate() {
             walk(

@@ -10,6 +10,7 @@ pub mod localizations;
 pub mod media_query;
 pub mod notifiers;
 pub mod responsive;
+pub mod scoped_models;
 pub mod stateful_widget;
 pub mod stateless_widget;
 pub mod stream_builder;
@@ -61,6 +62,13 @@ pub fn demos() -> Vec<Demo> {
             "State outside the widgets that tells whoever cares when it changed.",
             include_str!("notifiers.rs"),
             notifiers::example,
+        ),
+        Demo::new(
+            "scoped-models",
+            "Model & Scoped",
+            "State shared by a part of the screen, each instance with its own, read by the parts below.",
+            include_str!("scoped_models.rs"),
+            scoped_models::example,
         ),
         Demo::new(
             "future-builder",

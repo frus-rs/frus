@@ -166,9 +166,13 @@ let timer = Countdown { seconds: 30 }.into_widget();
 
 State lives as low as it can: in the component that shows it. When two parts of a screen need
 the same value, it moves up to their closest common parent, which hands it down as
-configuration. A value that many screens read (the signed-in user, a cart) is kept in a
-`ValueNotifier` given to whoever needs it; a component that reads it while it builds is built
-again when it changes.
+configuration. A value that many components read (the signed-in user, a cart) is a `Model` put in
+scope with `Scoped`, and the components below read it with `cx.watch`, `cx.select` or `cx.read`:
+a change builds again only the ones that read it. [Managing state](managing-state.md) is the
+whole story, and the place to start.
+
+A `ValueNotifier` is the older way, still there for what listens from outside the tree: a change
+to it builds the whole tree.
 
 ```rust
 use frus::{column, text, Button, ValueListenableBuilder, ValueNotifier, Widget};

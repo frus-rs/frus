@@ -3,8 +3,8 @@
 //! when there is something to ask. Both are `async`, so they run from an async handler.
 
 use frus::{
-    component, open_permission_settings, Align, Button, Column, Permission, PermissionStatus,
-    Row, Text, Variant, Widget,
+    component, open_permission_settings, Align, Button, Column, Permission, PermissionStatus, Row,
+    Text, Variant, Widget,
 };
 
 use crate::common::shared::{section, sections};

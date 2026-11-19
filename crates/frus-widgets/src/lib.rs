@@ -206,6 +206,7 @@ mod runtime;
 mod safearea;
 mod scaffold;
 mod scaffoldinfo;
+mod scoped;
 mod scroll;
 mod scrollbehavior;
 pub mod scrolloverlay;
@@ -637,6 +638,7 @@ pub use scaffold::{
     MINI_FAB_OFFSET_ADJUSTMENT,
 };
 pub use scaffoldinfo::{ScaffoldGuard, ScaffoldInfo, ScaffoldScope};
+pub use scoped::{Model, Scoped, ScopedValue};
 pub use scroll::{Axis, SingleChildScrollView};
 pub use scrollbehavior::{ScrollBehavior, ScrollBehaviorGuard, ScrollConfiguration};
 pub use scrolloverlay::{OverlayBuilder, ScrollOverlay};

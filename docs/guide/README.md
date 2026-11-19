@@ -12,6 +12,7 @@ the three ways to keep state, `async` work, and how to run on a phone. Then the 
 | Page | What it covers |
 | --- | --- |
 | [Components and state](components.md) | Function components and hooks, `StatelessWidget`, `StatefulWidget` and its lifecycle, sharing state, keys, `async` work, restoring state |
+| [Managing state](managing-state.md) | The one recommended pattern: state in the component, a `Model` in scope for a part of the screen or the whole application, what a change builds again, and when to use `Application`, hooks, notifiers or controllers |
 | [Laying out a screen](layout.md) | Rows and columns, sharing the room, boxes, stacks, wrapping, scrolling |
 | [The screen](screen.md) | Size and density, size classes, the safe area, the keyboard, the system bars, orientation, simulated devices |
 | [Text, colour and the theme](style.md) | The theme's colours and type, light and dark, changing one widget or every widget of a kind, design tokens of your own, Apple-style widgets |
