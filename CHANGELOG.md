@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 820 so far, each documenting the objective, the alternatives
+> record — one per step, 821 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The selection highlight is pinned by pictures; a selection area's handles stay on top; web
+  restoration seen in a browser; the Apple look decided** (J821). Two new goldens: a
+  `Text::selectable()` with part of its line selected by a finger, handles included, and a
+  `SelectionArea` selection running from a plain text into a `RichText` of mixed weights and
+  sizes. Beside each, the highlight's pixels are checked by number: the theme's selection token
+  blended over the background in linear light. **Fixed**: a selection area's start handle,
+  hanging below its line, was half covered by the next text's highlight, painted later in the
+  walk; the walk now paints an area's handles itself and puts them back over everything the area
+  painted after them (inside any layer they were painted in, and through the paint cache). On
+  the web, a page restored from the tab's storage now says so in the console, as Android does.
+  `ROADMAP.md` records the Apple-look decision: the Apple-style widgets and adaptive controls
+  frus offers, what is welcome next, and what is out of scope.
 - **A guide for every subsystem** (J819). Ten new pages in `docs/guide/`: components and state
   (hooks, `StatelessWidget`, `StatefulWidget`, sharing state, keys, restoration), the screen
   (size classes, safe area, keyboard, system bars, orientation, simulated devices), text and
