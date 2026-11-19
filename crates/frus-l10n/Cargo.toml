@@ -16,3 +16,9 @@ categories = ["internationalization", "localization"]
 # Fluent (Mozilla): the Rust i18n standard. Nothing to reinvent here.
 fluent-bundle = "0.16"
 unic-langid = "0.9"
+# `messages!`: the application's Fluent files checked, and typed, when it compiles.
+frus-macros = { path = "../frus-macros", version = "0.5" }
+
+[dev-dependencies]
+# The compile errors `messages!` gives, checked word for word (tests/compile_fail.rs).
+trybuild = "1"

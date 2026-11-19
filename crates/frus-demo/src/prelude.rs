@@ -24,15 +24,15 @@ pub(crate) use frus_widgets::{
     AnimatedIcons, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedSlide,
     AnimatedSwitcher, AppBar, Autocomplete, Axis, BarChart, BottomAppBar, BoxFit, Breadcrumb,
     BuildContext, Callback, Card, CarouselView, CellFn, Checkbox, Chip, CircleAvatar, Color,
-    ColorPicker, Component, ConstrainedBox, Container, Curve, CustomPaint, DataTable, DatePicker,
+    ColorPicker, ConstrainedBox, Container, Curve, CustomPaint, DataTable, DatePicker,
     DefaultTextStyleTransition, Dismissible, Divider, DragTarget, Draggable, DropdownButton,
     DropdownMenu, ErrorSummary, Expanded, ExpansionTile, FabLocation, FadeTransition, Flex,
-    FontWeight, GoRoute, GoRouter, GridView, Hero, Icon, IconButton, Icons, Image, ImageData,
-    ImageHandle, ImageIcon, Justify, Kanban, Kbd, LayoutBuilder, LicensePage, LineChart,
+    FontWeight, GoRouter, GridView, Hero, Icon, IconButton, Icons, Image, ImageData, ImageHandle,
+    ImageIcon, Justify, Kanban, Kbd, LayoutBuilder, LicensePage, LineChart,
     LinearProgressIndicator, ListView, ListWheel, MediaQuery, MenuAnchor, NavigationBar,
     NavigationDestination, OverlayPortal, PageView, Pagination, Placement, Positioned, RadioGroup,
-    Rating, Rect, RefreshIndicator, ReorderGrab, ReorderableList, RichText, SafeArea, Scaffold,
-    ScaleTransition, ScrollPhysics, ScrollPosition, ScrollTo, SegmentedButton,
+    Rating, Rect, RefreshIndicator, ReorderGrab, ReorderableList, RichText, Routes, SafeArea,
+    Scaffold, ScaleTransition, ScrollPhysics, ScrollPosition, ScrollTo, SegmentedButton,
     SingleChildScrollView, Size, SizeClass, SizedBox, Skeleton, SlideFrom, SlideTransition, Slider,
     SnackBar, SnackBarBehavior, Stack, State, StateContext, StatefulWidget, StatelessWidget,
     Stepper, Steps, Switch, TabBar, TabPageSelector, Table, TextField, TextSpan, TextStyle, Theme,
@@ -46,4 +46,5 @@ pub(crate) use crate::demo::Demo;
 pub(crate) use crate::l10n::*;
 pub(crate) use crate::model::*;
 pub(crate) use crate::parts::*;
+pub(crate) use crate::screens::Route;
 pub(crate) use crate::theme::*;

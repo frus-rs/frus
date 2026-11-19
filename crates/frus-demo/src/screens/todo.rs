@@ -45,7 +45,7 @@ impl HomeState {
     /// Asks for a screen to be pushed: what was open is shut first — half of the app bar's
     /// actions navigate, and a menu left open while its screen is left comes back the next
     /// time that screen is shown.
-    fn go(&self, cx: &StateContext<Self>, location: &'static str) -> Callback {
+    fn go(&self, cx: &StateContext<Self>, route: Route) -> Callback {
         let router = cx.router();
         let handle = cx.handle();
         on(move || {
@@ -53,7 +53,7 @@ impl HomeState {
                 s.drawer_open = false;
                 s.actions_open = false;
             });
-            router.push(location);
+            router.push(route.location());
         })
     }
 }
@@ -96,7 +96,7 @@ impl State for HomeState {
         let section_title = match demo.section() {
             1 => "Stats".to_string(),
             2 => "About".to_string(),
-            _ => tr(lang, "app-title"),
+            _ => text_in(lang).app_title(),
         };
         let act = |change: fn(&Demo)| {
             let demo = demo.clone();
@@ -132,8 +132,8 @@ impl State for HomeState {
                 let demo = demo.clone();
                 on(move || demo.set_density(demo.prefs().density - 0.1))
             })
-            .foldable_action("Log →", self.go(cx, "/journal"))
-            .foldable_action("Settings →", self.go(cx, "/settings"))
+            .foldable_action("Log →", self.go(cx, Route::Journal))
+            .foldable_action("Settings →", self.go(cx, Route::Settings))
             .foldable_action(
                 "Quick actions",
                 cx.callback(|s| s.sheet_open = !s.sheet_open),
@@ -197,9 +197,9 @@ impl State for HomeState {
             self.filter.index(),
             cx.handler(|s, i: usize| s.filter = Filter::from_index(i)),
         )
-        .segment(tr(lang, "filter-all"))
-        .segment(tr(lang, "filter-active"))
-        .segment(tr(lang, "filter-done"));
+        .segment(text_in(lang).filter_all())
+        .segment(text_in(lang).filter_active())
+        .segment(text_in(lang).filter_done());
         let mut filters = row![segmented].align(Align::Center).gap(8.0);
         // The active filter (other than "All") is shown as a removable chip.
         if self.filter != Filter::All {
@@ -300,8 +300,8 @@ impl State for HomeState {
             let label = if size.width >= 360.0 {
                 format!(
                     "{} · {} · {pct}%",
-                    tr_n(lang, "task-count", total),
-                    tr_n(lang, "remaining", active)
+                    text_in(lang).task_count(total),
+                    text_in(lang).remaining(active)
                 )
             } else {
                 format!("{active}·{done}")
@@ -631,8 +631,8 @@ impl HomeState {
                 .size(16.0),
             )
         };
-        let link = |label: &str, location: &'static str| {
-            button(label.to_string(), self.go(cx, location))
+        let link = |label: &str, route: Route| {
+            button(label.to_string(), self.go(cx, route))
                 .variant(Variant::Outlined)
                 .size(15.0)
         };
@@ -657,30 +657,30 @@ impl HomeState {
                         text(format!("{active} task(s) pending"))
                             .size(14.0)
                             .color(theme.muted),
-                        link("Settings →", "/settings"),
-                        link("Sign-up wizard →", "/wizard"),
-                        link("Editable grid →", "/grid"),
-                        link("Charts →", "/charts"),
-                        link("Data table →", "/data"),
-                        link("Guided tour →", "/tour"),
-                        link("Draggable sheet →", "/sheet"),
-                        link("Kanban board →", "/board"),
-                        link("External texture →", "/video"),
-                        link("Video player →", "/player"),
-                        link("Camera and scanner →", "/camera"),
-                        link("Native views →", "/native"),
-                        link("Web browser →", "/browser"),
-                        link("In-app purchases →", "/shop"),
-                        link("Overlays and panels →", "/overlays"),
-                        link("One-time code →", "/otp"),
-                        link("Fields and groups →", "/fields"),
-                        link("Empty state →", "/empty"),
-                        link("Swipe actions →", "/swipe"),
-                        link("Wheel picker →", "/wheel"),
-                        link("Display widgets →", "/display"),
-                        link("Conversation →", "/conversation"),
-                        link("Questionnaire →", "/questionnaire"),
-                        link("Apple-style widgets →", "/cupertino"),
+                        link("Settings →", Route::Settings),
+                        link("Sign-up wizard →", Route::Wizard),
+                        link("Editable grid →", Route::Grid),
+                        link("Charts →", Route::Charts),
+                        link("Data table →", Route::Data),
+                        link("Guided tour →", Route::Tour),
+                        link("Draggable sheet →", Route::Sheet),
+                        link("Kanban board →", Route::Board),
+                        link("External texture →", Route::Video),
+                        link("Video player →", Route::Player),
+                        link("Camera and scanner →", Route::Camera),
+                        link("Native views →", Route::Native),
+                        link("Web browser →", Route::Browser),
+                        link("In-app purchases →", Route::Shop),
+                        link("Overlays and panels →", Route::Overlays),
+                        link("One-time code →", Route::Otp),
+                        link("Fields and groups →", Route::Fields),
+                        link("Empty state →", Route::Empty),
+                        link("Swipe actions →", Route::Swipe),
+                        link("Wheel picker →", Route::Wheel),
+                        link("Display widgets →", Route::Display),
+                        link("Conversation →", Route::Conversation),
+                        link("Questionnaire →", Route::Questionnaire),
+                        link("Apple-style widgets →", Route::Cupertino),
                     ]
                     .gap(12.0),
                 ),
@@ -802,7 +802,7 @@ pub(crate) fn todo_row(
         // The shared element: the same avatar, tagged by the task's id, appears bigger
         // on the task's own screen and flies between the two.
         Container::new()
-            .on_click(on(move || router.push(format!("/task/{id}"))))
+            .on_click(on(move || router.push(Route::Task { id }.location())))
             .child(Hero::new(
                 id,
                 CircleAvatar::initials(todo.text.clone()).size(30.0)

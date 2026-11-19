@@ -64,56 +64,111 @@ pub(crate) use wizard::*;
 
 use crate::prelude::*;
 
-/// The demo's routes. Home is the root; every other screen is a sub-route of it, so going
-/// back from any of them lands on the task list — and a task's own screen is `/task/:id`.
+/// **Where each screen lives**: the demo's routes, typed. A location is made from a variant
+/// (`Route::Task { id: 3 }.location()` is `/task/3`), so a misspelt screen does not compile;
+/// and a location from outside (a deep link, the browser's address bar, `frusdemo://task/3`)
+/// still reads as one, through the router or [`Routes::from_location`].
+#[derive(Routes, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// The task list.
+    #[route("/")]
+    Home,
+    #[route("/settings")]
+    Settings,
+    #[route("/wizard")]
+    Wizard,
+    #[route("/grid")]
+    Grid,
+    #[route("/journal")]
+    Journal,
+    #[route("/charts")]
+    Charts,
+    #[route("/data")]
+    Data,
+    #[route("/board")]
+    Board,
+    #[route("/tour")]
+    Tour,
+    #[route("/sheet")]
+    Sheet,
+    #[route("/licenses")]
+    Licenses,
+    #[route("/video")]
+    Video,
+    #[route("/camera")]
+    Camera,
+    #[route("/native")]
+    Native,
+    #[route("/player")]
+    Player,
+    #[route("/browser")]
+    Browser,
+    #[route("/shop")]
+    Shop,
+    #[route("/overlays")]
+    Overlays,
+    #[route("/otp")]
+    Otp,
+    #[route("/fields")]
+    Fields,
+    #[route("/empty")]
+    Empty,
+    #[route("/swipe")]
+    Swipe,
+    #[route("/wheel")]
+    Wheel,
+    #[route("/display")]
+    Display,
+    #[route("/conversation")]
+    Conversation,
+    #[route("/questionnaire")]
+    Questionnaire,
+    #[route("/cupertino")]
+    Cupertino,
+    /// A task's own screen.
+    #[route("/task/:id")]
+    Task { id: u64 },
+}
+
+/// The demo's routes. Home is the root: every other pattern begins with it, so every other
+/// screen is a sub-route of it and going back from any of them lands on the task list.
 pub(crate) fn router(demo: Rc<Demo>) -> GoRouter {
-    let with_demo = |path: &str, build: fn(Rc<Demo>) -> Component| {
+    GoRouter::new(Route::go_routes(move |_, state, route| {
         let demo = demo.clone();
-        GoRoute::new(path.to_string(), move |_, _| build(demo.clone()))
-    };
-    let home = with_demo("/", |demo| HomePage { demo }.into_widget());
-    let task = {
-        let demo = demo.clone();
-        GoRoute::new("task/:id", move |_, state| {
-            TaskPage {
-                demo: demo.clone(),
-                id: state
-                    .param("id")
-                    .and_then(|id| id.parse().ok())
-                    .unwrap_or(0),
+        match route {
+            Route::Home => HomePage { demo }.into_widget(),
+            Route::Settings => SettingsPage { demo }.into_widget(),
+            Route::Wizard => WizardPage { demo }.into_widget(),
+            Route::Grid => GridPage { demo }.into_widget(),
+            Route::Journal => JournalPage.into_widget(),
+            Route::Charts => ChartsPage.into_widget(),
+            Route::Data => DataPage.into_widget(),
+            Route::Board => BoardPage.into_widget(),
+            Route::Tour => TourPage.into_widget(),
+            Route::Sheet => SheetPage.into_widget(),
+            Route::Licenses => LicensesPage.into_widget(),
+            Route::Video => VideoPage.into_widget(),
+            Route::Camera => CameraPage.into_widget(),
+            Route::Native => NativePage.into_widget(),
+            Route::Player => PlayerPage.into_widget(),
+            Route::Browser => BrowserPage.into_widget(),
+            Route::Shop => ShopPage.into_widget(),
+            Route::Overlays => OverlaysPage.into_widget(),
+            Route::Otp => OtpPage.into_widget(),
+            Route::Fields => FieldsPage.into_widget(),
+            Route::Empty => EmptyPage.into_widget(),
+            Route::Swipe => SwipePage.into_widget(),
+            Route::Wheel => WheelPage.into_widget(),
+            Route::Display => DisplayPage.into_widget(),
+            Route::Conversation => ConversationPage.into_widget(),
+            Route::Questionnaire => QuestionnairePage.into_widget(),
+            Route::Cupertino => CupertinoPage.into_widget(),
+            Route::Task { id } => TaskPage {
+                demo,
+                id,
                 entering: state.entering(),
             }
-            .into_widget()
-        })
-        .name("task")
-    };
-    GoRouter::new(vec![home.routes(vec![
-        with_demo("settings", |demo| SettingsPage { demo }.into_widget()),
-        with_demo("wizard", |demo| WizardPage { demo }.into_widget()),
-        with_demo("grid", |demo| GridPage { demo }.into_widget()),
-        GoRoute::new("journal", |_, _| JournalPage.into_widget()),
-        GoRoute::new("charts", |_, _| ChartsPage.into_widget()),
-        GoRoute::new("data", |_, _| DataPage.into_widget()),
-        GoRoute::new("board", |_, _| BoardPage.into_widget()),
-        GoRoute::new("tour", |_, _| TourPage.into_widget()),
-        GoRoute::new("sheet", |_, _| SheetPage.into_widget()),
-        GoRoute::new("licenses", |_, _| LicensesPage.into_widget()),
-        GoRoute::new("video", |_, _| VideoPage.into_widget()),
-        GoRoute::new("camera", |_, _| CameraPage.into_widget()),
-        GoRoute::new("native", |_, _| NativePage.into_widget()),
-        GoRoute::new("player", |_, _| PlayerPage.into_widget()),
-        GoRoute::new("browser", |_, _| BrowserPage.into_widget()),
-        GoRoute::new("shop", |_, _| ShopPage.into_widget()),
-        GoRoute::new("overlays", |_, _| OverlaysPage.into_widget()),
-        GoRoute::new("otp", |_, _| OtpPage.into_widget()),
-        GoRoute::new("fields", |_, _| FieldsPage.into_widget()),
-        GoRoute::new("empty", |_, _| EmptyPage.into_widget()),
-        GoRoute::new("swipe", |_, _| SwipePage.into_widget()),
-        GoRoute::new("wheel", |_, _| WheelPage.into_widget()),
-        GoRoute::new("display", |_, _| DisplayPage.into_widget()),
-        GoRoute::new("conversation", |_, _| ConversationPage.into_widget()),
-        GoRoute::new("questionnaire", |_, _| QuestionnairePage.into_widget()),
-        GoRoute::new("cupertino", |_, _| CupertinoPage.into_widget()),
-        task,
-    ])])
+            .into_widget(),
+        }
+    }))
 }

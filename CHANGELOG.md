@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 823 so far, each documenting the objective, the alternatives
+> record — one per step, 826 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Translations and routes the compiler checks** (J826, #223). `frus_l10n::messages!("../i18n")`
+  (also `frus::l10n::messages!`, new feature `l10n`) reads the application's `.ftl` files when it
+  compiles and writes one function per message, its arguments typed: a plural selector's argument
+  takes any number, any other a `&str`. A message missing from a locale (unless the locale is
+  listed in `partial = [..]`, where it falls back to the default one), a message only a
+  translation has, a translation using an argument the default locale does not give, and a Fluent
+  syntax error are compile errors naming the message, the locale and its file. `#[derive(Routes)]`
+  (`frus::Routes`) makes an enum the application's routes: `#[route("/task/:id")]` on each
+  variant, `.location()` to go there, `Route::from_location` for a deep link, `Route::go_routes`
+  for the router's routes nested by pattern, and `GoRouterState::route` on a page; a path
+  parameter that does not parse reaches the error page. String locations keep working. The demo
+  uses both. `Localizer::negotiate` is new.
 - **A component's own state builds that component, not the whole tree** (J822, #53). When
   `UseState::set`/`update` or `StateHandle::set_state` changes a component's state, that
   component is marked, and the next frame builds it again where it stands in the tree kept from

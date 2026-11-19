@@ -78,6 +78,9 @@ camera = ["frus-shell/camera"]
 # Reading QR codes from the camera: `Scanner`, `ScannerController` (milestone 798). Implies
 # `camera`; the reader (rxing, pure Rust) adds about 0.5 MB to a release build.
 scanner = ["frus-shell/scanner"]
+# The application's own words from Fluent files: `frus::l10n`, `frus::l10n::messages!` checking
+# them when the application compiles (milestone 826). Off by default: Fluent is compiled in.
+l10n = ["dep:frus-l10n"]
 # Every barcode format rxing reads (EAN, UPC, Code 128, Data Matrix, PDF417, Aztec...), not
 # only QR codes: about 1 MB more than `scanner`.
 scanner-all-formats = ["frus-shell/scanner-all-formats"]
@@ -122,6 +125,8 @@ frus-shell = { path = "../frus-shell", version = "0.5", default-features = false
 frus-widgets = { path = "../frus-widgets", version = "0.5", default-features = false }
 # Directly, for `frus::fonts`: registering the application's own faces.
 frus-text = { path = "../frus-text", version = "0.5", default-features = false }
+# `l10n` only: Fluent files, and `messages!`.
+frus-l10n = { path = "../frus-l10n", version = "0.5", optional = true }
 
 [dev-dependencies]
 # The guide's network examples decode JSON into their own types.

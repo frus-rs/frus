@@ -242,6 +242,16 @@ impl GoRouterState {
     pub fn extra<T: 'static>(&self) -> Option<Rc<T>> {
         self.extra.clone().and_then(|extra| extra.downcast().ok())
     }
+
+    /// This page's route as a typed one ([`Routes`]): the variant whose pattern answered, its
+    /// fields read from the location. `None` when the route that answered is not one of `R`'s.
+    pub fn route<R: Routes>(&self) -> Option<R> {
+        R::from_parts(
+            &self.path,
+            &|name| self.params.get(name).cloned(),
+            &|name| self.query.get(name).cloned(),
+        )
+    }
 }
 
 impl fmt::Debug for GoRouterState {
@@ -261,6 +271,9 @@ impl fmt::Debug for GoRouterState {
 // ---------------------------------------------------------------------------------------
 
 type RouteBuilder = Rc<dyn Fn(&BuildContext, &GoRouterState) -> Box<dyn Widget>>;
+/// Whether a route takes the parameters a location gave it: a typed route refuses a value its
+/// field cannot be parsed from, and the location then matches no route.
+type Accept = Rc<dyn Fn(&HashMap<String, String>) -> bool>;
 type Redirect = Rc<dyn Fn(&GoRouterState) -> Option<String>>;
 type ShellBuilder = Rc<dyn Fn(&BuildContext, &NavigationShell, Box<dyn Widget>) -> Box<dyn Widget>>;
 
@@ -280,6 +293,7 @@ pub struct GoRoute {
     redirect: Option<Redirect>,
     shell: Option<ShellParts>,
     transition: Option<PageTransitionsBuilder>,
+    accept: Option<Accept>,
 }
 
 struct ShellParts {
@@ -364,6 +378,7 @@ impl GoRoute {
             redirect: None,
             shell: None,
             transition: None,
+            accept: None,
         }
     }
 
@@ -429,6 +444,7 @@ impl GoRoute {
                 branch_transition: None,
             }),
             transition: None,
+            accept: None,
         }
     }
 
@@ -513,6 +529,226 @@ impl GoRoute {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Typed routes
+// ---------------------------------------------------------------------------------------
+
+/// An application's routes as an **enum**, one variant per route: what `#[derive(Routes)]`
+/// writes.
+///
+/// ```
+/// use frus_widgets::{text, GoRouter, Routes};
+///
+/// #[derive(Routes, Debug, PartialEq)]
+/// enum Route {
+///     #[route("/")]
+///     Home,
+///     #[route("/users/:id")]
+///     User { id: u64 },
+///     // `tab` is not in the pattern: a query parameter, which a location may leave out.
+///     #[route("/users/:id/posts")]
+///     Posts { id: u64, tab: Option<String> },
+/// }
+///
+/// // The location of a route, and the route of a location.
+/// assert_eq!(Route::User { id: 42 }.location(), "/users/42");
+/// let posts = Route::Posts { id: 7, tab: Some("new".into()) };
+/// assert_eq!(posts.location(), "/users/7/posts?tab=new");
+/// assert_eq!(Route::from_location("/users/7/posts?tab=new"), Some(posts));
+/// // `abc` is not a `u64`: no route.
+/// assert_eq!(Route::from_location("/users/abc"), None);
+///
+/// // The router's routes, nested by pattern: `/users/:id` is under `/`, so Back from a
+/// // user goes home. One builder, matching on the route: a route without a page does not
+/// // compile.
+/// let router = GoRouter::new(Route::go_routes(|_, _, route| match route {
+///     Route::Home => text("home"),
+///     Route::User { id } => text(format!("user {id}")),
+///     Route::Posts { id, tab } => text(format!("posts of {id}, {tab:?}")),
+/// }));
+/// router.go(Route::User { id: 42 }.location());
+/// assert_eq!(router.location(), "/users/42");
+/// assert!(router.can_pop());
+/// // A string location still works: a deep link, the browser's address bar.
+/// router.go("/users/42/posts");
+/// assert_eq!(router.state().and_then(|s| s.route()), Some(Route::Posts { id: 42, tab: None }));
+/// ```
+///
+/// A `:parameter` of a pattern is the field of that name, parsed with `FromStr` and written
+/// with `Display`. Any other field is a **query parameter**, an `Option`: `None` when the
+/// location does not give it or gives something that does not parse. A location whose path
+/// parameter does not parse (`/users/abc` for a `u64`) answers to no route, so the router shows
+/// its error page, as it does for a location that does not exist.
+///
+/// The derive checks each pattern when the application compiles: it starts with `/`, every one
+/// of its parameters is a field, and no two patterns answer the same locations. The generated
+/// code names the crate `::frus`, or `::frus_widgets` in a package that depends on
+/// `frus-widgets`; `#[routes(crate = "path")]` on the enum names another.
+pub trait Routes: Sized + 'static {
+    /// Every route's pattern, in the order the enum declares them: `/users/:id`.
+    const PATTERNS: &'static [&'static str];
+
+    /// This route's pattern.
+    fn pattern(&self) -> &'static str;
+
+    /// The values of this route's path parameters, as its location writes them.
+    fn path_params(&self) -> Vec<(&'static str, String)>;
+
+    /// The query parameters this route has a value for, as its location writes them.
+    fn query_params(&self) -> Vec<(&'static str, String)>;
+
+    /// The route a pattern answered with these parameters, if its fields parse: what
+    /// [`GoRouterState::route`] and [`Routes::from_location`] are made of.
+    #[doc(hidden)]
+    fn from_parts(
+        pattern: &str,
+        param: &dyn Fn(&str) -> Option<String>,
+        query: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Self>;
+
+    /// The location of this route, its parameters encoded: what [`GoRouter::go`] and
+    /// [`GoRouter::push`] take.
+    fn location(&self) -> String {
+        let values = self.path_params();
+        let mut path = String::new();
+        for segment in self.pattern().split('/').filter(|s| !s.is_empty()) {
+            path.push('/');
+            match segment.strip_prefix(':') {
+                Some(param) => {
+                    if let Some((_, value)) = values.iter().find(|(key, _)| *key == param) {
+                        path.push_str(&encode(value));
+                    }
+                }
+                None => path.push_str(segment),
+            }
+        }
+        if path.is_empty() {
+            path.push('/');
+        }
+        let query = self.query_params();
+        if !query.is_empty() {
+            let pairs: Vec<String> = query
+                .iter()
+                .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
+                .collect();
+            path.push('?');
+            path.push_str(&pairs.join("&"));
+        }
+        path
+    }
+
+    /// The route a location is: the first pattern, in declaration order, that answers its path
+    /// and whose fields parse. A deep link or an address typed in a browser reads this way.
+    fn from_location(location: &str) -> Option<Self> {
+        let parts = split_location(location);
+        let query: HashMap<String, String> = parts.query.into_iter().collect();
+        for pattern in Self::PATTERNS {
+            let segments = pattern_segments(pattern);
+            let mut params = HashMap::new();
+            if consume(&segments, &parts.segments, &mut params) != Some(parts.segments.len()) {
+                continue;
+            }
+            let found = Self::from_parts(pattern, &|name| params.get(name).cloned(), &|name| {
+                query.get(name).cloned()
+            });
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+
+    /// The [`GoRoute`]s of every variant, for [`GoRouter::new`], each page built by `build`
+    /// from the route it is.
+    ///
+    /// They are nested by pattern: a route goes under the longest other pattern its own begins
+    /// with (`/users/:id/posts` under `/users/:id`, that under `/`), so a location has the
+    /// routes it is made of beneath it, to go back to.
+    fn go_routes<W: Widget + 'static>(
+        build: impl Fn(&BuildContext, &GoRouterState, Self) -> W + 'static,
+    ) -> Vec<GoRoute> {
+        let build: TypedBuilder<Self> =
+            Rc::new(move |cx, state, route| Box::new(build(cx, state, route)));
+        typed_tree::<Self>(&build)
+    }
+}
+
+/// The segments of a pattern, as the router keeps them.
+fn pattern_segments(pattern: &str) -> Vec<Segment> {
+    pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| match segment {
+            "*" => Segment::Splat,
+            other => match other.strip_prefix(':') {
+                Some(name) => Segment::Param(name.to_string()),
+                None => Segment::Literal(other.to_string()),
+            },
+        })
+        .collect()
+}
+
+type TypedBuilder<R> = Rc<dyn Fn(&BuildContext, &GoRouterState, R) -> Box<dyn Widget>>;
+
+/// The route tree of `R`: each pattern under the longest other one that is a prefix of it.
+fn typed_tree<R: Routes>(build: &TypedBuilder<R>) -> Vec<GoRoute> {
+    let parts: Vec<Vec<&str>> = R::PATTERNS
+        .iter()
+        .map(|p| p.split('/').filter(|s| !s.is_empty()).collect())
+        .collect();
+    let parents: Vec<Option<usize>> = (0..parts.len())
+        .map(|index| {
+            (0..parts.len())
+                .filter(|&other| {
+                    other != index
+                        && parts[other].len() < parts[index].len()
+                        && parts[index].starts_with(&parts[other])
+                })
+                .max_by_key(|&other| parts[other].len())
+        })
+        .collect();
+    (0..parts.len())
+        .filter(|&index| parents[index].is_none())
+        .map(|index| typed_route::<R>(index, &parts, &parents, build))
+        .collect()
+}
+
+/// The route of `R::PATTERNS[index]`, with the routes under it.
+fn typed_route<R: Routes>(
+    index: usize,
+    parts: &[Vec<&str>],
+    parents: &[Option<usize>],
+    build: &TypedBuilder<R>,
+) -> GoRoute {
+    let pattern = R::PATTERNS[index];
+    let path = match parents[index] {
+        None => pattern.to_string(),
+        Some(parent) => parts[index][parts[parent].len()..].join("/"),
+    };
+    let page = build.clone();
+    let mut route = GoRoute::new(path, move |cx, state| {
+        match R::from_parts(pattern, &|name| state.params.get(name).cloned(), &|name| {
+            state.query.get(name).cloned()
+        }) {
+            Some(route) => page(cx, state, route),
+            // Not reached: the route refuses parameters its fields cannot be read from.
+            None => Box::new(crate::SizedBox::empty()),
+        }
+    });
+    route.accept = Some(Rc::new(move |params: &HashMap<String, String>| {
+        R::from_parts(pattern, &|name| params.get(name).cloned(), &|_| None).is_some()
+    }));
+    let children: Vec<GoRoute> = (0..parts.len())
+        .filter(|&child| parents[child] == Some(index))
+        .map(|child| typed_route::<R>(child, parts, parents, build))
+        .collect();
+    if children.is_empty() {
+        route
+    } else {
+        route.routes(children)
+    }
+}
+
 enum Segment {
     Literal(String),
     Param(String),
@@ -532,6 +768,8 @@ struct Node {
     spec: Option<Rc<ShellSpec>>,
     /// The route's own transition, if it has one.
     transition: Option<PageTransitionsBuilder>,
+    /// Whether it takes the parameters of a location, when it may refuse them.
+    accept: Option<Accept>,
 }
 
 /// A shell, as the router keeps it.
@@ -599,6 +837,7 @@ fn build_node(
             member: None,
             spec: Some(spec),
             transition: route.transition,
+            accept: None,
         });
     }
     let full_path = match parent {
@@ -647,6 +886,7 @@ fn build_node(
         member,
         spec: None,
         transition: route.transition,
+        accept: route.accept,
     });
     if let Some(name) = route.name {
         let clash = building.names.insert(name.clone(), node.clone());
@@ -706,6 +946,9 @@ fn match_nodes(
         let Some(used) = consume(&node.segments, input, &mut found) else {
             continue;
         };
+        if node.accept.as_ref().is_some_and(|accept| !accept(&found)) {
+            continue;
+        }
         if used == input.len() {
             *params = found;
             return Some(vec![node.clone()]);
