@@ -155,6 +155,16 @@ intrinsic height test reads one line at both widths, which the first run of this
 showed (20 px at 160 and at 2000) while the measured box still offered its content a loose
 width.
 
-Checks: `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings`
-clean; `frus-widgets` unit tests 2535 passed; `frus-widgets` doc tests 388 passed (115
-ignored). RESULTS
+Checks, after merging master: `cargo fmt --all --check` and
+`cargo clippy --workspace --all-targets -- -D warnings` clean; `frus-widgets` unit tests 2542
+passed; doc tests 389 passed (115 ignored); `frus-demo` tests passed. The eight example
+projects build their tests (widgets, authentication, counter, forms, hello_world, http,
+navigation, websocket) and the gallery builds for `wasm32-unknown-unknown`.
+
+**Goldens** (`frus-test`, every target, under WSL): all pass but one, which changed on
+purpose. `m3_selection_mode` is the selection-mode bar of milestone 786 (a close button, "2
+selected" and a delete action) at the top of a column. Its delete action was drawn right after
+the title: that bar is laid out with no surface described, and the old row, given no width it
+could trust, filled the room but left its spring nothing to spread. The bar now places its
+actions at its end, as every other bar does; 408 pixels changed, all in the delete glyph's old
+and new places (x 203 to 342, y 23 to 40). The golden was regenerated after looking at both.
