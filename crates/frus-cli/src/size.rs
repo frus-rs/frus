@@ -26,7 +26,7 @@
 //! counted as `[unattributed]`. A font is found by its bytes: every file of frus's bundled fonts
 //! and of the application's `assets/` that is inside the binary whole is listed with its size.
 //!
-//! The tool depends on nothing, so the three formats are read here, as far as sizes go.
+//! The three formats are read here, as far as sizes go: none of them needs a dependency.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -169,6 +169,8 @@ fn build_with_symbols(project: &Project, target: Target) -> Result<PathBuf, Stri
         target.platform(),
         dir.display()
     );
+    // Measured as it ships: with its fonts cut, as `frus build` cuts them (milestone 823).
+    crate::fonts::for_build(project, Mode::Release, true);
     // A bundle carries the APK's library, an installer the desktop's program.
     match target {
         Target::Desktop | Target::Installer => build_desktop(project, &dir),
@@ -965,6 +967,21 @@ fn asset_files(root: Option<&Path>) -> Vec<(String, PathBuf)> {
     };
     if let Some(fonts) = frus_text_assets(root) {
         list_files(&fonts, "frus-text/assets", &mut found);
+    }
+    // The fonts as a release build carries them, cut down (milestone 823): named without the
+    // hash that keeps two of one name apart.
+    if let Some(dir) = std::env::var_os(crate::fonts::SUBSET_DIR_VAR) {
+        let mut cut = Vec::new();
+        list_files(Path::new(&dir), "fonts (cut)", &mut cut);
+        for (name, path) in cut {
+            let shown = match name.split_once('/') {
+                Some((folder, file)) => {
+                    format!("{folder}/{}", file.split_once('-').map_or(file, |(_, f)| f))
+                }
+                None => name,
+            };
+            found.push((shown, path));
+        }
     }
     list_files(&root.join("assets"), "assets", &mut found);
     found

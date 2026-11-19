@@ -788,11 +788,16 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Platforms:** All
 - **Status:** partial
 - **What you hit:** The bundled faces are about 3.4 MB, roughly 40% of a minimal application.
-  The `bundled-*` features drop whole faces, and the guide documents subsetting them by hand,
-  but no frus command subsets them for you.
-- **Workaround:** Turn off the faces you do not need, or follow the subsetting recipe in the
-  getting-started guide.
+  A release `frus build` now cuts them, and the application's own fonts embedded with
+  `include_font!`, to the characters the application can show: Latin, the scripts of its
+  languages, the widgets' symbols and the text of its sources. What is left: a character
+  outside those is drawn as a box (the log names it), until its language or range is declared;
+  a build made with `cargo` by hand, or `frus run`, embeds the fonts whole; a font embedded
+  with `include_bytes!` is not cut; the sizes on macOS were not measured.
+- **Workaround:** Declare the languages and ranges the application shows in
+  `[package.metadata.frus.fonts]`; turn off the faces you do not need.
 - **Evidence:** [#20](https://github.com/frus-rs/frus/issues/20),
   [docs/milestone-292.md](docs/milestone-292.md),
   [docs/milestone-567.md](docs/milestone-567.md),
-  [docs/getting-started.md](docs/getting-started.md)
+  [docs/milestone-823.md](docs/milestone-823.md),
+  [docs/guide/text.md](docs/guide/text.md)

@@ -36,6 +36,9 @@ dictionary-line-breaks = ["cosmic-text/dictionary-line-breaks"]
 
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.5" }
+# `include_font!`: the bundled faces are embedded through it, so `frus build` can cut them down
+# to the characters an application shows (milestone 823).
+frus-macros = { path = "../frus-macros", version = "0.5" }
 cosmic-text.workspace = true
 # A family name that matches no loaded face is resolved, and the console is told so.
 log.workspace = true
