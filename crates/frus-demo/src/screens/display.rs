@@ -224,14 +224,11 @@ impl State for DisplayState {
             .body(page);
         Scaffold::new()
             .background(theme.background)
-            .app_bar(
-                AppBar::new()
-                    .title(Text::new("Display widgets"))
-                    .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
-                        router.pop();
-                    })))
-                    .build(),
-            )
+            .app_bar(AppBar::new().title(Text::new("Display widgets")).leading(
+                IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
+                    router.pop();
+                })),
+            ))
             .body(shell)
             .build()
     }

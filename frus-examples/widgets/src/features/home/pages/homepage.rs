@@ -32,7 +32,7 @@ impl StatelessWidget for HomePage {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(AppBar::new().title(Text::new("frus widgets")).build())
+            .app_bar(AppBar::new().title(Text::new("frus widgets")))
             .body(
                 SingleChildScrollView::new()
                     .padding_each(8.0, 0.0, 24.0, 0.0)

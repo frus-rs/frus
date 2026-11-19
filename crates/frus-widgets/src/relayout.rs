@@ -367,6 +367,10 @@ fn hash_node<Msg, H: Hasher>(
             across.to_bits().hash(hasher);
             down.to_bits().hash(hasher);
         }
+        // An intrinsic box rounds to its step (milestone 824).
+        if let Some((_, step)) = widget.intrinsic() {
+            step.map(f32::to_bits).hash(hasher);
+        }
         // A box following its child's size is a different geometry at every step of the
         // move, and the same one once it has arrived (milestone 594).
         if widget.animated_size().is_some() {

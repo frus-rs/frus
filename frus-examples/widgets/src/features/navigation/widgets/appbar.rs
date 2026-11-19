@@ -35,8 +35,7 @@ pub fn example() -> Box<dyn Widget> {
                     .label("Search")
                     .on_press(said("Search")),
             )
-            .action(Badge::new("3"))
-            .build();
+            .action(Badge::new("3"));
 
         // A centred title, and custom colours and depth.
         let centred = AppBar::new()
@@ -50,8 +49,7 @@ pub fn example() -> Box<dyn Widget> {
                     .label("Back")
                     .on_press(said("Back")),
             )
-            .title(Text::new("Profile"))
-            .build();
+            .title(Text::new("Profile"));
 
         // Foldable actions are text buttons shown inline while they fit, and moved into
         // the `⋯` menu when the bar is too narrow. The menu's open state is the app's.
@@ -64,11 +62,9 @@ pub fn example() -> Box<dyn Widget> {
                 open.set(false);
             })
         };
+        // The bar folds against the width it is given: here, the 320 px frame.
         let folding = AppBar::new()
             .primary(false)
-            // The folding budget is the bar's width; a bar outside a full-width
-            // screen says how wide it is.
-            .width(320.0)
             .title(Text::new("Report"))
             .overflow(
                 overflow_open.get(),
@@ -77,8 +73,7 @@ pub fn example() -> Box<dyn Widget> {
             .foldable_action("Export", close_after("Export"))
             .foldable_action("Share", close_after("Share"))
             .foldable_action("Print", close_after("Print"))
-            .foldable_action("Archive", close_after("Archive"))
-            .build();
+            .foldable_action("Archive", close_after("Archive"));
 
         // `bottom` puts a widget under the bar, inside its background — usually tabs.
         let pick = tab.clone();
@@ -92,8 +87,7 @@ pub fn example() -> Box<dyn Widget> {
         let with_bottom = AppBar::new()
             .primary(false)
             .title(Text::new("Messages"))
-            .bottom(tabs)
-            .build();
+            .bottom(tabs);
 
         sections(vec![
             Box::new(section("Leading, title and actions", framed(standard))),
@@ -105,7 +99,7 @@ pub fn example() -> Box<dyn Widget> {
     }))
 }
 
-/// A bar is as wide as its screen; here the "screen" is a 320-pixel frame.
-fn framed(bar: Box<dyn Widget>) -> Container {
+/// A bar is as wide as the room it is given; here a 320-pixel frame.
+fn framed(bar: impl Widget + 'static) -> Container {
     Container::new().width(320.0).child(bar)
 }

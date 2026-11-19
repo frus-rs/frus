@@ -101,16 +101,14 @@ fn medium_and_large_app_bars_match_golden() {
                     .width(360.0)
                     .primary(false)
                     .automatically_imply_leading(false)
-                    .title(Text::new("Medium"))
-                    .build(),
+                    .title(Text::new("Medium")),
             )
             .child(
                 AppBar::<()>::large()
                     .width(360.0)
                     .primary(false)
                     .automatically_imply_leading(false)
-                    .title(Text::new("Large"))
-                    .build(),
+                    .title(Text::new("Large")),
             ),
     );
     shot(&root, 360, 290, "m3_app_bars");

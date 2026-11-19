@@ -37,7 +37,7 @@ impl StatelessWidget for ReviewsPage {
 
         Scaffold::new()
             .background(cx.theme().background)
-            .app_bar(page_app_bar(cx, title).build())
+            .app_bar(page_app_bar(cx, title))
             .body(body)
             .build()
     }

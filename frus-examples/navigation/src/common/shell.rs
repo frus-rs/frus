@@ -14,10 +14,6 @@ use frus::{
 use crate::common::cart::Cart;
 use crate::common::routes::{CART, CHECKOUT, HOME, QUERY, SEARCH, SEARCH_NAME};
 
-/// The widths of a navigation rail, plain and extended (with its labels beside the icons).
-const RAIL_WIDTH: f32 = 80.0;
-const EXTENDED_RAIL_WIDTH: f32 = 256.0;
-
 /// The three places the bottom bar (or the rail) switches between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -76,21 +72,18 @@ pub fn section_scaffold(
     // the navigation where it is told.
     let surface = MediaQuery::of();
     let class = surface.size_class();
-    let (placement, rail_width) = match class {
-        SizeClass::Compact => (NavPlacement::Bottom, 0.0),
-        SizeClass::Medium => (NavPlacement::Rail, RAIL_WIDTH),
-        SizeClass::Expanded => (NavPlacement::Rail, EXTENDED_RAIL_WIDTH),
+    // The app bar beside a rail folds against the width the rail leaves it, by itself.
+    let placement = match class {
+        SizeClass::Compact => NavPlacement::Bottom,
+        SizeClass::Medium | SizeClass::Expanded => NavPlacement::Rail,
     };
-    // An app bar takes the whole window's width unless told otherwise; beside a rail it
-    // gets what the rail leaves.
-    let app_bar = app_bar.width((surface.size.width - surface.padding.left - rail_width).max(0.0));
 
     let count = cart.count();
     let mut scaffold = Scaffold::new()
         .background(cx.theme().background)
         // No `leading`: the bar grows the button that opens the drawer by itself, because
         // the scaffold has one (`automatically_imply_leading`, on by default).
-        .app_bar(app_bar.build())
+        .app_bar(app_bar)
         .body(body)
         .drawer(
             // The panel scrolls: a short window has less room than the links need.

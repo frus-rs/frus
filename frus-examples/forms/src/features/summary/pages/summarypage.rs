@@ -117,7 +117,7 @@ impl StatelessWidget for SummaryPage {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(AppBar::new().title(Text::new("Account created")).build())
+            .app_bar(AppBar::new().title(Text::new("Account created")))
             .body(centered_page(content))
             .build()
     }

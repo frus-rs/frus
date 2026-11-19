@@ -131,14 +131,11 @@ impl State for NativeState {
         let router = cx.router();
         let page = Scaffold::new()
             .background(theme.background)
-            .app_bar(
-                AppBar::new()
-                    .title(Text::new("Native views"))
-                    .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
-                        router.pop();
-                    })))
-                    .build(),
-            )
+            .app_bar(AppBar::new().title(Text::new("Native views")).leading(
+                IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
+                    router.pop();
+                })),
+            ))
             .body(body)
             .build();
         Box::new(

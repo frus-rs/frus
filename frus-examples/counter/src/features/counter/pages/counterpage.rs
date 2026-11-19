@@ -94,14 +94,11 @@ impl State for CounterState {
             .child(step_picker)
             .child(controls);
 
-        let app_bar = AppBar::new()
-            .title(Text::new("Counter"))
-            .action(
-                IconButton::new(Icons::RESTART_ALT)
-                    .label("Reset")
-                    .on_press(cx.callback(CounterState::reset)),
-            )
-            .build();
+        let app_bar = AppBar::new().title(Text::new("Counter")).action(
+            IconButton::new(Icons::RESTART_ALT)
+                .label("Reset")
+                .on_press(cx.callback(CounterState::reset)),
+        );
 
         Scaffold::new()
             .background(cx.theme().background)

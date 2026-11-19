@@ -59,7 +59,7 @@ impl StatelessWidget for SizePage {
             .map_or("Pick a size".to_string(), |p| format!("Size of {}", p.name));
         Scaffold::new()
             .background(cx.theme().background)
-            .app_bar(page_app_bar(cx, title).build())
+            .app_bar(page_app_bar(cx, title))
             .body(body)
             .build()
     }

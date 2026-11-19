@@ -29,7 +29,7 @@ impl StatelessWidget for NotFoundPage {
 
         Scaffold::new()
             .background(cx.theme().background)
-            .app_bar(page_app_bar(cx, "Page not found").build())
+            .app_bar(page_app_bar(cx, "Page not found"))
             .body(empty_state(
                 cx,
                 Icons::LINK_OFF,

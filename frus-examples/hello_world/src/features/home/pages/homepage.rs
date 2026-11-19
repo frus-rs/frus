@@ -34,7 +34,7 @@ impl StatelessWidget for HomePage {
         Scaffold::new()
             // Unset, a scaffold is transparent: the page paints the theme's background.
             .background(cx.theme().background)
-            .app_bar(AppBar::new().title(Text::new("hello_world")).build())
+            .app_bar(AppBar::new().title(Text::new("hello_world")))
             .body(Center::new(greeting))
             .build()
     }

@@ -528,7 +528,7 @@ fn build_bar<Msg: Clone + 'static>(mut p: BarParts<Msg>) -> Box<dyn Widget<Msg>>
             bar = bar.action(action);
         }
         Box::new(BackScope {
-            children: vec![bar.build()],
+            children: vec![Box::new(bar)],
             on_back: p.on_close.clone(),
         }) as Box<dyn Widget<Msg>>
     }))

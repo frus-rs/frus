@@ -93,7 +93,7 @@ impl State for DemoState {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(AppBar::new().title(Text::new(demo.name)).build())
+            .app_bar(AppBar::new().title(Text::new(demo.name)))
             .body(body)
             .build()
     }
