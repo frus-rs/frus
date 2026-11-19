@@ -1311,6 +1311,17 @@ impl<Msg: Clone + 'static> Scaffold<Msg> {
         };
         let (body_left, body_right) = (insets.left, insets.right);
         let body_keyboard = resize_to_avoid_bottom_inset;
+        // **What a body that runs under something is told, measured** (milestone 824). The
+        // numbers above are what the shell can say before anything is laid out: the status
+        // bar alone behind an app bar, and the bottom bar's declared height under the bottom
+        // widgets. The shell's layout measures the app bar and the widgets below the body
+        // before it lays the body out, and leaves their heights here; the body's description
+        // reads them: the top as far down as the bar reaches, the bottom as far up as the
+        // bottom widgets reach. The body is laid out, fingerprinted and walked after the shell's layout has run, so all three see the same numbers.
+        let told: Rc<Cell<Option<TellBody>>> = Rc::new(Cell::new(None));
+        let body_told = told.clone();
+        let insets_top = insets.top;
+        let insets_bottom = insets.bottom;
         // **Exactly the room the bars leave**, as the reference's body is given: an
         // `Expanded`, whose basis is nothing, rather than a column that grows from the size
         // of its content — a body taller than the room made that column taller than the
@@ -1322,6 +1333,17 @@ impl<Msg: Clone + 'static> Scaffold<Msg> {
                 mq.padding.left = body_left;
                 mq.padding.right = body_right;
                 mq.padding.bottom = body_bottom;
+                if let Some(measured) = body_told.get() {
+                    // Behind the bar: the bar's whole height, its status bar included.
+                    if let Some(bar) = measured.app_bar {
+                        mq.padding.top = insets_top.max(bar);
+                    }
+                    // Under the bottom widgets: as far as they reach, the footer included,
+                    // less what the keyboard, which has already shortened the body, covers.
+                    if let Some(below) = measured.bottom_widgets {
+                        mq.padding.bottom = (insets_bottom.max(below) - keyboard_clear).max(0.0);
+                    }
+                }
                 // `removeBottomInset: _resizeToAvoidBottomInset` — the column has already
                 // shortened the body for the keyboard, so there is nothing left to avoid.
                 if body_keyboard {
@@ -1505,6 +1527,7 @@ impl<Msg: Clone + 'static> Scaffold<Msg> {
             snack_bar_behavior,
             hosts_snack_bar: hosted,
             notch,
+            told,
         };
         let mut shell = CustomMultiChildLayout::new(move |size, layout: &mut ChildLayout<'_>| {
             placement.place(size, layout)
@@ -1630,6 +1653,18 @@ struct ScaffoldLayout {
     hosts_snack_bar: bool,
     /// Where the button landed, in the bottom bar's coordinates, for its notch.
     notch: Rc<Cell<Option<Rect>>>,
+    /// What the body is told it runs under, filled before the body is laid out.
+    told: Rc<Cell<Option<TellBody>>>,
+}
+
+/// The measured heights a body that runs under the shell's other slots is told about
+/// (milestone 824). `None` where the body does not run under that slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TellBody {
+    /// The app bar's height, when the body runs behind it.
+    app_bar: Option<f32>,
+    /// How far the bottom bar and the footer reach up, when the body runs under them.
+    bottom_widgets: Option<f32>,
 }
 
 impl ScaffoldLayout {
@@ -1724,6 +1759,11 @@ impl ScaffoldLayout {
         } else {
             content_bottom
         };
+        self.told.set(Some(TellBody {
+            app_bar: (self.bar_over_body && layout.has_child(Slot::AppBar))
+                .then_some(app_bar_height),
+            bottom_widgets: self.bottom_over_body.then_some(bottom_widgets),
+        }));
         layout.layout_child(
             Slot::Body,
             ChildConstraints::tight(Size::new(
@@ -1923,8 +1963,7 @@ mod tests {
                     .app_bar(
                         crate::AppBar::<Msg>::new()
                             .title(crate::Text::new("bar"))
-                            .height(56.0)
-                            .build(),
+                            .height(56.0),
                     )
                     .body(Container::new().flex(1.0).child(text("body")))
                     .build()
@@ -2226,7 +2265,7 @@ mod tests {
             Scaffold::new()
                 .size(W, H)
                 .insets(Insets::new(40.0, 0.0, 0.0, 0.0))
-                .app_bar(crate::AppBar::<Msg>::new().height(56.0).build())
+                .app_bar(crate::AppBar::<Msg>::new().height(56.0))
                 .body(marked(200.0))
                 .build(),
         );
@@ -2237,7 +2276,7 @@ mod tests {
                 .size(W, H)
                 .insets(Insets::new(40.0, 0.0, 0.0, 0.0))
                 .extend_body_behind_app_bar(true)
-                .app_bar(crate::AppBar::<Msg>::new().height(56.0).build())
+                .app_bar(crate::AppBar::<Msg>::new().height(56.0))
                 .body(marked(200.0))
                 .build(),
         );
@@ -2245,6 +2284,89 @@ mod tests {
             behind[0].y < 1.0,
             "behind the bar, from the very top: {:?}",
             behind[0]
+        );
+    }
+
+    /// **A body behind the app bar is told how tall the bar is** (milestone 824): the bar's
+    /// whole measured height, its status bar and its `bottom` included. A safe area in that body starts under the bar. It used to be
+    /// told the status bar alone, because nothing had measured the bar when the body's
+    /// description was decided, and a body padding itself by the bar's height had to know it.
+    #[test]
+    fn a_body_behind_the_app_bar_is_told_how_tall_the_bar_is() {
+        let body = |extend: bool| {
+            marks(
+                Scaffold::new()
+                    .size(W, H)
+                    .insets(Insets::new(40.0, 0.0, 0.0, 0.0))
+                    .extend_body_behind_app_bar(extend)
+                    .app_bar(
+                        crate::AppBar::<Msg>::new()
+                            .height(56.0)
+                            .bottom(Container::<Msg>::new().height(30.0)),
+                    )
+                    .body(crate::SafeArea::new(filling::<Msg>()))
+                    .build(),
+            )[0]
+        };
+        // The bar: 40 of status bar, the 56 toolbar and the 30 under it.
+        let behind = body(true);
+        assert!(
+            (behind.y - 126.0).abs() < 1.0,
+            "a safe body behind the bar starts under all of it: {behind:?}"
+        );
+        // Below the bar, nothing changes: the body starts there and is told nothing.
+        let below = body(false);
+        assert!(
+            (below.y - 126.0).abs() < 1.0,
+            "a body below the bar starts where it ends: {below:?}"
+        );
+        // And a body that asks for nothing still runs from the top.
+        let bare = marks(
+            Scaffold::new()
+                .size(W, H)
+                .insets(Insets::new(40.0, 0.0, 0.0, 0.0))
+                .extend_body_behind_app_bar(true)
+                .app_bar(crate::AppBar::<Msg>::new().height(56.0))
+                .body(filling::<Msg>())
+                .build(),
+        )[0];
+        assert!(bare.y < 1.0, "behind the bar, from the very top: {bare:?}");
+    }
+
+    /// **A body under the bottom widgets is told how far they reach** (milestone 824): the
+    /// bottom bar's measured height and the footer's on top of it. A safe area in that body
+    /// stops where a body that does not run under them stops. It used to be told the bottom
+    /// bar's declared height alone, so a footer covered the end of a safe body.
+    #[test]
+    fn a_body_under_the_bottom_widgets_is_told_how_far_they_reach() {
+        let footer = || Container::<Msg>::new().width(100.0).height(40.0);
+        let stops = marks(
+            Scaffold::new()
+                .size(W, H)
+                .body(filling())
+                .persistent_footer(footer())
+                .nav(0, Msg::Go)
+                .destination("H", "Home")
+                .build(),
+        )[0];
+        let under = marks(
+            Scaffold::new()
+                .size(W, H)
+                .extend_body(true)
+                .body(crate::SafeArea::new(filling::<Msg>()))
+                .persistent_footer(footer())
+                .nav(0, Msg::Go)
+                .destination("H", "Home")
+                .build(),
+        )[0];
+        let (stop, safe) = (stops.y + stops.height, under.y + under.height);
+        assert!(
+            stop < H - BAR_HEIGHT - 39.0,
+            "the footer takes room above the bar: {stops:?}"
+        );
+        assert!(
+            (safe - stop).abs() < 1.0,
+            "a safe body under the bottom widgets stops where they start: {safe} vs {stop}"
         );
     }
 
@@ -2501,8 +2623,7 @@ mod tests {
                     crate::AppBar::<Msg>::new()
                         .title(crate::Text::new("Title"))
                         .automatically_imply_leading(leading)
-                        .automatically_imply_actions(actions)
-                        .build(),
+                        .automatically_imply_actions(actions),
                 )
                 .build();
             click_messages(tree.as_ref())
@@ -2532,11 +2653,7 @@ mod tests {
             Scaffold::new()
                 .size(W, H)
                 .body(Container::<Msg>::new())
-                .app_bar(
-                    crate::AppBar::<Msg>::new()
-                        .title(crate::Text::new("Title"))
-                        .build(),
-                )
+                .app_bar(crate::AppBar::<Msg>::new().title(crate::Text::new("Title")))
                 .build()
                 .as_ref(),
         );
@@ -2558,8 +2675,7 @@ mod tests {
                     crate::AppBar::<Msg>::new()
                         .title(crate::Text::new("Title"))
                         .leading(button("Back", Msg::Go(1)))
-                        .foldable_action("Save", Msg::Go(2))
-                        .build(),
+                        .foldable_action("Save", Msg::Go(2)),
                 )
                 .build()
                 .as_ref(),
@@ -2608,8 +2724,7 @@ mod tests {
                     scaffold = scaffold.app_bar(
                         crate::AppBar::<Msg>::new()
                             .title(crate::Text::new("bar"))
-                            .height(BAR)
-                            .build(),
+                            .height(BAR),
                     );
                 }
                 scaffold
@@ -2890,8 +3005,7 @@ mod tests {
                     .app_bar(
                         crate::AppBar::<Msg>::new()
                             .title(crate::Text::new("bar"))
-                            .height(56.0)
-                            .build(),
+                            .height(56.0),
                     )
                     .body(Container::new().flex(1.0))
                     .build()
@@ -4126,7 +4240,7 @@ mod reference_sizes {
             }
             column = column.child(Button::new("Login").on_press(()));
             Scaffold::new()
-                .app_bar(AppBar::<()>::new().title(Text::new("Forge")).build())
+                .app_bar(AppBar::<()>::new().title(Text::new("Forge")))
                 .body(SingleChildScrollView::new().child(column))
                 .build()
         })

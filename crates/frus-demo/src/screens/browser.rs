@@ -233,8 +233,7 @@ impl State for BrowserState {
                             move || {
                                 router.pop();
                             },
-                        )))
-                        .build(),
+                        ))),
                 )
                 .body(body)
                 .build(),

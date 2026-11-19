@@ -88,6 +88,8 @@ pub struct ChildLayout<'a> {
     theme: &'a Theme,
     pub(crate) laid: Vec<Option<Vec<Rect>>>,
     pub(crate) at: Vec<Point>,
+    /// Whether the children running past the layout's edge are reported as an overflow.
+    pub(crate) report: bool,
 }
 
 impl<'a> ChildLayout<'a> {
@@ -102,6 +104,7 @@ impl<'a> ChildLayout<'a> {
             theme,
             laid: vec![None; keys.len()],
             at: vec![Point::new(0.0, 0.0); keys.len()],
+            report: false,
         }
     }
 
@@ -141,6 +144,22 @@ impl<'a> ChildLayout<'a> {
             .unwrap_or(Size::new(0.0, 0.0));
         self.laid[i] = Some(rects);
         size
+    }
+
+    /// Takes back a [`layout_child`](Self::layout_child): the child named `key` is not
+    /// shown after all. For a layout inside the crate that measures a child to decide
+    /// whether it fits, as the app bar's toolbar does with its overflow button.
+    pub(crate) fn forget_child(&mut self, key: impl Hash) {
+        if let Some(i) = self.index(key) {
+            self.laid[i] = None;
+        }
+    }
+
+    /// Reports the children that run past the layout's edge as an overflow, the debug band
+    /// a row shows. For a layout inside the crate that stands for a row, as the app bar's
+    /// toolbar does.
+    pub(crate) fn report_spills(&mut self) {
+        self.report = true;
     }
 
     /// Puts the child named `key` with its top left corner at `at`, from the layout's own

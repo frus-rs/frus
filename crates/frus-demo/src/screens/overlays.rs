@@ -331,8 +331,7 @@ impl State for OverlaysState {
                     .title(Text::new("Overlays and panels"))
                     .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
                         router.pop();
-                    })))
-                    .build(),
+                    }))),
             )
             .body(palette)
             .build()

@@ -45,14 +45,11 @@ impl State for PostsState {
             RemoteData::Success(list) => self.list(cx, list, posts.reloading),
         };
 
-        let app_bar = AppBar::new()
-            .title(Text::new("Posts"))
-            .action(
-                IconButton::new(Icons::REFRESH)
-                    .label("Refresh")
-                    .on_press(cx.callback(PostsState::reload)),
-            )
-            .build();
+        let app_bar = AppBar::new().title(Text::new("Posts")).action(
+            IconButton::new(Icons::REFRESH)
+                .label("Refresh")
+                .on_press(cx.callback(PostsState::reload)),
+        );
 
         Scaffold::new()
             .background(cx.theme().background)

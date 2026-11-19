@@ -13,6 +13,17 @@ any release may break.
 
 ## [Unreleased]
 
+- **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
+  when it is laid out, from the width it is given, instead of from the screen's width read when
+  it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own
+  box, and an action whose width depends on its content is measured rather than counted as
+  nothing. **`AppBar::build` is deprecated**: the bar is a widget, passed as it is (or
+  `Box::new(bar)`); `AppBar::width` remains as a width of its own. A `Scaffold` tells a body that
+  runs behind the app bar the bar's measured height, and one that runs under the bottom widgets
+  the measured height of the bottom bar and the footer, so a `SafeArea` in it starts under the
+  bar and stops above the footer. `IntrinsicWidth` and `IntrinsicHeight` measure their content
+  within the room on the other axis (a paragraph wraps at the width it is shown at) and are
+  held to the room.
 - **Translations and routes the compiler checks** (J826, #223). `frus_l10n::messages!("../i18n")`
   (also `frus::l10n::messages!`, new feature `l10n`) reads the application's `.ftl` files when it
   compiles and writes one function per message, its arguments typed: a plural selector's argument

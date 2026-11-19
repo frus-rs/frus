@@ -185,8 +185,7 @@ impl State for ConversationState {
                         IconButton::new(Icons::ADD_COMMENT)
                             .label("Receive five messages")
                             .on_press(burst),
-                    )
-                    .build(),
+                    ),
             )
             .body(
                 Flex::column()

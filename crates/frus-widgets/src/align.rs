@@ -379,8 +379,7 @@ mod tests {
                 .app_bar(
                     crate::AppBar::<()>::new()
                         .title(Text::new("Inbox"))
-                        .height(56.0)
-                        .build(),
+                        .height(56.0),
                 )
                 .body(Center::new(square()))
                 .build()

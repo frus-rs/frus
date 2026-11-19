@@ -2179,9 +2179,8 @@ mod reader_font_size {
             MediaQuery::new(Size::new(400.0, 300.0))
                 .with_text_scaler(scale)
                 .scope(|| {
-                    let root = bar.build();
                     let (ui, _) = build_ui_inspected(
-                        root.as_ref(),
+                        &bar,
                         Size::new(400.0, 300.0),
                         &Runtime::default(),
                         &Theme::default(),

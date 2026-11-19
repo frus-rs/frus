@@ -97,8 +97,7 @@ impl State for PostState {
 
         let app_bar = AppBar::new()
             .leading(back_button(cx))
-            .title(Text::new("Post"))
-            .build();
+            .title(Text::new("Post"));
 
         Scaffold::new()
             .background(cx.theme().background)

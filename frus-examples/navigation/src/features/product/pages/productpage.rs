@@ -60,7 +60,7 @@ impl State for ProductState {
             let home = Button::new("Back to the shop").on_press(move || router.go(HOME));
             return Scaffold::new()
                 .background(theme.background)
-                .app_bar(page_app_bar(cx, "Unknown product").build())
+                .app_bar(page_app_bar(cx, "Unknown product"))
                 .body(empty_state(
                     cx,
                     Icons::SEARCH_OFF,
@@ -186,13 +186,11 @@ impl State for ProductState {
         Scaffold::new()
             .background(theme.background)
             .app_bar(
-                page_app_bar(cx, product.category.label())
-                    .action(
-                        IconButton::new(Icons::ARROW_FORWARD)
-                            .label("Next product")
-                            .on_press(next),
-                    )
-                    .build(),
+                page_app_bar(cx, product.category.label()).action(
+                    IconButton::new(Icons::ARROW_FORWARD)
+                        .label("Next product")
+                        .on_press(next),
+                ),
             )
             .body(SingleChildScrollView::new().padding(16.0).child(content))
             .build()

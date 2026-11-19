@@ -2369,33 +2369,6 @@ fn build_layout_scoped<'a, Msg>(
         }
         return (layout.leaf(style, own_baseline), Fills::default());
     }
-    // `Intrinsic`: one axis is taken from what the content would **like** to be, not from
-    // the space on offer. The content is measured once, unconstrained, and the answer is
-    // written into this node's style as a length — the same trick `RotatedBox` uses, except
-    // that here the child stays inside, laid out normally within the size it asked for.
-    if let Some((axis, step)) = widget.intrinsic() {
-        let mut style = effective_style(widget, id, runtime, theme);
-        if let Some(child) = widget.children().first() {
-            let child = child.as_ref();
-            let cid = child_id(id, 0, child);
-            let nat = natural_size(child, cid, runtime, theme);
-            let quantise = |extent: f32| match step {
-                Some(step) if step > 0.0 => (extent / step).ceil() * step,
-                _ => extent,
-            };
-            match axis {
-                crate::constraints::IntrinsicAxis::Width => {
-                    style.width = frus_layout::Dimension::Length(quantise(nat.width));
-                }
-                crate::constraints::IntrinsicAxis::Height => {
-                    style.height = frus_layout::Dimension::Length(quantise(nat.height));
-                }
-            }
-            let (node, fills) = build_layout_scoped(child, cid, runtime, theme, layout, baselines);
-            return (layout.container(style, &[node]), fills);
-        }
-        return (layout.leaf(style, own_baseline), Fills::default());
-    }
     // `OverflowBox`: a leaf, because its child is laid out **separately**, to constraints of
     // its own. That separation is the whole feature — a child sharing this node's layout
     // could never be bigger than it.
@@ -2411,11 +2384,27 @@ fn build_layout_scoped<'a, Msg>(
     // `constraints.constrain(child.size)`. `UnconstrainedBox` is this branch with the
     // constraint taken away.
     if let Some(transform) = widget.constraints_transform() {
-        let style = effective_style(widget, id, runtime, theme);
+        let mut style = effective_style(widget, id, runtime, theme);
         let child = widget.children().first().map(|c| c.as_ref());
+        // An intrinsic width is the content's widest, which no room changes, so it is
+        // measured once, ahead, and written into the style (milestone 824): a box that is a
+        // size of its own is not stretched across a column, as a measured one would be. It
+        // is held to the room by a ceiling of the whole of it.
+        if let (Some((crate::constraints::IntrinsicAxis::Width, step)), Some(child)) =
+            (widget.intrinsic(), child)
+        {
+            let natural = natural_size(child, child_id(id, 0, child), runtime, theme).width;
+            let width = match step {
+                Some(step) if step > 0.0 => (natural / step).ceil() * step,
+                _ => natural,
+            };
+            style.width = frus_layout::Dimension::Length(width);
+            style.max_width = frus_layout::Dimension::Percent(1.0);
+        }
         let owned = owned_theme(theme);
         let animated = widget.animated_size();
         let factor = widget.size_factor();
+        let intrinsic = widget.intrinsic();
         let measure: frus_layout::MeasureFn<'a> = Box::new(move |w, h| {
             let Some(child) = child else {
                 return Size::new(0.0, 0.0);
@@ -2458,6 +2447,16 @@ fn build_layout_scoped<'a, Msg>(
                     frus_core::fits(size.width * across.max(0.0)),
                     frus_core::fits(size.height * down.max(0.0)),
                 );
+            }
+            // An intrinsic box rounds what it measured up to its step (milestone 824).
+            if let Some((axis, Some(step))) = intrinsic {
+                let quantise = |extent: f32| (extent / step).ceil() * step;
+                match axis {
+                    crate::constraints::IntrinsicAxis::Width => size.width = quantise(size.width),
+                    crate::constraints::IntrinsicAxis::Height => {
+                        size.height = quantise(size.height)
+                    }
+                }
             }
             // Held to the offer: a child too big for the room spills, and the box stays the
             // size the room was.
@@ -5731,8 +5730,19 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     }
                     _ => rule.at(own),
                 };
-                let (aw, free_x, fill_x) = back(transform.width, own.width, factor.0);
-                let (ah, free_y, fill_y) = back(transform.height, own.height, factor.1);
+                let (mut aw, mut free_x, mut fill_x) = back(transform.width, own.width, factor.0);
+                let (mut ah, mut free_y, mut fill_y) = back(transform.height, own.height, factor.1);
+                // An intrinsic box hands its child the extent it measured, rounded and held to
+                // the offer, on its own axis (milestone 824).
+                match widget.intrinsic() {
+                    Some((crate::constraints::IntrinsicAxis::Width, _)) => {
+                        (aw, free_x, fill_x) = (own.width.max(0.0), false, true);
+                    }
+                    Some((crate::constraints::IntrinsicAxis::Height, _)) => {
+                        (ah, free_y, fill_y) = (own.height.max(0.0), false, true);
+                    }
+                    None => {}
+                }
                 // A box on its way to its child's size is not that size yet, and the child is
                 // laid out as ever (milestone 594). On the axes the child decides, it comes
                 // back at its own size, which is where the box is going; an axis it is given
@@ -5976,7 +5986,26 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             };
             let mut layout = crate::ChildLayout::new(custom.keys, &measure, &self.theme);
             (custom.delegate)(Size::new(own.width, own.height), &mut layout);
-            let (laid, at) = (layout.laid, layout.at);
+            let (laid, at, report) = (layout.laid, layout.at, layout.report);
+            // What the children cover together, against the box, when the layout asked.
+            if report {
+                let covered = laid
+                    .iter()
+                    .zip(&at)
+                    .filter_map(|(rects, at)| {
+                        let first = rects.as_ref()?.first()?;
+                        Some(Rect::new(
+                            own.x + at.x,
+                            own.y + at.y,
+                            first.width,
+                            first.height,
+                        ))
+                    })
+                    .reduce(|a, b| a.union(b));
+                if let Some(covered) = covered {
+                    self.report_spill(own, covered);
+                }
+            }
             for (i, child) in children.iter().enumerate() {
                 let Some(child_rects) = &laid[i] else {
                     continue;

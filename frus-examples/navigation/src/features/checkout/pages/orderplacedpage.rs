@@ -54,7 +54,7 @@ impl StatelessWidget for OrderPlacedPage {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(page_app_bar(cx, "Order placed").build())
+            .app_bar(page_app_bar(cx, "Order placed"))
             .body(
                 SingleChildScrollView::new()
                     .padding(16.0)

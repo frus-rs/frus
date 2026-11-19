@@ -40,7 +40,7 @@ impl StatelessWidget for CategoryPage {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(AppBar::new().title(Text::new(category.name)).build())
+            .app_bar(AppBar::new().title(Text::new(category.name)))
             .body(
                 SingleChildScrollView::new()
                     .padding_each(8.0, 0.0, 24.0, 0.0)

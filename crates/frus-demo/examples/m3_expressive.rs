@@ -149,18 +149,8 @@ fn main() -> frus_shell::anyhow::Result<()> {
                             Flex::column()
                                 .width(360.0)
                                 .gap(16.0)
-                                .child(
-                                    AppBar::medium()
-                                        .width(360.0)
-                                        .title(Text::new("Medium"))
-                                        .build(),
-                                )
-                                .child(
-                                    AppBar::large()
-                                        .width(360.0)
-                                        .title(Text::new("Large"))
-                                        .build(),
-                                ),
+                                .child(AppBar::medium().width(360.0).title(Text::new("Medium")))
+                                .child(AppBar::large().width(360.0).title(Text::new("Large"))),
                         )
                         .child(
                             Container::new().width(360.0).height(520.0).child(
