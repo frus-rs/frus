@@ -117,6 +117,8 @@ pub enum ApiError {
     Status(u16),
     /// The server answered, but not with what the model expects.
     Decode(String),
+    /// The app gave up on the request itself, so nobody is waiting for its answer.
+    Cancelled,
 }
 
 impl ApiError {
@@ -129,6 +131,7 @@ impl ApiError {
             ApiError::Server(_) => "The server had a problem",
             ApiError::Status(_) => "The request was refused",
             ApiError::Decode(_) => "Unexpected answer",
+            ApiError::Cancelled => "Request cancelled",
         }
     }
 
@@ -152,6 +155,7 @@ impl ApiError {
             ApiError::Decode(detail) => {
                 format!("The server's answer couldn't be read ({detail}).")
             }
+            ApiError::Cancelled => "The request was cancelled before it finished.".to_string(),
         }
     }
 }
@@ -172,6 +176,7 @@ impl From<FetchError> for ApiError {
             FetchError::Status(code) if (500..600).contains(&code) => ApiError::Server(code),
             FetchError::Status(code) => ApiError::Status(code),
             FetchError::Decode(detail) => ApiError::Decode(detail),
+            FetchError::Cancelled => ApiError::Cancelled,
             // A transport failure carries only the client's own wording, which differs by
             // platform: "timeout: …" natively, an `AbortError` in a browser, where the
             // deadline is enforced by aborting the request. Everything else — DNS,
