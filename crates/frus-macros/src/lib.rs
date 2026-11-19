@@ -3,11 +3,20 @@
 
 //! `frus-macros` — the compile-time macros of frus.
 //!
-//! One so far: [`include_font!`], which embeds a font file the way `include_bytes!` does, and
-//! lets `frus build` swap in a copy cut down to the characters the application can show
-//! (milestone 823). Applications reach it as `frus::fonts::include_font!`.
+//! - [`include_font!`] embeds a font file the way `include_bytes!` does, and lets `frus build`
+//!   swap in a copy cut down to the characters the application can show (milestone 823).
+//!   Applications reach it as `frus::fonts::include_font!`.
+//! - `messages!` reads an application's Fluent files at compile time and writes one function
+//!   per message, its arguments typed (milestone 826). Applications reach it as
+//!   `frus_l10n::messages!`, or `frus::l10n::messages!` with the `l10n` feature.
+//! - `#[derive(Routes)]` turns an enum into an application's routes: their patterns, the parsing of
+//!   a location into a variant and the location of a variant (milestone 826). Applications
+//!   reach it as `frus::Routes`.
 
 #![deny(missing_docs)]
+
+mod messages;
+mod routes;
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +46,43 @@ pub fn include_font(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens,
         Err((message, span)) => compile_error(&message, span),
     }
+}
+
+/// Reads the Fluent files of a folder at compile time and writes one function per message.
+///
+/// Applications call it as `frus_l10n::messages!` (or `frus::l10n::messages!`), which hands
+/// this macro the path of the runtime crate; the documentation is there.
+#[doc(hidden)]
+#[proc_macro]
+pub fn messages(input: TokenStream) -> TokenStream {
+    messages::expand(input.into(), |span| beside_the_caller(span.unwrap())).into()
+}
+
+/// Derives `Routes` for an enum whose variants are an application's routes.
+///
+/// ```ignore
+/// #[derive(frus::Routes)]
+/// enum Route {
+///     #[route("/")]
+///     Home,
+///     #[route("/task/:id")]
+///     Task { id: u64 },
+///     // `q` is not in the pattern: a query parameter, `/search?q=rust`.
+///     #[route("/search")]
+///     Search { q: Option<String> },
+/// }
+/// ```
+///
+/// A `:parameter` is the field of that name, parsed with `FromStr` and written with `Display`;
+/// any other field is a query parameter and is an `Option`. A pattern is checked when the
+/// application compiles: it starts with `/`, each of its parameters is a field, and no two
+/// patterns answer the same locations.
+///
+/// The generated code names the runtime crate `::frus`, or `::frus_widgets` in a package that
+/// depends on `frus-widgets`; `#[routes(crate = "path")]` on the enum names another.
+#[proc_macro_derive(Routes, attributes(route, routes))]
+pub fn derive_routes(input: TokenStream) -> TokenStream {
+    routes::expand(input.into()).into()
 }
 
 fn expand(input: TokenStream) -> Result<TokenStream, (String, Span)> {

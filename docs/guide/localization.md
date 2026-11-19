@@ -108,6 +108,54 @@ language shows its key, so a gap is visible rather than blank. Keep the `.ftl` f
 `i18n/` folder beside `src/` and embed them with `include_str!`: there is nothing to load at
 run time, on any platform.
 
+### Messages the compiler checks
+
+A key looked up as a string is checked when someone reads the screen, in the language they read
+it in: a typo, a message a translator left out or an argument renamed in one file shows up there,
+or not at all. `messages!` reads the `.ftl` files **when the application compiles** and writes one
+function per message, its arguments typed:
+
+```rust,ignore
+// src/words.rs; the files are i18n/en.ftl, i18n/fr.ftl, ... beside src/.
+frus_l10n::messages!("../i18n", default = "en");
+```
+
+```rust,ignore
+let words = crate::words::messages(frus::locale::of().language_code());
+let title = frus::text(words.app_title()); // app-title = My Tasks
+let count = words.unread(3); // unread = { $count -> ... }
+let hello = words.greeting("Ada"); // greeting = Hello, { $name }!
+```
+
+- The folder's path is relative to the file the macro is written in, and holds one file per
+  language, named after it: `en.ftl`, `fr.ftl`, `pt-BR.ftl`.
+- `messages(locale)` gives the messages in the closest language there is a file for (`fr-CA`
+  gets `fr`), the default one otherwise. Each message is a method named after it: `task-count`
+  is `task_count()`.
+- An argument the message uses to choose a plural (`[one]`, `[few]`, `[0]`) or passes to
+  `NUMBER()` takes any integer or float; any other argument takes a `&str`. The arguments come
+  in the order the default language's message first uses them.
+- `localizer()` holds every file, so `format_for("key", args![..])` keeps working beside the
+  typed functions, for a key that is only known at run time.
+
+**What does not compile**, each error naming the message and the language's file:
+
+- a message of the default language that another language's file does not have, unless that
+  language is listed as partial: `messages!("../i18n", default = "en", partial = ["de"])`
+  shows German's missing messages in English;
+- a message that is in another language's file and not in the default language's;
+- a translation using an argument the default language's message does not give it (`$nom` where
+  English says `$name`);
+- a file that is not valid Fluent.
+
+```text
+error: messages!: the message `add` is missing from the locale `fr` (fr.ftl); every locale has
+       every message of the default locale `en`, unless it is listed in `partial = [..]`
+```
+
+The files are embedded, so changing one compiles the application again. With the `frus`
+feature `l10n`, the same macro is `frus::l10n::messages!`, and the crate is `frus::l10n`.
+
 ## The framework's own words
 
 frus has its words in **English, French, German, Spanish, Japanese, Thai and Vietnamese**. An

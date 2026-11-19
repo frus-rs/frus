@@ -19,6 +19,24 @@
 //! assert_eq!(l10n.format("tasks", args![n: 2]), "2 tâches");
 //! // Falls back to the default locale when the key is missing from the current one.
 //! ```
+//!
+//! ## Typed messages
+//!
+//! [`messages!`] reads the application's `.ftl` files **when it compiles** and writes one
+//! function per message, its arguments typed: a message missing from a locale, or a
+//! translation using an argument the default locale does not give, does not compile.
+//!
+//! ```ignore
+//! mod words {
+//!     // i18n/en.ftl, i18n/fr.ftl, ... beside `src/`; the path is relative to this file.
+//!     frus_l10n::messages!("../i18n", default = "en");
+//! }
+//!
+//! let fr = words::messages("fr");
+//! let title = fr.app_title(); // app-title = Mes tâches
+//! let count = fr.task_count(3); // a plural selector's argument is a number
+//! let hello = fr.hello("Ada"); // any other argument is text
+//! ```
 
 #![deny(missing_docs)]
 
@@ -68,6 +86,72 @@ impl From<f64> for Arg<'_> {
     fn from(n: f64) -> Self {
         Arg::Num(n)
     }
+}
+
+/// A number given to a message: any of Rust's integer and float types. It takes part in the
+/// CLDR plural rules.
+pub trait Number {
+    /// The number as Fluent sees it.
+    fn to_f64(self) -> f64;
+}
+
+macro_rules! numbers {
+    ($($t:ty),*) => {$(
+        impl Number for $t {
+            fn to_f64(self) -> f64 {
+                self as f64
+            }
+        }
+    )*};
+}
+numbers!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+
+/// The application's messages, read from its Fluent files **when it compiles**: one function
+/// per message, its arguments typed.
+///
+/// ```ignore
+/// mod words {
+///     frus_l10n::messages!("../i18n", default = "en", partial = ["de"]);
+/// }
+/// assert_eq!(words::messages("fr").task_count(2), "2 tâches");
+/// ```
+///
+/// The folder, relative to the file the macro is written in, holds one file per locale named
+/// after it: `en.ftl`, `fr.ftl`, `pt-BR.ftl`. The macro writes, where it is called:
+///
+/// - `messages(locale) -> Messages`: the messages in the closest locale there is a file for
+///   (`fr-CA` gets `fr`), the default one when there is none;
+/// - `Messages`, with one method per message, named after it (`task-count` is
+///   `task_count`). An argument the message uses as a **plural selector**, or passes to
+///   `NUMBER()`, takes any [`Number`]; any other argument takes a `&str`. The arguments come in
+///   the order the default locale's message first uses them;
+/// - `localizer() -> &'static Localizer`, holding every file, for the string lookups
+///   ([`Localizer::format_for`] and the others), which keep working;
+/// - `LOCALES` and `DEFAULT_LOCALE`.
+///
+/// **The rules**, each a compile error naming the message, the locale and its file:
+///
+/// - the default locale (`default`, `"en"` when not given) defines the messages and their
+///   arguments;
+/// - every other locale has every message of the default locale, unless it is listed in
+///   `partial`: a message a partial locale lacks is shown in the default locale;
+/// - no locale has a message the default locale lacks;
+/// - a translation uses no argument the default locale's message does not give it;
+/// - each file is valid Fluent.
+///
+/// The files are embedded: there is nothing to load at run time, and changing one compiles the
+/// application again. A file added to the folder is seen on the next build of the crate.
+#[macro_export]
+macro_rules! messages {
+    ($($input:tt)*) => {
+        $crate::__private::messages! { $crate; $($input)* }
+    };
+}
+
+#[doc(hidden)]
+pub mod __private {
+    pub use frus_macros::messages;
+    pub use unic_langid::LanguageIdentifier;
 }
 
 /// Builds a message's argument list: `args![name: "Ada", n: 3]`.
@@ -133,26 +217,32 @@ impl Localizer {
     /// `fr`), and failing that the default locale. Returns the locale actually
     /// chosen.
     pub fn set_locale(&mut self, locale: &str) -> LanguageIdentifier {
-        let requested: LanguageIdentifier = match locale.parse() {
-            Ok(id) => id,
-            Err(_) => {
-                self.current = self.default.clone();
-                return self.current.clone();
-            }
+        self.current = self.negotiate(locale);
+        self.current.clone()
+    }
+
+    /// The locale [`Localizer::set_locale`] would choose for `locale`, without choosing it: an
+    /// exact match, then the same language (`fr-CA` → `fr`), then the default locale.
+    pub fn negotiate(&self, locale: &str) -> LanguageIdentifier {
+        let Ok(requested) = locale.parse::<LanguageIdentifier>() else {
+            return self.default.clone();
         };
         // 1) An exact match.
         let exact = self.bundles.keys().find(|id| **id == requested).cloned();
-        // 2) The same language, ignoring region and variant.
+        // 2) The same language, ignoring region and variant. The keys are sorted first, so
+        // the answer does not depend on the hash map's order.
         let by_lang = || {
-            self.bundles
+            let mut same: Vec<&LanguageIdentifier> = self
+                .bundles
                 .keys()
-                .find(|id| id.language == requested.language)
-                .cloned()
+                .filter(|id| id.language == requested.language)
+                .collect();
+            same.sort_by_key(|id| id.to_string());
+            same.first().map(|id| (*id).clone())
         };
-        self.current = exact
+        exact
             .or_else(by_lang)
-            .unwrap_or_else(|| self.default.clone());
-        self.current.clone()
+            .unwrap_or_else(|| self.default.clone())
     }
 
     /// The current locale.

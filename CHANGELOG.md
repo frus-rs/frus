@@ -8,7 +8,7 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 824 so far, each documenting the objective, the alternatives
+> record — one per step, 826 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
@@ -24,6 +24,41 @@ any release may break.
   bar and stops above the footer. `IntrinsicWidth` and `IntrinsicHeight` measure their content
   within the room on the other axis (a paragraph wraps at the width it is shown at) and are
   held to the room.
+- **Translations and routes the compiler checks** (J826, #223). `frus_l10n::messages!("../i18n")`
+  (also `frus::l10n::messages!`, new feature `l10n`) reads the application's `.ftl` files when it
+  compiles and writes one function per message, its arguments typed: a plural selector's argument
+  takes any number, any other a `&str`. A message missing from a locale (unless the locale is
+  listed in `partial = [..]`, where it falls back to the default one), a message only a
+  translation has, a translation using an argument the default locale does not give, and a Fluent
+  syntax error are compile errors naming the message, the locale and its file. `#[derive(Routes)]`
+  (`frus::Routes`) makes an enum the application's routes: `#[route("/task/:id")]` on each
+  variant, `.location()` to go there, `Route::from_location` for a deep link, `Route::go_routes`
+  for the router's routes nested by pattern, and `GoRouterState::route` on a page; a path
+  parameter that does not parse reaches the error page. String locations keep working. The demo
+  uses both. `Localizer::negotiate` is new.
+- **A component's own state builds that component, not the whole tree** (J822, #53). When
+  `UseState::set`/`update` or `StateHandle::set_state` changes a component's state, that
+  component is marked, and the next frame builds it again where it stands in the tree kept from
+  the last frame. It builds everything under it, and nothing else: the components around it
+  are kept, with their states and timers. A counter ticking in one leaf of a forty-row screen
+  now builds the leaf alone (build 0.26 ms to 0.10 ms in release). Everything else that asks for
+  a rebuild (`request_rebuild`, the theme, the surface, the locale, a preference, a hot patch)
+  still builds the whole tree. New: `take_rebuild()` and `Rebuild` (what the next frame has to
+  build), `Application::messages_rebuild_view` (default `true`, so Elm-style applications are
+  unchanged; `FrusApp` answers `false`), and `Driver::resize`, `arrive` and `costs` in
+  `frus_shell::testing`.
+- **The selection highlight is pinned by pictures; a selection area's handles stay on top; web
+  restoration seen in a browser; the Apple look decided** (J821). Two new goldens: a
+  `Text::selectable()` with part of its line selected by a finger, handles included, and a
+  `SelectionArea` selection running from a plain text into a `RichText` of mixed weights and
+  sizes. Beside each, the highlight's pixels are checked by number: the theme's selection token
+  blended over the background in linear light. **Fixed**: a selection area's start handle,
+  hanging below its line, was half covered by the next text's highlight, painted later in the
+  walk; the walk now paints an area's handles itself and puts them back over everything the area
+  painted after them (inside any layer they were painted in, and through the paint cache). On
+  the web, a page restored from the tab's storage now says so in the console, as Android does.
+  `ROADMAP.md` records the Apple-look decision: the Apple-style widgets and adaptive controls
+  frus offers, what is welcome next, and what is out of scope.
 - **A release build carries only the glyphs the application can show** (J823, #20). `frus build`
   in release cuts every font embedded with the new `frus::fonts::include_font!` (frus's seven
   bundled faces embed themselves through it) down to Latin, the scripts of the application's

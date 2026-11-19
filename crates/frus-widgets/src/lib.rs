@@ -379,9 +379,9 @@ pub use commandpalette::{
     fuzzy_match, CommandPalette, CommandPaletteState, CommandPaletteTheme, PaletteCommand,
 };
 pub use component::{
-    back_blocked, component, intervals, rebuild_requested, request_rebuild, take_rebuild_request,
-    BuildContext, Component, Interval, IntoCleanup, State, StateContext, StateHandle, StateStore,
-    StatefulWidget, StatelessWidget, UseRef, UseState,
+    back_blocked, component, intervals, rebuild_requested, request_rebuild, take_rebuild,
+    take_rebuild_request, BuildContext, Component, Interval, IntoCleanup, Rebuild, State,
+    StateContext, StateHandle, StateStore, StatefulWidget, StatelessWidget, UseRef, UseState,
 };
 pub use connectivity::{
     connectivity, install_connectivity_watch, report_connectivity, take_connectivity_change,
@@ -487,6 +487,8 @@ pub use frus_core::{
 /// Lottie animations, drawn as vector paths (the `lottie` feature).
 #[cfg(feature = "lottie")]
 pub use frus_lottie::{Animation as LottieAnimation, AnimationHandle as LottieHandle, LottieError};
+/// `#[derive(Routes)]`: an enum whose variants are the application's routes. See [`trait@Routes`].
+pub use frus_macros::Routes;
 /// SVG pictures, drawn as vector paths (the `svg` feature).
 #[cfg(feature = "svg")]
 pub use frus_svg::{Svg, SvgError, SvgHandle};
@@ -624,7 +626,7 @@ pub use rollingdigits::{RollingDigits, RollingDigitsTheme};
 pub use rotatedbox::RotatedBox;
 pub use router::{
     GoRoute, GoRouter, GoRouterState, NavigationShell, PopResult, RouteChange, RouteChangeKind,
-    ShellBack, ShellBranch,
+    Routes, ShellBack, ShellBranch,
 };
 pub use rowcolumn::{Column, MainAxisSize, Row, VerticalDirection};
 pub use runtime::{
