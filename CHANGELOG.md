@@ -8,11 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 823 so far, each documenting the objective, the alternatives
+> record — one per step, 824 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
+  when it is laid out, from the width it is given, instead of from the screen's width read when
+  it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own
+  box, and an action whose width depends on its content is measured rather than counted as
+  nothing. **`AppBar::build` is deprecated**: the bar is a widget, passed as it is (or
+  `Box::new(bar)`); `AppBar::width` remains as a width of its own. A `Scaffold` tells a body that
+  runs behind the app bar the bar's measured height, and one that runs under the bottom widgets
+  the measured height of the bottom bar and the footer, so a `SafeArea` in it starts under the
+  bar and stops above the footer. `IntrinsicWidth` and `IntrinsicHeight` measure their content
+  within the room on the other axis (a paragraph wraps at the width it is shown at) and are
+  held to the room.
 - **A release build carries only the glyphs the application can show** (J823, #20). `frus build`
   in release cuts every font embedded with the new `frus::fonts::include_font!` (frus's seven
   bundled faces embed themselves through it) down to Latin, the scripts of the application's

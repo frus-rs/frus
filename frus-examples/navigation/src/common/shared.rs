@@ -15,8 +15,8 @@ pub fn format_price(cents: u32) -> String {
 ///
 /// The router owns the stack, so it is the one to ask: `can_pop()` is true for a page
 /// pushed on top of another, and for a nested location (`/products/3` has home beneath
-/// it) even when the app was opened at that address. The button just pops. Returned
-/// unbuilt so a page can add actions before `.build()`.
+/// it) even when the app was opened at that address. The button just pops. A page can
+/// add actions to the bar it returns.
 pub fn page_app_bar(cx: &BuildContext, title: impl Into<String>) -> AppBar {
     let router = cx.router();
     let bar = AppBar::new().title(Text::new(title.into()));

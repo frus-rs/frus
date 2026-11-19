@@ -77,7 +77,7 @@ impl State for ChatState {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(app_bar.build())
+            .app_bar(app_bar)
             .body(body)
             .build()
     }

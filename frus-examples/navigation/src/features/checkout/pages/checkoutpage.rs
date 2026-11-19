@@ -105,7 +105,7 @@ impl State for CheckoutState {
 
         Scaffold::new()
             .background(theme.background)
-            .app_bar(page_app_bar(cx, "Checkout").build())
+            .app_bar(page_app_bar(cx, "Checkout"))
             .body(SingleChildScrollView::new().padding(16.0).child(content))
             .build()
     }

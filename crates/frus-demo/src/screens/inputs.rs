@@ -16,14 +16,11 @@ fn page(router: GoRouter, title: &str, theme: &Theme, body: Flex) -> Box<dyn Wid
     Box::new(
         Scaffold::new()
             .background(theme.background)
-            .app_bar(
-                AppBar::new()
-                    .title(Text::new(title))
-                    .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
-                        router.pop();
-                    })))
-                    .build(),
-            )
+            .app_bar(AppBar::new().title(Text::new(title)).leading(
+                IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
+                    router.pop();
+                })),
+            ))
             .body(
                 SingleChildScrollView::new()
                     .flex(1.0)

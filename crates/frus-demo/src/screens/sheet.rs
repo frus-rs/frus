@@ -115,14 +115,11 @@ impl State for SheetState {
         let router = cx.router();
         Scaffold::new()
             .background(theme.background)
-            .app_bar(
-                AppBar::new()
-                    .title(Text::new("Draggable sheet"))
-                    .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
-                        router.pop();
-                    })))
-                    .build(),
-            )
+            .app_bar(AppBar::new().title(Text::new("Draggable sheet")).leading(
+                IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
+                    router.pop();
+                })),
+            ))
             .body(stack)
             .build()
     }

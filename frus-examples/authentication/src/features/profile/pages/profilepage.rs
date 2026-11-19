@@ -53,8 +53,7 @@ impl State for ProfileState {
                     .label("Back")
                     .on_press(back),
             )
-            .title(Text::new("Profile"))
-            .build();
+            .title(Text::new("Profile"));
 
         let Some(user) = auth.user() else {
             return Scaffold::new()

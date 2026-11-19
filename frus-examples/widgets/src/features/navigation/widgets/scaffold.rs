@@ -54,7 +54,7 @@ impl State for ScaffoldDemoState {
         let screen = MediaQuery::new(Size::new(320.0, 480.0)).scope(|| {
             // No leading button: a scaffold with a drawer gives its app bar the button that
             // opens it.
-            let app_bar = AppBar::new().title(Text::new("Notes")).build();
+            let app_bar = AppBar::new().title(Text::new("Notes"));
 
             let body = Center::new(
                 Column::new()

@@ -23,16 +23,13 @@
 //!     .overflow(app.menu_open, Msg::ToggleMenu)
 //!     .foldable_action("Pause", Msg::ToggleTimer) // folds when the bar is narrow
 //!     .foldable_action("Settings", Msg::OpenSettings)
-//!     .build()
 //! ```
 
 #[cfg(test)]
 use frus_core::FontWeight;
-use frus_core::{BorderRadius, Color, Rect, ShapeBorder, TextStyle};
-use frus_layout::{Align, Dimension};
+use frus_core::{BorderRadius, Color, Point, Rect, ShapeBorder, Size, TextStyle};
 
 use crate::button::Variant;
-use crate::constraints::ConstrainedBox;
 use crate::container::Container;
 use crate::dsl::button;
 use crate::flex::Flex;
@@ -125,7 +122,229 @@ enum Action<Msg> {
     Custom(Box<dyn Widget<Msg>>),
 }
 
-/// An adaptive application bar. A fluent builder finished by [`AppBar::build`].
+/// A piece of the toolbar's row, as its layout names it (milestone 824).
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum Piece {
+    Leading,
+    Title,
+    /// The action at this index, in the order the caller gave them.
+    Action(usize),
+    /// The overflow menu holding every foldable action from this one on.
+    Overflow(usize),
+}
+
+/// What the toolbar's layout needs to know to share its width out (milestone 824).
+///
+/// The row is `leading . spacer . (spring) . title . spring . actions`, each joined to the
+/// next by `gap`, and the actions are a row of their own, padded by `actions_padding`.
+struct ToolbarPlan {
+    has_leading: bool,
+    /// The leading's slot, when the caller set it; otherwise the leading's own width, and at
+    /// least [`LEADING_SLOT`].
+    leading_width: Option<f32>,
+    has_title: bool,
+    center_title: bool,
+    /// The spacer that widens the gap before the title to `title_spacing`.
+    spacer: f32,
+    gap: f32,
+    actions_padding: Option<f32>,
+    /// Per action, whether it may fold into the overflow menu.
+    foldable: Vec<bool>,
+    /// Whether there is an overflow menu to fold into.
+    folds: bool,
+}
+
+impl ToolbarPlan {
+    /// Measures the pieces against the toolbar's own `size` and places the ones that fit.
+    ///
+    /// The order in which space is handed out is worth stating, because it is a decision and
+    /// not an accident: **the actions are served first and the title yields.** A title cut
+    /// short is still a title; an action pushed off the edge is gone. So the folding budget
+    /// is computed against the title's *floor*, and whatever is left afterwards is what the
+    /// title gets, with an ellipsis if it does not fit.
+    fn place(&self, size: Size, layout: &mut crate::ChildLayout<'_>) {
+        use crate::{ChildAxis, ChildConstraints};
+        let (width, height) = (size.width, size.height);
+        let gap = self.gap;
+        // Pieces that do not fit even with everything folded run past the bar, and say so.
+        layout.report_spills();
+        // Every piece is as tall as it likes, up to the toolbar, and centred down it.
+        let free = ChildConstraints::free().height(ChildAxis::AtMost(height));
+
+        // The leading, in its slot: the reference gives it a box of exactly the leading
+        // width, so an icon button's glyph sits 16 px from the edge and the title starts at
+        // 72 (milestone 611).
+        let (leading_w, leading) = if self.has_leading {
+            let constraints = match self.leading_width {
+                Some(slot) => free.width(ChildAxis::AtMost(slot.max(0.0))),
+                None => free,
+            };
+            let measured = layout.layout_child(Piece::Leading, constraints);
+            let slot = self
+                .leading_width
+                .unwrap_or(measured.width.max(LEADING_SLOT));
+            (slot, measured)
+        } else {
+            (0.0, Size::ZERO)
+        };
+        // The title's natural width, under the type it will actually wear.
+        let natural_title = if self.has_title {
+            layout.layout_child(Piece::Title, free).width
+        } else {
+            0.0
+        };
+
+        // The room the actions may claim: everything except the leading, the spacing, the
+        // joins and what the title is **reserved**.
+        //
+        // A bar that folds actions into an overflow already has a way of making room, and
+        // that is the one to use first: the title keeps its natural width — up to half the
+        // bar, so a long one cannot starve the actions — and the actions fold to fit what is
+        // left. Truncating the title is the *last* resort, for when even one action and the
+        // overflow button will not fit beside it.
+        //
+        // The row's pieces before the actions are counted as the row has them: the leading,
+        // the spacer, a spring before a centred title, the title if there is one, and the
+        // spring after it, each joined to the next by a gap. The gap joining the last of them
+        // to the actions is each action's own, below, so a bar with no actions still owes it
+        // here.
+        let before_actions = usize::from(self.has_leading)
+            + usize::from(self.spacer > 0.0)
+            + usize::from(self.center_title)
+            + usize::from(self.has_title)
+            + 1;
+        let actions = self.foldable.len();
+        let joins = before_actions - 1 + usize::from(actions == 0);
+        let padding = self.actions_padding.unwrap_or(0.0);
+        let fixed = H_PAD * 2.0 + leading_w + self.spacer + gap * joins as f32 + padding * 2.0;
+        let room = (width - fixed).max(0.0);
+        let title_reserve = natural_title
+            .min(room * 0.5)
+            .max(TITLE_MIN.min(natural_title));
+        let budget = room - title_reserve;
+
+        // Each action measured, each with the gap that joins it to the one before.
+        let sizes: Vec<Size> = (0..actions)
+            .map(|i| layout.layout_child(Piece::Action(i), free))
+            .collect();
+        let widths: Vec<f32> = sizes.iter().map(|s| s.width + gap).collect();
+        let total: f32 = widths.iter().sum();
+
+        // How many **foldable** actions fit inline? If everything fits, no overflow;
+        // otherwise reserve the overflow button and the free widgets and keep as many
+        // foldable ones as possible, in order - so it is the last actions that fold, which
+        // is where a reader has learnt to go looking for them.
+        let mut menu = None;
+        let mut actions_w = total;
+        if self.folds && total > budget {
+            // The `⋯` is measured as the actions are, and taken back if nothing folds.
+            let overflow = layout.layout_child(Piece::Overflow(0), free);
+            layout.forget_child(Piece::Overflow(0));
+            let custom: f32 = widths
+                .iter()
+                .zip(&self.foldable)
+                .filter(|(_, foldable)| !**foldable)
+                .map(|(w, _)| *w)
+                .sum();
+            let mut used = overflow.width + gap + custom;
+            let mut kept = 0;
+            for (w, _) in widths.iter().zip(&self.foldable).filter(|(_, f)| **f) {
+                if used + w <= budget {
+                    used += w;
+                    kept += 1;
+                } else {
+                    break;
+                }
+            }
+            menu = Some((kept, overflow));
+            actions_w = used;
+        }
+
+        // The actions shown, in order, then the menu: a folded one is taken back, and is
+        // neither walked nor painted.
+        let mut inline: Vec<(Piece, Size)> = Vec::with_capacity(actions + 1);
+        let mut seen = 0;
+        for (i, size) in sizes.iter().enumerate() {
+            if self.foldable[i] {
+                if menu.is_some_and(|(kept, _)| seen >= kept) {
+                    layout.forget_child(Piece::Action(i));
+                    seen += 1;
+                    continue;
+                }
+                seen += 1;
+            }
+            inline.push((Piece::Action(i), *size));
+        }
+        if let Some((kept, _)) = menu {
+            let shown = layout.layout_child(Piece::Overflow(kept), free);
+            inline.push((Piece::Overflow(kept), shown));
+        }
+
+        // What is left for the title, once the actions have taken theirs: its ceiling.
+        let title = if self.has_title {
+            let ceiling = (width - fixed - actions_w).max(TITLE_MIN.min(natural_title));
+            layout.layout_child(Piece::Title, free.width(ChildAxis::AtMost(ceiling)))
+        } else {
+            Size::ZERO
+        };
+
+        // The actions' row: the pieces side by side, joined by the gap, padded at both ends.
+        let group_w = inline.iter().map(|(_, s)| s.width).sum::<f32>()
+            + gap * inline.len().saturating_sub(1) as f32
+            + padding * 2.0;
+        // The springs share what the pieces leave: two, either side of a centred title, or
+        // one after a flush one, which is what pushes the actions to the end.
+        let items = before_actions + 1;
+        let left = width
+            - H_PAD * 2.0
+            - leading_w
+            - self.spacer
+            - title.width
+            - group_w
+            - gap * (items - 1) as f32;
+        let spring = if self.center_title {
+            left.max(0.0) / 2.0
+        } else {
+            left.max(0.0)
+        };
+
+        let rtl = layout.theme().direction.is_rtl();
+        let put = |layout: &mut crate::ChildLayout<'_>, piece: Piece, x: f32, size: Size| {
+            // On whole pixels, as the layout rounds a row's children.
+            let x = if rtl { width - x - size.width } else { x };
+            let y = (height - size.height) / 2.0;
+            layout.position_child(piece, Point::new(x.round(), y.round()));
+        };
+        let mut x = H_PAD;
+        if self.has_leading {
+            put(
+                layout,
+                Piece::Leading,
+                x + (leading_w - leading.width) / 2.0,
+                leading,
+            );
+            x += leading_w + gap;
+        }
+        if self.spacer > 0.0 {
+            x += self.spacer + gap;
+        }
+        if self.center_title {
+            x += spring + gap;
+        }
+        if self.has_title {
+            put(layout, Piece::Title, x, title);
+            x += title.width + gap;
+        }
+        x += spring + gap;
+        x += padding;
+        for (piece, size) in inline {
+            put(layout, piece, x, size);
+            x += size.width + gap;
+        }
+    }
+}
+
+/// An adaptive application bar.
 pub struct AppBar<Msg = crate::callback::Callback> {
     inner: crate::lazy::Lazy<AppBarParts<Msg>, Msg>,
 }
@@ -134,9 +353,8 @@ pub struct AppBar<Msg = crate::callback::Callback> {
 struct AppBarParts<Msg> {
     title: Option<Box<dyn Widget<Msg>>>,
     title_style: Option<TextStyle>,
-    /// Was the title's style left at the framework's default? Only then may the theme
-    /// have its say — a caller who set one outranks it.
-    width: f32,
+    /// The bar's width when the caller set one; otherwise it takes the width it is given.
+    width: Option<f32>,
     leading: Option<Box<dyn Widget<Msg>>>,
     /// Whether a bar with no `leading` of its own may take one from the shell it stands in.
     automatically_imply_leading: bool,
@@ -146,9 +364,6 @@ struct AppBarParts<Msg> {
     actions: Vec<Action<Msg>>,
     action_size: Option<f32>,
     primary: bool,
-    /// What the surface's side intrusions take, left and right, read with the width: a
-    /// primary bar keeps its row clear of them (milestone 728).
-    side_insets: f32,
     gap: f32,
     background: Option<Color>,
     height: Option<f32>,
@@ -291,23 +506,21 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         self.inner.parts_mut()
     }
 
-    /// Creates a bar with **no title**, as wide as **the surface it is being built
-    /// for** — which is what decides how many actions fit on the line and how many
-    /// fold into the overflow menu.
+    /// Creates a bar with **no title**, as wide as **the room it is given** — which is
+    /// what decides how many actions fit on the line and how many fold into the overflow
+    /// menu.
     ///
     /// The title is [`AppBar::title`], and it is any widget. A bar that has none keeps its
     /// leading and its actions where they would be and puts nothing between them.
     ///
-    /// The width is read from [`MediaQuery::of`], so no caller passes it. Outside any
-    /// surface description — a unit test that builds a bar on its own — there is no
-    /// width to fold against and nothing folds, which is what this did before the
-    /// surface was ambient. A bar that is **not** the full width of the screen (one
-    /// beside a rail, say) still says so with [`AppBar::width`].
+    /// The bar is a widget: it is handed to a [`Scaffold`](crate::Scaffold) or placed in a
+    /// column as it is, with no `.build()`. Its toolbar decides what fits when it is laid
+    /// out, from the width it is given there (milestone 824): a bar beside a rail, in a
+    /// pane or in a dialog folds against the room it has, not against the screen.
     ///
     /// **Breaking**: this took the title as a string until milestone 522.
     /// `AppBar::new().title(Text::new("Inbox"))` is `AppBar::new().title(Text::new("Inbox"))`.
     pub fn new() -> Self {
-        let surface = MediaQuery::of();
         Self::from_parts(AppBarParts {
             // **A widget, never a string — and not always one.** The reference's `title`
             // is a `Widget?` and nothing else (`app_bar.dart:1067`). A string constructor
@@ -317,11 +530,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             // laid out and painted where the title would have been (milestone 522).
             title: None,
             title_style: None,
-            width: if surface.is_described() {
-                surface.size.width
-            } else {
-                f32::MAX
-            },
+            width: None,
             leading: None,
             automatically_imply_leading: true,
             automatically_imply_actions: true,
@@ -329,11 +538,6 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             actions: Vec::new(),
             action_size: None,
             primary: PRIMARY,
-            side_insets: if surface.is_described() {
-                surface.padding.left + surface.padding.right
-            } else {
-                0.0
-            },
             gap: GAP,
             background: None,
             height: None,
@@ -364,7 +568,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
     ///
     /// ```
     /// use frus_widgets::{AppBar, Text};
-    /// let _bar = AppBar::<()>::medium().title(Text::new("Photos")).build();
+    /// let _bar = AppBar::<()>::medium().title(Text::new("Photos"));
     /// ```
     pub fn medium() -> Self {
         Self::new().size(AppBarSize::Medium)
@@ -374,7 +578,7 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
     ///
     /// ```
     /// use frus_widgets::{AppBar, Text};
-    /// let _bar = AppBar::<()>::large().title(Text::new("Library")).build();
+    /// let _bar = AppBar::<()>::large().title(Text::new("Library"));
     /// ```
     pub fn large() -> Self {
         Self::new().size(AppBarSize::Large)
@@ -384,20 +588,17 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
     ///
     /// ```
     /// use frus_widgets::{AppBar, AppBarSize};
-    /// let _bar = AppBar::<()>::new().size(AppBarSize::Large).build();
+    /// let _bar = AppBar::<()>::new().size(AppBarSize::Large);
     /// ```
     pub fn size(mut self, size: AppBarSize) -> Self {
         self.p().size = size;
         self
     }
 
-    /// The **available width** for the bar, in logical pixels: what drives the
-    /// folding. It is a *size*, not a platform indicator.
-    ///
-    /// An override. [`AppBar::new`] already takes the surface's width from
-    /// [`MediaQuery::of`]; this is for a bar that does not get the whole of it.
+    /// A **width of its own**, in logical pixels, instead of the room the bar is given.
+    /// What fits is decided against it, as against the room otherwise.
     pub fn width(mut self, width: f32) -> Self {
-        self.p().width = width;
+        self.p().width = Some(width);
         self
     }
 
@@ -801,32 +1002,14 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             .on_press(message)
     }
 
-    /// A widget's declared width (0 if it depends on layout).
-    fn widget_width(widget: &dyn Widget<Msg>, theme: &Theme) -> f32 {
-        match widget.style_themed(theme).width {
-            Dimension::Length(v) => v,
-            _ => 0.0,
-        }
-    }
-
-    /// Assembles the bar into a widget ready to display (the row `leading . title .
-    /// spring . inline actions . overflow`, over an optional `bottom`).
+    /// The bar, boxed.
     ///
-    /// The order in which space is handed out is worth stating, because it is a
-    /// decision and not an accident: **the actions are served first and the title
-    /// yields.** A title cut short is still a title; an action pushed off the edge is
-    /// gone. So the folding budget is computed against the title's *floor*, and
-    /// whatever is left afterwards is what the title gets - with an ellipsis if it
-    /// does not fit.
-    /// Finishes the bar.
-    ///
-    /// The composition is **deferred until the theme is known** ([`ThemeBuilder`]):
-    /// `center_title` decides which children exist and in what order, so it cannot be
-    /// resolved by a hook that runs after the row has been assembled. Everything the
-    /// theme has a say in — the title's centring, its type, the bar's colours — is
-    /// resolved inside, `caller ?? theme ?? framework`.
-    ///
-    /// [`ThemeBuilder`]: crate::ThemeBuilder
+    /// An `AppBar` is a widget and is used as it is: what fits on its line is decided
+    /// when it is laid out, from the width it is given (milestone 824), so there is
+    /// nothing left for this to finish. It returns the same bar in a box.
+    #[deprecated(
+        note = "an AppBar is a widget: pass it as it is, or `Box::new(bar)` where a box is needed"
+    )]
     pub fn build(self) -> Box<dyn Widget<Msg>> {
         self.inner.into_widget()
     }
@@ -903,7 +1086,6 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             bottom_opacity,
             actions_padding,
             primary,
-            side_insets,
             flexible_space,
             icon_theme,
             actions_icon_theme,
@@ -911,16 +1093,6 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             exclude_header_semantics,
             size: _,
         } = parts;
-
-        // **Is that width a measurement or a sentinel?** `AppBar::new` takes the surface's
-        // width from the ambient description, and falls back to `f32::MAX` when nothing
-        // described it — a bar built outside a frame, which is every bar a test builds by
-        // hand. `f32::MAX` is finite, so every arithmetic below happily produced a number:
-        // a row `f32::MAX` wide, a title ceiling just under it, and a leading spring that
-        // pushed a centred title to `x = 1.7e38`, off any screen there will ever be. The
-        // sentinel is asked about once, here, and the two places that need a real width
-        // fill the space they are offered instead.
-        let known_width = width.is_finite() && width < f32::MAX;
 
         // **What the shell knows and the bar does not** (milestone 422). This bar was
         // handed to its `Scaffold` already built, so it cannot see the screen it stands on;
@@ -996,12 +1168,6 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             overflow: Some(frus_core::TextOverflow::Ellipsis),
             ..DefaultTextStyle::from_text_style(title_style)
         };
-        // The same thing as a whole theme, for asking a title how wide it naturally is.
-        let dressed_title_theme = {
-            let mut dressed = theme.clone();
-            dressed.widgets.text = dressed.widgets.text.merge(title_words);
-            dressed
-        };
         let background = background.or(t.background);
         let elevation = if elevation > 0.0 {
             elevation
@@ -1009,124 +1175,17 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             t.elevation.unwrap_or(0.0)
         };
         let height = height.or(t.height);
-        let leading_w = match (&leading, leading_width) {
-            (None, _) => 0.0,
-            (Some(_), Some(w)) => w,
-            (Some(widget), None) => Self::widget_width(widget.as_ref(), theme).max(LEADING_SLOT),
-        };
-        // The title's natural width, asked of the widget **under the type it will
-        // actually wear**. Asking it bare would measure a string title at the framework's
-        // 16 px and reserve room for a bar that draws it at 22.
-        // Nought for a bar with no title: it reserves nothing, and holds no floor.
-        let natural_title = title.as_ref().map_or(0.0, |title| {
-            Self::widget_width(title.as_ref(), &dressed_title_theme)
-        });
-
-        // The room the actions may claim: everything except the margins, the leading,
-        // the spacing, and what the title is **reserved**.
-        //
-        // The order matters and it is a decision. A bar that folds actions into an
-        // overflow already has a way of making room, and that is the one to use first:
-        // the title keeps its natural width — up to half the bar, so a long one cannot
-        // starve the actions — and the actions fold to fit what is left. Truncating
-        // the title is the *last* resort, for when even one action and the overflow
-        // button will not fit beside it.
-        //
-        // The row's own children before the actions are counted as the row below will
-        // have them: the leading, the spacer that widens its gap to `title_spacing`, a
-        // spring before a centred title, the title if there is one, and the spring after
-        // it — each joined to the next by a gap. The gap joining the last of them to the
-        // actions is each action's own, below, so a bar with no actions still owes it here.
-        // With a leading, the spacing sits between it and the title; without one, between
-        // the start edge and the title, as the reference's toolbar puts it. A centred title
-        // has no start to keep it from.
+        let toolbar_height = height.unwrap_or(APP_BAR_HEIGHT);
+        // The spacer that widens the leading's gap to `title_spacing`. With a leading, the
+        // spacing sits between it and the title; without one, between the start edge and the
+        // title, as the reference's toolbar puts it. A centred title has no start to keep it
+        // from.
         let spacer_w =
             if title.is_some() && (leading.is_some() || !center_title) && title_spacing > gap {
                 title_spacing - gap
             } else {
                 0.0
             };
-        let before_actions = usize::from(leading.is_some())
-            + usize::from(spacer_w > 0.0)
-            + usize::from(center_title)
-            + usize::from(title.is_some())
-            + 1;
-        let joins = before_actions - 1 + usize::from(actions.is_empty());
-        // A primary bar keeps its row clear of the side intrusions (the `SafeArea` below):
-        // a phone on its side has its cutout and corners there. What it takes is not room
-        // for actions, or they are counted into a row that is narrower than the bar, and the
-        // last ones run off its end (milestone 728).
-        let sides = if primary { side_insets } else { 0.0 };
-        let fixed = H_PAD * 2.0
-            + sides
-            + leading_w
-            + spacer_w
-            + gap * joins as f32
-            + actions_padding.map_or(0.0, |pad| pad * 2.0);
-        let room = (width - fixed).max(0.0);
-        let title_reserve = natural_title
-            .min(room * 0.5)
-            .max(TITLE_MIN.min(natural_title));
-        let budget = room - title_reserve;
-        // The `⋯` is made as the actions are, and measured as they are.
-        let overflow_btn_w = match &overflow {
-            Some((_, toggle)) => {
-                let glyph = Self::overflow_button(toggle.clone());
-                Self::widget_width(&glyph, theme) + gap
-            }
-            None => 0.0,
-        };
-
-        // Each action's width; free widgets are **always** inline.
-        let widths: Vec<f32> = actions
-            .iter()
-            .map(|action| match action {
-                Action::Labeled { label, message } => {
-                    let drawn = Self::action_button(label.clone(), message.clone(), action_size);
-                    Self::widget_width(&drawn, theme) + gap
-                }
-                Action::Custom(widget) => Self::widget_width(widget.as_ref(), theme) + gap,
-            })
-            .collect();
-        let total: f32 = widths.iter().sum();
-        let custom_total: f32 = actions
-            .iter()
-            .zip(&widths)
-            .filter(|(action, _)| matches!(action, Action::Custom(_)))
-            .map(|(_, w)| *w)
-            .sum();
-
-        // How many **labelled** actions fit inline? If everything fits, no overflow;
-        // otherwise reserve the overflow button and the free widgets and keep as many
-        // labelled ones as possible, in order - so it is the last actions that fold,
-        // which is where a reader has learnt to go looking for them.
-        let (kept_labeled, actions_w) = if total <= budget {
-            (usize::MAX, total)
-        } else {
-            let mut used = overflow_btn_w + custom_total;
-            let mut kept = 0;
-            for (action, w) in actions.iter().zip(&widths) {
-                if matches!(action, Action::Custom(_)) {
-                    continue;
-                }
-                if used + w <= budget {
-                    used += w;
-                    kept += 1;
-                } else {
-                    break;
-                }
-            }
-            (kept, used)
-        };
-
-        // What is left for the title, once the actions have taken theirs. Unknown when
-        // the width is: a ceiling computed from the sentinel is `f32::MAX` less a few
-        // pixels, which is not a ceiling.
-        let title_room = if known_width {
-            (width - fixed - actions_w).max(TITLE_MIN.min(natural_title))
-        } else {
-            f32::INFINITY
-        };
 
         // An icon theme is delivered as a **theme for the subtree**, not as an argument
         // to each widget: that is the only way it reaches a glyph nested inside a button
@@ -1162,104 +1221,6 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
                 widget,
             )) as Box<dyn Widget<Msg>>
         };
-
-        let mut row = Flex::row().align(Align::Center).gap(gap);
-        // The leading **in its slot**, centred: the reference gives it a box of exactly the
-        // leading width, so an icon button's glyph sits 16 px from the edge and the title
-        // starts at 72. The slot used to be counted in the budget and not given, and the
-        // glyph touched the edge (milestone 611).
-        if let Some(leading) = leading {
-            row = row.child(
-                Container::new()
-                    .width(leading_w)
-                    .alignment(crate::Alignment::CENTER)
-                    .child(dress(leading, icon_theme)),
-            );
-        }
-        if spacer_w > 0.0 {
-            row = row.child(Container::new().width(spacer_w));
-        }
-        // Centred: a spring on either side of the title. Otherwise one spring after it,
-        // which is what pushes the actions to the right.
-        if center_title {
-            row = row.child(Container::new().flex(1.0));
-        }
-        // The bar's title is the **heading** of the screen it names — the landmark a
-        // screen reader's user jumps to — and now that is true of *every* title rather
-        // than only of one written as a string. The reference wraps the same way
-        // (`app_bar.dart:1071`), and milestone 401's `Semantics` wrapper is what lets a
-        // container state a role for a child it was handed already assembled.
-        let title = title.map(|title| -> Box<dyn Widget<Msg>> {
-            if exclude_header_semantics {
-                title
-            } else {
-                Box::new(crate::Semantics::heading(title))
-            }
-        });
-        // **The type, handed down rather than applied.** The words are cut by the box they
-        // are given instead of by arithmetic here: `soft_wrap: false` and an ellipsis, on a
-        // `Text` that never chose either, exactly as the reference sets them
-        // (`app_bar.dart:1084`). Cutting the string by hand needed a width computed before
-        // the layout ran, which is the class of mistake milestone 392 was.
-        // And a **ceiling**, the reference's `_AppBarTitleBox` (`app_bar.dart:1069`). The
-        // ellipsis alone would very nearly do it — a text handed an overflow mode grants
-        // the squeeze, so flexbox may shrink it — but "very nearly" is how an over-long
-        // task name evicted its own delete button in milestone 333. What is left after the
-        // actions have taken theirs is a number the bar knows; saying it outright is one
-        // line, and it is the line that makes the guarantee testable.
-        // A bar with no title puts nothing here: the reference's toolbar is handed a `null`
-        // middle and builds none.
-        if let Some(title) = title {
-            row = row.child(
-                ConstrainedBox::new(crate::Themed::tweak(
-                    move |t| t.widgets.text = t.widgets.text.merge(title_words),
-                    title,
-                ))
-                .max_width(title_room),
-            );
-        }
-        row = row.child(Container::new().flex(1.0));
-
-        let mut labeled_seen = 0;
-        let mut folded: Vec<(String, Msg)> = Vec::new();
-        // The actions as a **group**, so that `actions_padding` insets the glyphs rather
-        // than each button's own hit area. Without a padding the group is the row itself
-        // and nothing is nested that was not nested before.
-        let mut group = Flex::row().align(Align::Center).gap(gap);
-        for action in actions {
-            match action {
-                Action::Custom(widget) => group = group.child_boxed(widget),
-                Action::Labeled { label, message } => {
-                    if labeled_seen < kept_labeled {
-                        group = group.child(Self::action_button(label, message, action_size));
-                    } else {
-                        folded.push((label, message));
-                    }
-                    labeled_seen += 1;
-                }
-            }
-        }
-
-        if !folded.is_empty() {
-            match overflow {
-                // A controlled overflow menu: the glyph opens it, the items emit the
-                // actions.
-                Some((open, toggle)) => {
-                    let mut menu =
-                        PopupMenuButton::new(Self::overflow_button(toggle.clone()), open, toggle);
-                    for (label, message) in folded {
-                        menu = menu.item(label, message);
-                    }
-                    group = group.child(menu);
-                }
-                // No overflow configured: show everything inline (it may overflow).
-                None => {
-                    for (label, message) in folded {
-                        group = group.child(Self::action_button(label, message, action_size));
-                    }
-                }
-            }
-        }
         // Unset, the actions follow the bar's icon theme; set, they part company with
         // the leading slot — a back arrow in the foreground colour beside actions in a
         // muted one, which is the case the reference's `actionsIconTheme` exists for.
@@ -1270,40 +1231,110 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
             color: Some(theme.scheme.on_surface_variant),
             size: None,
         }));
-        let group = dress(Box::new(group), actions_icons);
-        row = match actions_padding {
-            // Across, at both ends of the group: what insets the glyphs from the bar's edge.
-            // Not above and below, where a bar of a fixed height has no room to give — an
-            // icon button is already 48 of its 64 (milestone 611).
-            Some(pad) => row.child(
-                Container::new()
-                    .padding_each(0.0, pad, 0.0, pad)
-                    .child(group),
-            ),
-            None => row.child_boxed(group),
-        };
 
-        // The toolbar proper: the row, with its horizontal margin and any imposed
-        // height. The `bottom` sits under it inside the same background - it belongs to
-        // the bar, rather than being something the application places beneath one.
-        // The row is given the bar's width less its margins, so that the springs
-        // inside it have something to share: a row that hugged its content would leave
-        // a centred title with no space to be centred in.
-        let row = if known_width {
-            row.width((width - H_PAD * 2.0).max(0.0))
-        } else {
-            // Nobody described the surface, so `width` is the sentinel rather than a
-            // number. Fill what the parent offers instead of laying the row out across
-            // `f32::MAX`: a spring in a row that wide puts a centred title at infinity,
-            // which is where every Apple-platform title went until milestone 474.
-            row.width_fraction(1.0)
+        // **The toolbar decides from the width it is given** (milestone 824). Its pieces
+        // are built here, every one that might be shown; what fits is decided by the
+        // toolbar's layout, which is handed the toolbar's own box and measures each piece
+        // before it places it. The bar used to decide while it was being built, from the
+        // surface's width or one the caller passed, so a bar narrower than the surface
+        // (beside a rail, in a pane, in a dialog) folded against a width it did not have.
+        let has_leading = leading.is_some();
+        let mut pieces: Vec<(Piece, Box<dyn Widget<Msg>>)> = Vec::new();
+        if let Some(leading) = leading {
+            pieces.push((Piece::Leading, dress(leading, icon_theme)));
+        }
+        // The bar's title is the **heading** of the screen it names — the landmark a
+        // screen reader's user jumps to — and now that is true of *every* title rather
+        // than only of one written as a string. The reference wraps the same way
+        // (`app_bar.dart:1071`), and milestone 401's `Semantics` wrapper is what lets a
+        // container state a role for a child it was handed already assembled.
+        //
+        // **The type, handed down rather than applied.** The words are cut by the box they
+        // are given instead of by arithmetic here: `soft_wrap: false` and an ellipsis, on a
+        // `Text` that never chose either, exactly as the reference sets them
+        // (`app_bar.dart:1084`). The box is the room the actions leave, the reference's
+        // `_AppBarTitleBox` (`app_bar.dart:1069`), worked out by the toolbar's layout.
+        // A bar with no title puts nothing here: the reference's toolbar is handed a `null`
+        // middle and builds none.
+        let has_title = title.is_some();
+        if let Some(title) = title {
+            let title: Box<dyn Widget<Msg>> = if exclude_header_semantics {
+                title
+            } else {
+                Box::new(crate::Semantics::heading(title))
+            };
+            pieces.push((
+                Piece::Title,
+                Box::new(crate::Themed::tweak(
+                    move |t| t.widgets.text = t.widgets.text.merge(title_words),
+                    title,
+                )),
+            ));
+        }
+        let mut labeled = Vec::new();
+        let mut foldable = Vec::with_capacity(actions.len());
+        for (i, action) in actions.into_iter().enumerate() {
+            let widget: Box<dyn Widget<Msg>> = match action {
+                // Free widgets are **always** inline.
+                Action::Custom(widget) => {
+                    foldable.push(false);
+                    widget
+                }
+                Action::Labeled { label, message } => {
+                    foldable.push(true);
+                    labeled.push((label.clone(), message.clone()));
+                    Box::new(Self::action_button(label, message, action_size))
+                }
+            };
+            pieces.push((Piece::Action(i), dress(widget, actions_icons)));
+        }
+        // A controlled overflow menu: the glyph opens it, the items emit the actions that
+        // folded. One per number of actions kept, since that number is only known once the
+        // toolbar is laid out; the layout shows the one it needs, and the others are never
+        // laid out, walked or painted. Without an overflow, every action stays inline (and
+        // may overflow).
+        let folds = overflow.is_some() && !labeled.is_empty();
+        if let Some((open, toggle)) = overflow {
+            for kept in 0..labeled.len() {
+                let mut menu = PopupMenuButton::new(
+                    Self::overflow_button(toggle.clone()),
+                    open,
+                    toggle.clone(),
+                );
+                for (label, message) in &labeled[kept..] {
+                    menu = menu.item(label.clone(), message.clone());
+                }
+                pieces.push((Piece::Overflow(kept), dress(Box::new(menu), actions_icons)));
+            }
+        }
+        let plan = ToolbarPlan {
+            has_leading,
+            leading_width,
+            has_title,
+            center_title,
+            spacer: spacer_w,
+            gap,
+            actions_padding,
+            foldable,
+            folds,
         };
-        // The bar is a **fixed** height, the caller's or the reference's. It used to hug
-        // its content, which made the chrome a different shape on every screen and moved
-        // the page below it the moment an action appeared or a title wrapped.
-        let mut toolbar = Container::new().padding_each(0.0, H_PAD, 0.0, H_PAD);
-        toolbar = toolbar.height(height.unwrap_or(APP_BAR_HEIGHT));
-        let toolbar = toolbar.child(row);
+        let mut row =
+            crate::CustomMultiChildLayout::new(move |size, layout| plan.place(size, layout))
+                .height(toolbar_height);
+        for (piece, widget) in pieces {
+            row = row.child(piece, widget);
+        }
+
+        // The toolbar proper: the row at the bar's height, the caller's or the reference's.
+        // The `bottom` sits under it inside the same background - it belongs to the bar,
+        // rather than being something the application places beneath one. The bar is a
+        // **fixed** height. It used to hug its content, which made the chrome a different
+        // shape on every screen and moved the page below it the moment an action appeared
+        // or a title wrapped.
+        let toolbar = Container::new()
+            .padding_each(0.0, H_PAD, 0.0, H_PAD)
+            .height(toolbar_height)
+            .child(row);
 
         // The two opacities are **group** opacities and independent of one another: a
         // collapsing header fades its contents out while its surface stays, and the
@@ -1339,12 +1370,12 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         // content. Hugging made two things quietly wrong: a background painted only
         // behind the text instead of across the bar, and a centred title with no free
         // space to be centred in.
+        // It is the width it is given, unless the caller said otherwise.
         let mut chrome = Container::new();
-        if known_width {
-            chrome = chrome.width(width);
-        } else {
-            chrome = chrome.width_fraction(1.0);
-        }
+        chrome = match width {
+            Some(width) => chrome.width(width),
+            None => chrome.width_fraction(1.0),
+        };
         // **Transparency wins outright.** A caller asking for a bar over an image has
         // already decided; arguing with the background and the elevation it inherited
         // from a theme would only make that decision conditional on the theme.
@@ -1373,7 +1404,17 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         // The corners a shape *resolves to* in the bar's own box, not the shape itself:
         // the chrome is a rectangle, and a shape that is not one has no corners to give.
         if let Some(shape) = shape.or(t.shape) {
-            let box_ = Rect::new(0.0, 0.0, width, height.unwrap_or(APP_BAR_HEIGHT));
+            // The corners do not depend on the width, except for a shape rounded by half
+            // its height or width; the surface's width stands in for a bar told none.
+            let across = width.unwrap_or_else(|| {
+                let surface = MediaQuery::of();
+                if surface.is_described() {
+                    surface.size.width
+                } else {
+                    f32::MAX
+                }
+            });
+            let box_ = Rect::new(0.0, 0.0, across, height.unwrap_or(APP_BAR_HEIGHT));
             if let Some((_, radius)) = shape.as_rounded(box_) {
                 chrome = chrome.radius(radius).clip();
             }
@@ -1461,11 +1502,10 @@ mod tests {
                     .foldable_action("Action One", Msg::A)
                     .foldable_action("Action Two", Msg::B)
                     .foldable_action("Action Three", Msg::C)
-                    .build()
             });
             // The actions still on the bar, by their words: a folded one leaves, and the
             // overflow button that takes its place says no words of its own.
-            texts_of(bar.as_ref(), width)
+            texts_of(&bar, width)
                 .into_iter()
                 .filter(|t| t.starts_with("Action"))
                 .count()
@@ -1487,16 +1527,18 @@ mod tests {
             let surface = MediaQuery::new(Size::new(width, 80.0)).with_insets(
                 frus_core::WindowInsets::bars(frus_core::Insets::new(0.0, sides, 0.0, sides)),
             );
-            let bar = surface.scope(|| {
-                AppBar::new()
-                    .title(Text::new("Title"))
-                    .overflow(false, Msg::PopupMenuButton)
-                    .foldable_action("Action One", Msg::A)
-                    .foldable_action("Action Two", Msg::B)
-                    .foldable_action("Action Three", Msg::C)
-                    .build()
-            });
-            texts_of(bar.as_ref(), width)
+            // Laid out under the surface too: the bar keeps its row clear of the cutouts by
+            // a safe area, which reads them when the bar is laid out.
+            surface
+                .scope(|| {
+                    let bar = AppBar::new()
+                        .title(Text::new("Title"))
+                        .overflow(false, Msg::PopupMenuButton)
+                        .foldable_action("Action One", Msg::A)
+                        .foldable_action("Action Two", Msg::B)
+                        .foldable_action("Action Three", Msg::C);
+                    texts_of(&bar, width)
+                })
                 .into_iter()
                 .filter(|t| t.starts_with("Action"))
                 .count()
@@ -1573,17 +1615,15 @@ mod tests {
         let flat = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
-            .background(base)
-            .build();
+            .background(base);
         let raised = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
             .background(base)
             .elevation(3.0)
-            .surface_tint(tint)
-            .build();
-        let (flat_color, _) = surface(flat.as_ref(), W).expect("a flat surface");
-        let (raised_color, _) = surface(raised.as_ref(), W).expect("a raised surface");
+            .surface_tint(tint);
+        let (flat_color, _) = surface(&flat, W).expect("a flat surface");
+        let (raised_color, _) = surface(&raised, W).expect("a raised surface");
         assert_eq!(flat_color, base, "nothing is tinted without a tint");
         let expected = base.lerp(tint, 0.08);
         assert!(
@@ -1618,13 +1658,7 @@ mod tests {
         }
         let named = Color::rgba(0.0, 0.0, 0.0, 0.3);
         let cast = |bar: AppBar<Msg>, theme: &Theme| {
-            let bar = bar.build();
-            let ui = build_ui(
-                bar.as_ref(),
-                Size::new(W, 200.0),
-                &Runtime::default(),
-                theme,
-            );
+            let ui = build_ui(&bar, Size::new(W, 200.0), &Runtime::default(), theme);
             let mut out = Vec::new();
             shadows(ui.scene().primitives(), named, &mut out);
             out
@@ -1668,10 +1702,9 @@ mod tests {
             .background(Color::rgb(0.9, 0.1, 0.1))
             .elevation(6.0)
             .surface_tint(Color::rgb(0.0, 1.0, 0.0))
-            .force_material_transparency(true)
-            .build();
+            .force_material_transparency(true);
         assert!(
-            surface(bar.as_ref(), W).is_none(),
+            surface(&bar, W).is_none(),
             "the bar painted a surface it was told not to"
         );
     }
@@ -1688,11 +1721,8 @@ mod tests {
         // A background, because `surface` looks for the widest opaque rectangle and a
         // bar the theme gives no colour paints none.
         let corner = |bar: AppBar<Msg>| {
-            let built = bar
-                .width(400.0)
-                .background(Color::rgb(0.2, 0.2, 0.2))
-                .build();
-            surface(built.as_ref(), 400.0).map(|(_, radius)| radius)
+            let built = bar.width(400.0).background(Color::rgb(0.2, 0.2, 0.2));
+            surface(&built, 400.0).map(|(_, radius)| radius)
         };
 
         // A stadium: half the short side of a 400x64 bar (`APP_BAR_HEIGHT`), so 32.
@@ -1741,16 +1771,8 @@ mod tests {
         let mut theme = Theme::dark();
         theme.widgets.app_bar.shape = Some(ShapeBorder::stadium());
         theme.widgets.app_bar.background = Some(Color::rgb(0.2, 0.2, 0.2));
-        let built = AppBar::<Msg>::new()
-            .title(Text::new("Title"))
-            .width(400.0)
-            .build();
-        let ui = build_ui(
-            built.as_ref(),
-            Size::new(400.0, 200.0),
-            &Runtime::default(),
-            &theme,
-        );
+        let built = AppBar::<Msg>::new().title(Text::new("Title")).width(400.0);
+        let ui = build_ui(&built, Size::new(400.0, 200.0), &Runtime::default(), &theme);
         fn find(primitives: &[crate::Primitive]) -> Option<f32> {
             for p in primitives {
                 match p {
@@ -1777,16 +1799,14 @@ mod tests {
         let square = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
-            .background(Color::rgb(0.2, 0.2, 0.2))
-            .build();
+            .background(Color::rgb(0.2, 0.2, 0.2));
         let rounded = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
             .background(Color::rgb(0.2, 0.2, 0.2))
-            .radius(18.0)
-            .build();
-        assert_eq!(surface(square.as_ref(), W).expect("square").1, 0.0);
-        assert_eq!(surface(rounded.as_ref(), W).expect("rounded").1, 18.0);
+            .radius(18.0);
+        assert_eq!(surface(&square, W).expect("square").1, 0.0);
+        assert_eq!(surface(&rounded, W).expect("rounded").1, 18.0);
     }
 
     /// **The bar's title is the screen's heading, and it was announced as a label.**
@@ -1803,10 +1823,9 @@ mod tests {
             let bar = AppBar::<Msg>::new()
                 .title(Text::new("Inbox"))
                 .width(W)
-                .exclude_header_semantics(exclude)
-                .build();
+                .exclude_header_semantics(exclude);
             let ui = build_ui(
-                bar.as_ref(),
+                &bar,
                 Size::new(W, 200.0),
                 &Runtime::default(),
                 &Theme::default(),
@@ -1835,9 +1854,9 @@ mod tests {
     #[test]
     fn a_widget_title_is_a_heading_exactly_as_a_string_one_is() {
         const W: f32 = 400.0;
-        let role_of = |bar: Box<dyn Widget<Msg>>| {
+        let role_of = |bar: AppBar<Msg>| {
             let ui = build_ui(
-                bar.as_ref(),
+                &bar,
                 Size::new(W, 200.0),
                 &Runtime::default(),
                 &Theme::default(),
@@ -1848,17 +1867,11 @@ mod tests {
                 .map(|(_, _, s)| s.role)
                 .expect("the title is described")
         };
-        let from_string = role_of(
-            AppBar::<Msg>::new()
-                .title(Text::new("Inbox"))
-                .width(W)
-                .build(),
-        );
+        let from_string = role_of(AppBar::<Msg>::new().title(Text::new("Inbox")).width(W));
         let from_widget = role_of(
             AppBar::<Msg>::new()
                 .title(crate::Text::new("Inbox"))
-                .width(W)
-                .build(),
+                .width(W),
         );
         assert_eq!(from_string, frus_core::Role::Heading);
         assert_eq!(
@@ -1877,9 +1890,9 @@ mod tests {
     #[test]
     fn the_bar_hands_its_type_to_a_title_it_did_not_build() {
         const W: f32 = 500.0;
-        let size_of = |bar: Box<dyn Widget<Msg>>| {
+        let size_of = |bar: AppBar<Msg>| {
             let ui = build_ui(
-                bar.as_ref(),
+                &bar,
                 Size::new(W, 200.0),
                 &Runtime::default(),
                 &Theme::default(),
@@ -1902,8 +1915,7 @@ mod tests {
         let inherited = size_of(
             AppBar::<Msg>::new()
                 .title(crate::Text::new("Inbox"))
-                .width(W)
-                .build(),
+                .width(W),
         );
         assert_eq!(
             inherited,
@@ -1914,8 +1926,7 @@ mod tests {
         let chosen = size_of(
             AppBar::<Msg>::new()
                 .title(crate::Text::new("Inbox").size(11.0))
-                .width(W)
-                .build(),
+                .width(W),
         );
         assert_eq!(chosen, 11.0);
     }
@@ -1932,15 +1943,14 @@ mod tests {
         let bar = AppBar::<Msg>::new()
             .width(W)
             .leading(button("Back", Msg::A))
-            .foldable_action("Save", Msg::B)
-            .build();
+            .foldable_action("Save", Msg::B);
         assert_eq!(
-            texts_of(bar.as_ref(), W),
+            texts_of(&bar, W),
             ["Back", "Save"],
             "nothing is drawn between the leading and the action"
         );
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(W, 200.0),
             &Runtime::default(),
             &Theme::default(),
@@ -1963,7 +1973,7 @@ mod tests {
             })
             .expect("the action is drawn");
         assert!(save_x > W / 2.0, "the action keeps the end: x = {save_x}");
-        assert_eq!(bar_height(bar.as_ref()), Some(APP_BAR_HEIGHT));
+        assert_eq!(bar_height(&bar), Some(APP_BAR_HEIGHT));
     }
 
     /// **A bar with no title owes the fold no room for one**, nor a spacing before it.
@@ -1979,18 +1989,20 @@ mod tests {
     fn an_untitled_bar_gives_its_actions_the_room() {
         let theme = Theme::default();
         let size = action_size_of(None, &theme);
-        let save = AppBar::<Msg>::widget_width(
+        let save = crate::ui::natural_size(
             &AppBar::<Msg>::action_button("Save".into(), Msg::B, size),
+            crate::WidgetId::ROOT,
+            &Runtime::default(),
             &theme,
-        );
+        )
+        .width;
         let shows = |centered: bool, width: f32| {
             let bar = AppBar::<Msg>::new()
                 .width(width)
                 .center_title(centered)
                 .overflow(false, Msg::PopupMenuButton)
-                .foldable_action("Save", Msg::B)
-                .build();
-            texts_of(bar.as_ref(), width).iter().any(|t| t == "Save")
+                .foldable_action("Save", Msg::B);
+            texts_of(&bar, width).iter().any(|t| t == "Save")
         };
         let width = H_PAD * 2.0 + save + 0.25;
         assert!(
@@ -2038,8 +2050,7 @@ mod tests {
         let plain = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
-            .leading(crate::Icon::new(crate::Icons::STAR))
-            .build();
+            .leading(crate::Icon::new(crate::Icons::STAR));
         let themed = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
@@ -2047,14 +2058,13 @@ mod tests {
             .icon_theme(crate::widgettheme::IconTheme {
                 color: Some(wanted),
                 size: None,
-            })
-            .build();
+            });
         assert!(
-            !glyph_colors(plain.as_ref(), W).contains(&wanted),
+            !glyph_colors(&plain, W).contains(&wanted),
             "the plain bar should not already be that colour"
         );
         assert!(
-            glyph_colors(themed.as_ref(), W).contains(&wanted),
+            glyph_colors(&themed, W).contains(&wanted),
             "the icon theme never reached the glyph"
         );
     }
@@ -2110,7 +2120,7 @@ mod tests {
             if let Some(style) = style {
                 bar = bar.toolbar_text_style(style);
             }
-            toolbar_texts(bar.build().as_ref(), W)
+            toolbar_texts(&bar, W)
         };
         let plain = bar(None);
         let dressed = bar(Some(TextStyle::new(11.0)));
@@ -2146,9 +2156,8 @@ mod tests {
             .actions_icon_theme(crate::widgettheme::IconTheme {
                 color: Some(acts),
                 size: None,
-            })
-            .build();
-        let colors = glyph_colors(bar.as_ref(), W);
+            });
+        let colors = glyph_colors(&bar, W);
         assert!(colors.contains(&lead), "the leading glyph kept its colour");
         assert!(colors.contains(&acts), "the action glyph took its own");
     }
@@ -2170,10 +2179,9 @@ mod tests {
                 ])
                 .action(crate::IconButton::new(crate::Icons::SEARCH).on_press(Msg::B))
                 .action(Text::new("Fourth"))
-                .build()
         };
         for width in [1000.0, 200.0] {
-            let texts: Vec<String> = texts_of(bar(width).as_ref(), width)
+            let texts: Vec<String> = texts_of(&bar(width), width)
                 .into_iter()
                 .filter(|t| t != "Title")
                 .collect();
@@ -2192,9 +2200,8 @@ mod tests {
         let bar = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(W)
-            .action(button("Go", Msg::C))
-            .build();
-        crate::build_deferred(bar.as_ref(), &Theme::default(), &Runtime::default());
+            .action(button("Go", Msg::C));
+        crate::build_deferred(&bar, &Theme::default(), &Runtime::default());
         fn walk(widget: &dyn Widget<Msg>, out: &mut Vec<Msg>) {
             if let Some(message) = widget.on_click() {
                 out.push(message);
@@ -2204,7 +2211,7 @@ mod tests {
             }
         }
         let mut messages = Vec::new();
-        walk(bar.as_ref(), &mut messages);
+        walk(&bar, &mut messages);
         assert_eq!(messages, vec![Msg::C]);
     }
 
@@ -2218,9 +2225,8 @@ mod tests {
             if with_space {
                 bar = bar.flexible_space(Container::new().height(400.0));
             }
-            let built = bar.build();
             let ui = build_ui(
-                built.as_ref(),
+                &bar,
                 Size::new(W, 800.0),
                 &Runtime::default(),
                 &Theme::default(),
@@ -2315,9 +2321,9 @@ mod tests {
                     for label in LABELS {
                         bar = bar.foldable_action(label, Msg::B);
                     }
-                    bar.build()
+                    bar
                 });
-                let ui = build_ui(bar.as_ref(), size, &Runtime::default(), &Theme::default());
+                let ui = build_ui(&bar, size, &Runtime::default(), &Theme::default());
                 for o in ui.overflows() {
                     worst.push(format!(
                         "{width} px, leading {leading}, centred {centered}, padding {padding:?}, \
@@ -2348,9 +2354,8 @@ mod tests {
                     ))
                     // A leading of an exact width, so no slack in its slot hides the gap.
                     .leading(button::<Msg>("Menu", Msg::A))
-                    .build()
             });
-            let ui = build_ui(bar.as_ref(), size, &Runtime::default(), &Theme::default());
+            let ui = build_ui(&bar, size, &Runtime::default(), &Theme::default());
             for o in ui.overflows() {
                 worst.push(format!("{width} px: {:?} by {:.1} px", o.side, o.amount));
             }
@@ -2365,10 +2370,9 @@ mod tests {
             .overflow(open, Msg::PopupMenuButton)
             .foldable_action("Action One", Msg::A)
             .foldable_action("Action Two", Msg::B)
-            .foldable_action("Action Three", Msg::C)
-            .build();
+            .foldable_action("Action Three", Msg::C);
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(width, 80.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2387,19 +2391,20 @@ mod tests {
     /// row has been assembled — the composition is deferred to the theme instead.
     #[test]
     fn center_title_resolves_caller_then_theme_then_platform() {
-        // A centred title is a spring, the title, another spring; a flush one is the
-        // title straight after the leading. Counting the springs reads the decision.
-        fn springs(widget: &dyn Widget<Msg>, theme: &crate::theme::Theme) -> usize {
-            widget.build_themed(theme);
-            let mine = usize::from(matches!(
-                widget.style().flex_grow,
-                g if g > 0.0
-            ));
-            mine + widget
-                .children()
+        // A centred title starts further along the bar than a flush one: where it is drawn
+        // reads the decision.
+        fn springs(bar: AppBar<Msg>, theme: &crate::theme::Theme) -> u32 {
+            let ui = build_ui(&bar, Size::new(400.0, 120.0), &Runtime::default(), theme);
+            ui.scene()
+                .primitives()
                 .iter()
-                .map(|c| springs(c.as_ref(), theme))
-                .sum::<usize>()
+                .find_map(|p| match p {
+                    frus_core::Primitive::Text { text, position, .. } if text == "Title" => {
+                        Some(position.x.round() as u32)
+                    }
+                    _ => None,
+                })
+                .expect("the title is drawn")
         }
         let bar = || AppBar::<Msg>::new().title(Text::new("Title")).width(400.0);
         let plain = crate::theme::Theme::default();
@@ -2408,37 +2413,34 @@ mod tests {
         let mut flush = crate::theme::Theme::default();
         flush.widgets.app_bar.center_title = Some(false);
 
-        let untold = springs(bar().build().as_ref(), &plain);
+        let untold = springs(bar(), &plain);
         // Guard the instrument before trusting it: if centring did not change the
         // composition, every assertion below would pass while proving nothing.
         assert_ne!(
-            springs(bar().center_title(true).build().as_ref(), &plain),
-            springs(bar().center_title(false).build().as_ref(), &plain),
+            springs(bar().center_title(true), &plain),
+            springs(bar().center_title(false), &plain),
             "centring changes the row, or this test cannot see anything"
         );
         assert_eq!(
-            springs(bar().build().as_ref(), &centred),
-            springs(bar().center_title(true).build().as_ref(), &plain),
+            springs(bar(), &centred),
+            springs(bar().center_title(true), &plain),
             "the theme centres it, as the caller would have"
         );
         assert_eq!(
-            springs(bar().build().as_ref(), &flush),
-            springs(bar().center_title(false).build().as_ref(), &plain),
+            springs(bar(), &flush),
+            springs(bar().center_title(false), &plain),
             "and un-centres it"
         );
         // The caller outranks the theme, whichever way the theme leant.
         assert_eq!(
-            springs(bar().center_title(false).build().as_ref(), &centred),
-            springs(bar().center_title(false).build().as_ref(), &plain)
+            springs(bar().center_title(false), &centred),
+            springs(bar().center_title(false), &plain)
         );
         // And with neither, the platform still has the last word.
         assert_eq!(
             untold,
             springs(
-                bar()
-                    .center_title(platform_centers_title(plain.platform, 0))
-                    .build()
-                    .as_ref(),
+                bar().center_title(platform_centers_title(plain.platform, 0)),
                 &plain
             )
         );
@@ -2449,30 +2451,25 @@ mod tests {
     /// it the moment an action appeared or a title grew.
     #[test]
     fn the_bar_is_the_references_height() {
-        let plain = AppBar::<Msg>::new()
-            .title(Text::new("Title"))
-            .width(400.0)
-            .build();
+        let plain = AppBar::<Msg>::new().title(Text::new("Title")).width(400.0);
         let busy = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(400.0)
             .leading(button("=", Msg::A))
             .foldable_action("One", Msg::A)
-            .foldable_action("Two", Msg::B)
-            .build();
-        assert_eq!(bar_height(plain.as_ref()), Some(APP_BAR_HEIGHT));
+            .foldable_action("Two", Msg::B);
+        assert_eq!(bar_height(&plain), Some(APP_BAR_HEIGHT));
         assert_eq!(
-            bar_height(busy.as_ref()),
+            bar_height(&busy),
             Some(APP_BAR_HEIGHT),
             "content does not change the chrome's height"
         );
         let tall = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(400.0)
-            .height(96.0)
-            .build();
+            .height(96.0);
         assert_eq!(
-            bar_height(tall.as_ref()),
+            bar_height(&tall),
             Some(96.0),
             "and the caller still decides"
         );
@@ -2512,6 +2509,81 @@ mod tests {
         assert!(n >= 1, "the overflow button must be present");
     }
 
+    /// **A bar folds against the width it is given, not the screen's** (milestone 824). The
+    /// same three actions in a 300 px box on a 1000 px surface: the bar used to read the
+    /// surface's width when it was built, kept all three inline and ran past the box. It now
+    /// decides when it is laid out, from the box.
+    #[test]
+    fn a_bar_folds_against_the_width_it_is_given() {
+        let surface = MediaQuery::new(Size::new(1000.0, 400.0));
+        let shown = |room: f32| {
+            let tree = surface.scope(|| {
+                Container::<Msg>::new().width(room).child(
+                    AppBar::new()
+                        .title(Text::new("Title"))
+                        .overflow(false, Msg::PopupMenuButton)
+                        .foldable_action("Action One", Msg::A)
+                        .foldable_action("Action Two", Msg::B)
+                        .foldable_action("Action Three", Msg::C),
+                )
+            });
+            let ui = surface.scope(|| {
+                build_ui(
+                    &tree,
+                    Size::new(1000.0, 400.0),
+                    &Runtime::default(),
+                    &Theme::default(),
+                )
+            });
+            let words = ui
+                .scene()
+                .primitives()
+                .iter()
+                .filter(|p| {
+                    matches!(p, frus_core::Primitive::Text { text, .. } if text.starts_with("Action"))
+                })
+                .count();
+            let buttons = ui
+                .semantics()
+                .iter()
+                .filter(|(_, _, s)| s.role == frus_core::Role::Button)
+                .count();
+            (words, buttons, ui.overflows().len())
+        };
+        assert_eq!(shown(1000.0), (3, 3, 0), "the whole width shows them all");
+        let (words, buttons, overflows) = shown(300.0);
+        assert!(words < 3, "a 300 px box folds some: {words} shown");
+        assert_eq!(
+            buttons,
+            words + 1,
+            "what folded is neither drawn nor announced; the menu button is"
+        );
+        assert_eq!(overflows, 0, "nothing runs past the box");
+    }
+
+    /// **An action is measured, not read off its style** (milestone 824). An action whose
+    /// width depends on its content (a row holding a label) declares none, and the bar used
+    /// to count it as nothing wide: the foldable ones stayed inline beside it and the row
+    /// ran off the bar. It is now laid out and measured like the others.
+    #[test]
+    fn an_action_with_no_width_of_its_own_is_measured() {
+        let mut worst = Vec::new();
+        for width in (460..=700).step_by(20) {
+            let size = Size::new(width as f32, 120.0);
+            let bar = AppBar::<Msg>::new()
+                .title(Text::new("Title"))
+                .action(Flex::row().child(Text::new("A custom action with a long label")))
+                .overflow(false, Msg::PopupMenuButton)
+                .foldable_action("Action One", Msg::A)
+                .foldable_action("Action Two", Msg::B);
+            let ui = build_ui(&bar, size, &Runtime::default(), &Theme::default());
+            for o in ui.overflows() {
+                worst.push(format!("{width} px: {:?} by {:.1} px", o.side, o.amount));
+            }
+        }
+        assert!(worst.is_empty(), "{worst:#?}");
+    }
+
     /// The bar keeps a horizontal margin: the content (the leading on the left, the
     /// last action on the right) does not touch the viewport's edges.
     #[test]
@@ -2522,10 +2594,9 @@ mod tests {
             .width(W)
             .leading(button("M", Msg::PopupMenuButton).size(16.0))
             .overflow(false, Msg::PopupMenuButton)
-            .foldable_action("One", Msg::A)
-            .build();
+            .foldable_action("One", Msg::A);
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(W, 80.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2582,22 +2653,16 @@ mod tests {
             surface.scope(|| {
                 let bar = AppBar::<Msg>::new()
                     .title(Text::new("Inbox"))
-                    .primary(primary)
-                    .build();
-                crate::build_ui(
-                    bar.as_ref(),
-                    size,
-                    &crate::Runtime::default(),
-                    &Theme::default(),
-                )
-                .scene()
-                .primitives()
-                .iter()
-                .find_map(|p| match p {
-                    frus_core::Primitive::Text { position, .. } => Some(position.y),
-                    _ => None,
-                })
-                .expect("the title is drawn")
+                    .primary(primary);
+                crate::build_ui(&bar, size, &crate::Runtime::default(), &Theme::default())
+                    .scene()
+                    .primitives()
+                    .iter()
+                    .find_map(|p| match p {
+                        frus_core::Primitive::Text { position, .. } => Some(position.y),
+                        _ => None,
+                    })
+                    .expect("the title is drawn")
             })
         };
         assert!(
@@ -2618,10 +2683,9 @@ mod tests {
         // An overridden title style: bold 24, instead of the default medium 20.
         let bar = AppBar::<Msg>::new()
             .title(Text::new("Title"))
-            .title_style(TextStyle::new(24.0).weight(FontWeight::Bold))
-            .build();
+            .title_style(TextStyle::new(24.0).weight(FontWeight::Bold));
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(800.0, 80.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2640,10 +2704,9 @@ mod tests {
     fn title_can_be_an_arbitrary_widget() {
         let bar = AppBar::<Msg>::new()
             .title(Text::new("ignored"))
-            .title(Text::new("Logo").size(18.0))
-            .build();
+            .title(Text::new("Logo").size(18.0));
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(800.0, 80.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2694,9 +2757,8 @@ mod tests {
             ))
             .width(W)
             .overflow(false, Msg::PopupMenuButton)
-            .foldable_action("One", Msg::A)
-            .build();
-        let texts = texts_of(bar.as_ref(), W);
+            .foldable_action("One", Msg::A);
+        let texts = texts_of(&bar, W);
         let title = texts.first().expect("a title");
         assert!(title.ends_with('\u{2026}'), "cut with an ellipsis: {title}");
         assert!(
@@ -2709,12 +2771,9 @@ mod tests {
 
     #[test]
     fn a_title_that_fits_is_left_exactly_as_it_was() {
-        let bar = AppBar::<Msg>::new()
-            .title(Text::new("Short"))
-            .width(900.0)
-            .build();
+        let bar = AppBar::<Msg>::new().title(Text::new("Short")).width(900.0);
         assert_eq!(
-            texts_of(bar.as_ref(), 900.0).first().map(String::as_str),
+            texts_of(&bar, 900.0).first().map(String::as_str),
             Some("Short")
         );
     }
@@ -2745,29 +2804,34 @@ mod tests {
     /// and two actions put an iOS bar's title flush.
     #[test]
     fn the_title_follows_the_theme_s_platform() {
-        fn springs(widget: &dyn Widget<Msg>, theme: &crate::theme::Theme) -> usize {
-            widget.build_themed(theme);
-            let mine = usize::from(widget.style().flex_grow > 0.0);
-            mine + widget
-                .children()
+        // Where the title is drawn reads the decision, as in the test above.
+        fn springs(bar: AppBar<Msg>, theme: &crate::theme::Theme) -> u32 {
+            let ui = build_ui(&bar, Size::new(400.0, 120.0), &Runtime::default(), theme);
+            ui.scene()
+                .primitives()
                 .iter()
-                .map(|c| springs(c.as_ref(), theme))
-                .sum::<usize>()
+                .find_map(|p| match p {
+                    frus_core::Primitive::Text { text, position, .. } if text == "Title" => {
+                        Some(position.x.round() as u32)
+                    }
+                    _ => None,
+                })
+                .expect("the title is drawn")
         }
         let bar = || AppBar::<Msg>::new().title(Text::new("Title")).width(400.0);
         let ios = crate::theme::Theme::default().with_platform(frus_core::TargetPlatform::Ios);
         let android =
             crate::theme::Theme::default().with_platform(frus_core::TargetPlatform::Android);
-        let centred = springs(bar().center_title(true).build().as_ref(), &android);
-        let flush = springs(bar().center_title(false).build().as_ref(), &android);
+        let centred = springs(bar().center_title(true), &android);
+        let flush = springs(bar().center_title(false), &android);
         assert_ne!(centred, flush, "the instrument tells the two apart");
-        assert_eq!(springs(bar().build().as_ref(), &ios), centred);
-        assert_eq!(springs(bar().build().as_ref(), &android), flush);
+        assert_eq!(springs(bar(), &ios), centred);
+        assert_eq!(springs(bar(), &android), flush);
         // Two actions of its own, and an iOS bar puts its title flush.
         let crowded = || bar().action(Text::new("A")).action(Text::new("B"));
         assert_eq!(
-            springs(crowded().build().as_ref(), &ios),
-            springs(crowded().center_title(false).build().as_ref(), &ios)
+            springs(crowded(), &ios),
+            springs(crowded().center_title(false), &ios)
         );
     }
 
@@ -2784,10 +2848,9 @@ mod tests {
         const W: f32 = 800.0;
         let bar = AppBar::<Msg>::new()
             .title(Text::new("Title"))
-            .center_title(true)
-            .build();
+            .center_title(true);
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(W, 80.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2818,16 +2881,14 @@ mod tests {
             .title(Text::new("Task"))
             .width(W)
             .center_title(true)
-            .leading(button("M", Msg::PopupMenuButton).size(16.0))
-            .build();
+            .leading(button("M", Msg::PopupMenuButton).size(16.0));
         // Explicitly flush: the default now follows the platform, and this test is
         // about the two arrangements, not about which one this build prefers.
         let flush = AppBar::new()
             .title(Text::new("Task"))
             .width(W)
             .center_title(false)
-            .leading(button("M", Msg::PopupMenuButton).size(16.0))
-            .build();
+            .leading(button("M", Msg::PopupMenuButton).size(16.0));
         let x_of = |bar: &dyn Widget<Msg>| {
             let ui = build_ui(
                 bar,
@@ -2846,8 +2907,8 @@ mod tests {
                 })
                 .expect("the title")
         };
-        let centred_x = x_of(centred.as_ref());
-        let flush_x = x_of(flush.as_ref());
+        let centred_x = x_of(&centred);
+        let flush_x = x_of(&flush);
         assert!(
             centred_x > flush_x + 100.0,
             "centred ({centred_x}) should sit well right of flush ({flush_x})"
@@ -2860,13 +2921,12 @@ mod tests {
         let bar = AppBar::<Msg>::new()
             .title(Text::new("Title"))
             .width(600.0)
-            .bottom(Text::new("Tabs").size(14.0))
-            .build();
-        let texts = texts_of(bar.as_ref(), 600.0);
+            .bottom(Text::new("Tabs").size(14.0));
+        let texts = texts_of(&bar, 600.0);
         assert!(texts.iter().any(|t| t == "Tabs"), "{texts:?}");
         // Under the title, not beside it.
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(600.0, 120.0),
             &Runtime::default(),
             &Theme::default(),
@@ -2898,8 +2958,7 @@ mod tests {
             .width(520.0)
             .overflow(false, Msg::PopupMenuButton)
             .foldable_action("Action One", Msg::A)
-            .foldable_action("Action Two", Msg::B)
-            .build();
+            .foldable_action("Action Two", Msg::B);
         let wide = AppBar::new()
             .title(Text::new("Title"))
             .width(520.0)
@@ -2907,8 +2966,7 @@ mod tests {
             .leading(button("M", Msg::PopupMenuButton).size(16.0))
             .overflow(false, Msg::PopupMenuButton)
             .foldable_action("Action One", Msg::A)
-            .foldable_action("Action Two", Msg::B)
-            .build();
+            .foldable_action("Action Two", Msg::B);
         let inline = |bar: &dyn Widget<Msg>| {
             texts_of(bar, 520.0)
                 .iter()
@@ -2916,7 +2974,7 @@ mod tests {
                 .count()
         };
         assert!(
-            inline(wide.as_ref()) < inline(narrow.as_ref()),
+            inline(&wide) < inline(&narrow),
             "a wide leading must push actions into the overflow"
         );
     }
@@ -2931,10 +2989,9 @@ mod tests {
             .overflow(false, Msg::PopupMenuButton)
             .foldable_action("A long labelled action", Msg::A)
             .action(Text::new("★badge★").size(14.0))
-            .foldable_action("Another long action", Msg::B)
-            .build();
+            .foldable_action("Another long action", Msg::B);
         let ui = build_ui(
-            bar.as_ref(),
+            &bar,
             Size::new(260.0, 80.0),
             &Runtime::default(),
             &Theme::default(),

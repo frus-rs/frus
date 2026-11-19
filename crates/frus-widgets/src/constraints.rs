@@ -344,9 +344,14 @@ pub enum IntrinsicAxis {
 /// label, and no wider. Stretching gives them the whole column; hugging gives each
 /// its own width; only an intrinsic width gives them all the widest one.
 ///
-/// It is not free. The content is measured **once more**, unconstrained, before it
-/// is laid out for real — which is why it is a widget you reach for deliberately and
-/// not a property every box carries. Nested one inside another, the cost multiplies.
+/// The content is measured on the box's axis with no limit, and handed the room on the
+/// other: an [`IntrinsicHeight`] around a paragraph is as tall as the paragraph wrapped at
+/// the width it is shown at. The box is then that size, held to the room, and the content
+/// is handed that extent.
+///
+/// It is not free. The content is laid out **once more**, apart, before it is laid out for
+/// real — which is why it is a widget you reach for deliberately and not a property every
+/// box carries. Nested one inside another, the cost multiplies.
 pub struct Intrinsic<Msg = crate::callback::Callback> {
     axis: IntrinsicAxis,
     step: Option<f32>,
@@ -402,8 +407,7 @@ impl<Msg> Intrinsic<Msg> {
 
 impl<Msg: Clone> Widget<Msg> for Intrinsic<Msg> {
     fn style(&self) -> Style {
-        // The measured extent is written into this style by `build_layout`, which is
-        // the only place with a runtime to measure against.
+        // The box is measured from its child: see `constraints_transform`.
         Style::default()
     }
 
@@ -419,6 +423,25 @@ impl<Msg: Clone> Widget<Msg> for Intrinsic<Msg> {
 
     fn intrinsic(&self) -> Option<(IntrinsicAxis, Option<f32>)> {
         Some((self.axis, self.step))
+    }
+
+    /// **A measured box** (milestone 824): the child is laid out apart and handed the room
+    /// on the other axis. An [`IntrinsicHeight`] asks it how tall it would like to be at the
+    /// width it is given, so a paragraph under one wraps at the width it will be shown at,
+    /// where it used to be measured on one endless line. An [`IntrinsicWidth`] is the
+    /// content's widest, measured ahead and held to the room. The walk then hands the child
+    /// the box's extent on this axis, which is what makes the stretched pieces in it match.
+    fn constraints_transform(&self) -> Option<ConstraintsTransform> {
+        let (width, height) = match self.axis {
+            IntrinsicAxis::Width => (AxisConstraint::AsGiven, AxisConstraint::AsGiven),
+            IntrinsicAxis::Height => (AxisConstraint::AsGiven, AxisConstraint::Unbounded),
+        };
+        Some(ConstraintsTransform {
+            width,
+            height,
+            alignment: Alignment::TOP_LEFT,
+            report: false,
+        })
     }
 }
 
@@ -1055,6 +1078,66 @@ mod tests {
         // With no step, the measurement passes through untouched.
         let plain = Intrinsic::<()>::width(Container::new());
         assert_eq!(plain.quantise(21.0), 21.0);
+    }
+
+    /// The red box behind a paragraph in an intrinsic-height box, in a column `width` wide.
+    fn box_behind(width: f32) -> Rect {
+        let paragraph = "A quoted line, long enough to wrap more than once in a narrow column.";
+        let root = Flex::<()>::column().width(width).child(Intrinsic::height(
+            Container::new().color(RED).child(Text::new(paragraph)),
+        ));
+        red_box(root, Size::new(width, 600.0))
+    }
+
+    /// **An intrinsic height is measured at the width it is shown at** (milestone 824), as
+    /// the reference's is: a paragraph that wraps onto several lines makes the box that
+    /// tall. It used to be measured on one endless line, so the box was one line tall and
+    /// the paragraph ran out of it.
+    #[test]
+    fn an_intrinsic_height_wraps_its_paragraph_at_the_width_it_is_given() {
+        let one_line = box_behind(2000.0);
+        let wrapped = box_behind(160.0);
+        assert!(one_line.height > 1.0, "the box is drawn: {one_line:?}");
+        assert!(
+            wrapped.height > 2.5 * one_line.height,
+            "wrapped at 160 px, the paragraph is several lines, and so is the box:              {wrapped:?} against one line {one_line:?}"
+        );
+    }
+
+    /// **An intrinsic box is held to the room** (milestone 824): a content that would like
+    /// to be wider than its column is given the column, as the reference's `tighten` gives
+    /// it, instead of a box wider than the column.
+    #[test]
+    fn an_intrinsic_width_is_held_to_the_room() {
+        let root = Flex::<()>::column().width(100.0).child(Intrinsic::width(
+            Container::new().color(RED).child(Text::new(
+                "a line far wider than the hundred pixels it is offered",
+            )),
+        ));
+        let rect = red_box(root, Size::new(100.0, 200.0));
+        assert!(
+            rect.width > 50.0 && rect.width <= 100.5,
+            "the column's width, not the line's: {rect:?}"
+        );
+    }
+
+    /// The step rounds the box up, and the content is handed the rounded extent.
+    #[test]
+    fn an_intrinsic_width_hands_its_content_the_rounded_extent() {
+        let root = Flex::<()>::column().width(400.0).child(
+            Intrinsic::width(
+                Container::new()
+                    .color(RED)
+                    .height(10.0)
+                    .child(Text::new("abc")),
+            )
+            .step(50.0),
+        );
+        let rect = red_box(root, Size::new(400.0, 200.0));
+        assert!(
+            (rect.width - 50.0).abs() < 0.5,
+            "a short word, rounded up to the 50 px step: {rect:?}"
+        );
     }
 
     #[test]

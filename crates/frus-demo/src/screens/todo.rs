@@ -148,8 +148,7 @@ impl State for HomeState {
                     handle.set_state(|s| s.sheet_open = false);
                     demo.ask_clear(true);
                 })
-            })
-            .build();
+            });
 
         // Input: a field (Enter submits) + an add button. A non-empty field carries a
         // **clickable** "✕" suffix icon that clears it (milestone 198: a positional click on

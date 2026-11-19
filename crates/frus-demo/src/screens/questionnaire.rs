@@ -34,12 +34,11 @@ impl State for QuestionnaireState {
     fn build(&self, cx: &StateContext<Self>) -> Box<dyn Widget> {
         let theme = cx.theme().clone();
         let router = cx.router();
-        let app_bar = AppBar::new()
-            .title(Text::new("Questionnaire"))
-            .leading(IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
+        let app_bar = AppBar::new().title(Text::new("Questionnaire")).leading(
+            IconButton::new(Icons::ARROW_BACK).on_press(on(move || {
                 router.pop();
-            })))
-            .build();
+            })),
+        );
 
         if let Some(sent) = &self.sent {
             let summary = sent

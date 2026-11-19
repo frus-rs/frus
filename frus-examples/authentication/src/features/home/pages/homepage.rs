@@ -42,8 +42,7 @@ impl StatelessWidget for HomePage {
                 IconButton::new(Icons::LOGOUT)
                     .label("Sign out")
                     .on_press(sign_out),
-            )
-            .build();
+            );
 
         // The guard keeps this page for signed-in people, but a page is built from what is
         // true *now*: during the frame that signs out, there may be nobody.

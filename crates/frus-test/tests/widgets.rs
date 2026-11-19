@@ -386,14 +386,13 @@ fn a_stepper_and_a_timeline() {
 /// The top bar with everything on it: a leading icon, a title, two actions.
 #[test]
 fn the_app_bar() {
-    let bar: Box<dyn Widget<()>> = AppBar::new()
+    let bar: AppBar<()> = AppBar::new()
         .title(frus_widgets::Text::new("Inbox"))
         .width(360.0)
         .leading(Icon::new(Icons::MENU).size(20.0))
         .foldable_action("Save", ())
-        .foldable_action("Edit", ())
-        .build();
-    check("app_bar", 360, 80, &*bar);
+        .foldable_action("Edit", ());
+    check("app_bar", 360, 80, &bar);
 }
 
 /// The bottom bar, uncut — the notch belongs to the scaffold, which is the only

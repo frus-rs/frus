@@ -112,15 +112,12 @@ impl State for SignupState {
         // to save them together.
         let body = centered_page(AutofillGroup::new(form));
 
-        let app_bar = AppBar::new()
-            .title(Text::new("Sign up"))
-            .action(
-                IconButton::new(Icons::AUTO_FIX_HIGH)
-                    .label("Fill with sample data")
-                    .enabled(!self.submitting)
-                    .on_press(cx.callback(SignupState::fill_sample)),
-            )
-            .build();
+        let app_bar = AppBar::new().title(Text::new("Sign up")).action(
+            IconButton::new(Icons::AUTO_FIX_HIGH)
+                .label("Fill with sample data")
+                .enabled(!self.submitting)
+                .on_press(cx.callback(SignupState::fill_sample)),
+        );
 
         let page = Scaffold::new()
             .background(cx.theme().background)
