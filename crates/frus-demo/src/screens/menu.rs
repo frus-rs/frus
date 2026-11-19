@@ -52,8 +52,9 @@ fn menu_bar(menus: &UseState<MenuPath>, demo: &Rc<Demo>, router: &GoRouter) -> M
     let home = {
         let router = router.clone();
         move || {
-            if router.location() != "/" {
-                router.go("/");
+            let home = Route::Home.location();
+            if router.location() != home {
+                router.go(home);
             }
         }
     };
@@ -145,9 +146,10 @@ fn menu_bar(menus: &UseState<MenuPath>, demo: &Rc<Demo>, router: &GoRouter) -> M
     }
     // A screen is pushed over the one on show, so Back returns to it; asked for again from
     // itself, it is not pushed twice.
-    let open = |location: &'static str| {
+    let open = |route: Route| {
         let router = router.clone();
         pick(Rc::new(move || {
+            let location = route.location();
             if router.location() != location {
                 router.push(location);
             }
@@ -155,8 +157,8 @@ fn menu_bar(menus: &UseState<MenuPath>, demo: &Rc<Demo>, router: &GoRouter) -> M
     };
     let go = go
         .divider()
-        .item(MenuItem::new("Log", open("/journal")))
-        .item(MenuItem::new("Settings", open("/settings")));
+        .item(MenuItem::new("Log", open(Route::Journal)))
+        .item(MenuItem::new("Settings", open(Route::Settings)));
 
     let set = menus.clone();
     MenuBar::new(&menus.get(), move |path: MenuPath| {

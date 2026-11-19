@@ -1,0 +1,5 @@
+error: messages!: the message `hello` in the locale `fr` (fr.ftl) uses the argument `$nom`, which the default locale `en` does not give it; did you mean `$name`?
+ --> tests/ui/misnamed_argument.rs:5:26
+  |
+5 |     frus_l10n::messages!("misnamed_argument");
+  |                          ^^^^^^^^^^^^^^^^^^^

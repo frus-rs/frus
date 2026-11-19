@@ -55,6 +55,76 @@ A screen reads what its location said from the `GoRouterState` its builder recei
 `param("id")` for `:id`, `query("tab")` for `?tab=`, `extra::<T>()` for a value passed along
 with the navigation.
 
+## Typed routes
+
+A location written as a string is checked only when someone opens it: `go("/user/42/setings")`
+compiles, and `state.param("id")` hands back text to parse. **An enum of routes** is checked by
+the compiler. Derive `Routes` on it and give each variant its pattern:
+
+```rust
+use frus::{BuildContext, Button, Column, FrusApp, GoRouter, Routes, Text, Widget};
+
+#[derive(Routes, Clone, Debug, PartialEq)]
+enum Route {
+    #[route("/")]
+    Home,
+    #[route("/users/:id")]
+    User { id: u64 },
+    // `tab` is not in the pattern: a query parameter, `/settings?tab=privacy`.
+    #[route("/settings")]
+    Settings { tab: Option<String> },
+}
+
+fn home(cx: &BuildContext) -> Box<dyn Widget> {
+    let router = cx.router();
+    Box::new(Column::new().child(
+        Button::new("Open user 42").on_press(move || router.go(Route::User { id: 42 }.location())),
+    ))
+}
+
+fn app() -> FrusApp {
+    // One builder for every route: a route with no page is a missing `match` arm, which does
+    // not compile.
+    let router = GoRouter::new(Route::go_routes(|cx, _state, route| -> Box<dyn Widget> {
+        match route {
+            Route::Home => home(cx),
+            Route::User { id } => Box::new(Text::new(format!("User {id}"))),
+            Route::Settings { tab } => Box::new(Text::new(format!("Settings {tab:?}"))),
+        }
+    }));
+    FrusApp::router(router).title("People")
+}
+
+assert_eq!(Route::User { id: 42 }.location(), "/users/42");
+assert_eq!(Route::from_location("/users/42"), Some(Route::User { id: 42 }));
+assert_eq!(
+    Route::from_location("/settings?tab=privacy"),
+    Some(Route::Settings { tab: Some("privacy".into()) })
+);
+// Not a number: no route.
+assert_eq!(Route::from_location("/users/abc"), None);
+# let _ = app;
+```
+
+- **`.location()`** writes a route's location, its parameters encoded, for `go`, `push` and
+  `replace`. **`Route::from_location`** reads one back.
+- A `:parameter` is the field of that name, of any type that parses from text and prints as
+  text (`FromStr` and `Display`). Any other field is a query parameter, and is an `Option`.
+- **`go_routes`** makes the router's routes, nested by pattern: `/users/:id` goes under `/`, so a
+  user's screen has home beneath it to go back to. Each page is built from its route, its fields
+  already parsed; `state.route::<Route>()` gives a page's route anywhere else the
+  `GoRouterState` is at hand.
+- **String locations keep working.** A deep link, the browser's address bar and
+  `go("/users/42")` still say where to go with a string, and reach the same screen. A location
+  whose parameter does not parse (`/users/abc` for a `u64`) reaches no route, so the router shows
+  its error page, as for a location that does not exist.
+- What does not compile: a pattern that does not start with `/`, a `:parameter` with no field of
+  its name, a field outside the pattern that is not an `Option`, two patterns that answer the same
+  locations (`/a/:x` and `/a/:y`), and a variant with no `#[route(..)]`.
+
+The derive's code names `frus`; in a package that depends on `frus-widgets` instead it names
+that, and `#[routes(crate = "my_crate::frus")]` names any other path.
+
 ## Keeping someone out: redirects
 
 A redirect is asked before every navigation and can send it elsewhere — to the sign-in screen

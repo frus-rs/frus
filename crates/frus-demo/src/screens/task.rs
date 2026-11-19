@@ -155,7 +155,7 @@ impl StatelessWidget for TaskPage {
                         frus_widgets::host::spawn_async(reminder.show_async(), move |response| {
                             match response {
                                 Ok(frus_shell::NotificationResponse::Clicked) => {
-                                    open.go(format!("/task/{id}"));
+                                    open.go(Route::Task { id }.location());
                                 }
                                 Ok(frus_shell::NotificationResponse::Button(button))
                                     if button == "done" =>

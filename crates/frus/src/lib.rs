@@ -185,6 +185,15 @@ pub mod fonts {
     pub use frus_text::{add_font, include_font, set_default_family, set_monospace_family};
 }
 
+/// The application's own words, from Fluent files (feature `l10n`): [`l10n::messages!`] reads
+/// them when the application compiles and writes one function per message, its arguments
+/// typed; [`l10n::Localizer`] looks them up by key. See the languages guide.
+#[cfg(feature = "l10n")]
+pub mod l10n {
+    pub use frus_l10n::*;
+    pub use frus_l10n::{args, messages};
+}
+
 // External textures (milestone 793): `textures()`, `Texture` and `ExternalTexture` come with
 // the widgets; the platform surface a decoder or camera draws into is the shell's.
 pub use frus_shell::{FrameObserver, SurfaceFormat, SurfaceFrame, TextureSurface};
