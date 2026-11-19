@@ -977,6 +977,15 @@ fn publish_restoration(
     *published = data;
 }
 
+/// Builds again, where they stand in the tree kept from the last frame, the components their
+/// own state has marked since (milestone 822). The rest of the tree is kept as it was: its
+/// components are reached, so their states live on and their timers keep running, but none is
+/// built.
+fn rebuild_marked<Msg>(tree: &dyn Widget<Msg>, theme: &Theme, runtime: &frus_widgets::Runtime) {
+    runtime.states.begin_build();
+    build_deferred(tree, theme, runtime);
+}
+
 fn build_view<A: Application>(
     app: &A,
     theme: &Theme,
@@ -1142,6 +1151,10 @@ pub struct App<A: Application> {
     /// only animates an interaction merely **repaints** the retained tree (§1: "a hover
     /// touches paint and nothing else").
     build_dirty: bool,
+    /// Components marked by their own state since the last build: the next frame builds them
+    /// again where they stand, in the tree it keeps, unless it builds the whole tree anyway
+    /// (milestone 822).
+    components_dirty: bool,
     /// Whether the application's own animations were moving at the last frame. The frame
     /// they stop in is built once more: the tick that ends a transition has changed the
     /// state — the page it left is gone — and says it is no longer moving, so without it
@@ -1538,6 +1551,7 @@ impl<A: Application> App<A> {
             started: false,
             last_frame: None,
             build_dirty: true,
+            components_dirty: false,
             app_was_animating: false,
             drag: None,
             file_drag: None,
@@ -4232,18 +4246,18 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A preference changed, maybe on another thread (milestone 776), or the device
                 // changed networks (milestone 777): `|`, not `||`, so every flag is taken.
                 let arrived = frus_widgets::take_connectivity_change() || arrived;
-                if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change()
-                    || arrived
-                {
-                    self.build_dirty = true;
-                }
+                let prefs = frus_widgets::__take_prefs_change();
+                self.note_rebuild(frus_widgets::take_rebuild(), prefs || arrived);
                 let need_build = frame_needs_build(
                     self.build_dirty,
                     app_animating,
                     std::mem::replace(&mut self.app_was_animating, app_animating),
                     self.tree.is_none() || self.runtime.switching(),
                 );
-                if need_build {
+                // Only components changed: the tree this frame lays out is the one kept, with
+                // those components built again in it (milestone 822).
+                let marked = !need_build && self.components_dirty && self.tree.is_some();
+                if need_build || marked {
                     // No scope of its own: the surface above is already installed, and
                     // covers the layout and the paint that follow as well.
                     //
@@ -4252,7 +4266,18 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // no identities at all inside a deferred subtree — and everything in an
                     // `AppBar` would silently never mount, never fade in and never fade out.
                     let build_start = timed.then(Instant::now);
-                    let tree = build_view(&self.app, &theme, &self.runtime);
+                    let tree = match self.tree.take() {
+                        Some(kept) if marked => {
+                            rebuild_marked(kept.as_ref(), &theme, &self.runtime);
+                            kept
+                        }
+                        // The last tree lives until the new one is in its place.
+                        last => {
+                            let tree = build_view(&self.app, &theme, &self.runtime);
+                            drop(last);
+                            tree
+                        }
+                    };
                     // What restoration handed back for the widgets this build registered:
                     // in place before the layout, so a restored page opens where it was.
                     self.runtime.apply_restored();
@@ -4313,6 +4338,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     self.runtime.paint_cache.borrow_mut().bump_generation();
                 }
                 self.build_dirty = false;
+                self.components_dirty = false;
 
                 // Focus requests (`Command::focus`), resolved against the tree just
                 // (re)built.
@@ -7917,12 +7943,27 @@ impl<A: Application> App<A> {
         }
     }
 
+    /// Takes what was asked of the next build: the whole tree when something outside the
+    /// components asked or `outside` says so, the components marked when only they did.
+    fn note_rebuild(&mut self, asked: frus_widgets::Rebuild, outside: bool) {
+        match asked {
+            _ if outside => self.build_dirty = true,
+            frus_widgets::Rebuild::Tree => self.build_dirty = true,
+            frus_widgets::Rebuild::Components => self.components_dirty = true,
+            frus_widgets::Rebuild::Nothing => {}
+        }
+    }
+
     /// Applies a message to the application, runs its effects, then re-evaluates the
     /// subscriptions, the state having possibly changed which ones should run.
     fn dispatch(&mut self, message: A::Message) {
-        // The app may have changed state, so the `view` must be rebuilt.
-        self.build_dirty = true;
         let command = self.app.update(message);
+        // The app may have changed state, so the `view` must be rebuilt — unless the message
+        // only changed components' own state, which marked them (milestone 822). A handler
+        // that asked for nothing gets the whole tree built, as it always did.
+        if self.app.messages_rebuild_view() || !frus_widgets::rebuild_requested() {
+            self.build_dirty = true;
+        }
         self.run_command(command);
         let asked = self.app.effects();
         self.run_command(asked);
@@ -13880,6 +13921,8 @@ pub mod testing {
         ghost: Option<Rect>,
         /// Whether the application's animations moved at the last frame.
         animating: bool,
+        /// What the last frame's build and layout took, in milliseconds: no build is `None`.
+        costs: (Option<f32>, f32),
     }
 
     impl<A: Application> Driver<A> {
@@ -13893,7 +13936,26 @@ pub mod testing {
                 size: Size::new(width, height),
                 ghost: None,
                 animating: false,
+                costs: (None, 0.0),
             }
+        }
+
+        /// A surface of `width` by `height` from the next frame on: the window resized, or the
+        /// phone turned.
+        pub fn resize(&mut self, width: f32, height: f32) {
+            self.size = Size::new(width, height);
+        }
+
+        /// As if work a component started came back — or a hot patch landed, which the
+        /// window's frame takes the same way: the next frame builds the whole tree.
+        pub fn arrive(&mut self) {
+            self.shell.task_arrivals = self.shell.task_arrivals.wrapping_add(1);
+        }
+
+        /// What the last frame's build and its layout took, in milliseconds; the build is
+        /// `None` when the frame built nothing (milestone 822).
+        pub fn costs(&self) -> (Option<f32>, f32) {
+            self.costs
         }
 
         /// What the application keeps for restoration, as the platform would be handed it
@@ -14382,23 +14444,31 @@ pub mod testing {
             let asked = s.app.effects();
             s.run_command(asked);
             let arrived = s.take_task_arrivals();
-            // A preference changed, maybe on another thread (milestone 776): `|`, not `||`, so
-            // both flags are taken.
-            if frus_widgets::take_rebuild_request() | frus_widgets::__take_prefs_change() || arrived
-            {
-                s.build_dirty = true;
-            }
+            // A preference changed, maybe on another thread (milestone 776).
+            let prefs = frus_widgets::__take_prefs_change();
+            s.note_rebuild(frus_widgets::take_rebuild(), prefs || arrived);
             s.report_focus();
+            let mut built = None;
             if frame_needs_build(
                 s.build_dirty,
                 app_animating,
                 was,
                 s.tree.is_none() || s.runtime.switching(),
             ) {
+                let at = Instant::now();
                 s.tree = Some(build_view(&s.app, &theme, &s.runtime));
                 s.runtime.apply_restored();
+                built = Some(at.elapsed().as_secs_f32() * 1000.0);
+            } else if s.components_dirty {
+                if let Some(tree) = s.tree.as_deref() {
+                    let at = Instant::now();
+                    rebuild_marked(tree, &theme, &s.runtime);
+                    s.runtime.apply_restored();
+                    built = Some(at.elapsed().as_secs_f32() * 1000.0);
+                }
             }
             s.build_dirty = false;
+            s.components_dirty = false;
             // As the window's frame does once its tree is built (milestone 752).
             s.resolve_pending_focus();
             s.autoscroll_carried(dt);
@@ -14428,7 +14498,9 @@ pub mod testing {
             // The widgets' own values, as the window's frame steps them: without it a value
             // a drag held would be held for ever here (milestone 638).
             s.runtime.advance_values(tree, dt);
+            let at = Instant::now();
             let ui = build_ui(tree, Size::new(width, height), &s.runtime, &theme);
+            let laid = at.elapsed().as_secs_f32() * 1000.0;
             s.runtime.states.end_frame();
             let mut scene = ui.scene().clone();
             let ghost = if matches!(s.drag, Some(Drag::Reorder { moved: true, .. })) {
@@ -14469,6 +14541,7 @@ pub mod testing {
                 s.dispatch(message);
             }
             self.ghost = ghost;
+            self.costs = (built, laid);
             self.animating = app_animating || values_moving || scrolling || selecting;
         }
 

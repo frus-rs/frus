@@ -8,11 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 820 so far, each documenting the objective, the alternatives
+> record — one per step, 822 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A component's own state builds that component, not the whole tree** (J822, #53). When
+  `UseState::set`/`update` or `StateHandle::set_state` changes a component's state, that
+  component is marked, and the next frame builds it again where it stands in the tree kept from
+  the last frame. It builds everything under it, and nothing else: the components around it
+  are kept, with their states and timers. A counter ticking in one leaf of a forty-row screen
+  now builds the leaf alone (build 0.26 ms to 0.10 ms in release). Everything else that asks for
+  a rebuild (`request_rebuild`, the theme, the surface, the locale, a preference, a hot patch)
+  still builds the whole tree. New: `take_rebuild()` and `Rebuild` (what the next frame has to
+  build), `Application::messages_rebuild_view` (default `true`, so Elm-style applications are
+  unchanged; `FrusApp` answers `false`), and `Driver::resize`, `arrive` and `costs` in
+  `frus_shell::testing`.
 - **A guide for every subsystem** (J819). Ten new pages in `docs/guide/`: components and state
   (hooks, `StatelessWidget`, `StatefulWidget`, sharing state, keys, restoration), the screen
   (size classes, safe area, keyboard, system bars, orientation, simulated devices), text and
