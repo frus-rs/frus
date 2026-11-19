@@ -1,0 +1,5 @@
+error: messages!: the message `add` is missing from the locale `fr` (fr.ftl); every locale has every message of the default locale `en`, unless it is listed in `partial = [..]`
+ --> tests/ui/missing_key.rs:5:26
+  |
+5 |     frus_l10n::messages!("missing_key", default = "en");
+  |                          ^^^^^^^^^^^^^

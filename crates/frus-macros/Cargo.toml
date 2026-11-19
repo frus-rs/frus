@@ -1,6 +1,6 @@
 [package]
 name = "frus-macros"
-description = "frus — compile-time macros: a font embedded so that a release build can carry it cut down"
+description = "frus — compile-time macros: fonts embedded to be cut down, typed translations, typed routes"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -9,11 +9,17 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 documentation = "https://docs.rs/frus-macros"
-keywords = ["gui", "fonts", "subset", "macro"]
+keywords = ["gui", "fonts", "l10n", "routes", "macro"]
 categories = ["gui", "text-processing"]
 
 [lib]
 proc-macro = true
 
-# No dependencies: the macro reads one string literal, and `proc_macro` is enough for that.
 [dependencies]
+# Reading the `.ftl` files at compile time, with the parser the runtime bundles use, so the
+# two can never disagree about what a file says.
+fluent-syntax = "0.12"
+# The typed routes' derive and the messages' arguments.
+proc-macro2 = "1"
+quote = "1"
+syn = "2"

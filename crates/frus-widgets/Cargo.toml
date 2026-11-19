@@ -51,6 +51,8 @@ icons-sharp = []
 [dependencies]
 subsecond = { version = "0.7", optional = true }
 frus-core = { path = "../frus-core", version = "0.5" }
+# `#[derive(Routes)]`: typed routes (milestone 826).
+frus-macros = { path = "../frus-macros", version = "0.5" }
 frus-image = { path = "../frus-image", version = "0.5", optional = true }
 frus-svg = { path = "../frus-svg", version = "0.5", optional = true }
 frus-lottie = { path = "../frus-lottie", version = "0.5", optional = true }

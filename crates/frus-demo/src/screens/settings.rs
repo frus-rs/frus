@@ -514,7 +514,7 @@ impl State for SettingsState {
             .version(format!("Version {}", env!("CARGO_PKG_VERSION")))
             .legalese("A demonstration application, MIT OR Apache-2.0.")
             .icon(Icon::new(Icons::INFO))
-            .on_licences(on(move || router.push("/licenses")))
+            .on_licences(on(move || router.push(Route::Licenses.location())))
             .on_close(cx.callback(|s| s.about_open = !s.about_open))
             .body(screen);
         Box::new(

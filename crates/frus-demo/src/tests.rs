@@ -192,6 +192,85 @@ const SCREENS: [&str; 13] = [
     "/browser",
 ];
 
+/// Every location the demo was reached at as a string before its routes were typed (milestone
+/// 826), the deep link's `/task/3` included.
+const STRING_LOCATIONS: [&str; 28] = [
+    "/",
+    "/settings",
+    "/wizard",
+    "/grid",
+    "/journal",
+    "/charts",
+    "/data",
+    "/board",
+    "/tour",
+    "/sheet",
+    "/licenses",
+    "/video",
+    "/camera",
+    "/native",
+    "/player",
+    "/browser",
+    "/shop",
+    "/overlays",
+    "/otp",
+    "/fields",
+    "/empty",
+    "/swipe",
+    "/wheel",
+    "/display",
+    "/conversation",
+    "/questionnaire",
+    "/cupertino",
+    "/task/3",
+];
+
+/// **Every string location still resolves**: a deep link, the browser's address bar and a test
+/// still say where to go with a string. Each one opens the screen it opened before, with home
+/// beneath it, reads as a typed route, and is the very location that route writes; and every
+/// route the enum has is one of them.
+#[test]
+fn every_string_location_still_resolves() {
+    let (_, router, _) = crate::build();
+    for location in STRING_LOCATIONS {
+        let route =
+            Route::from_location(location).unwrap_or_else(|| panic!("`{location}` is no route"));
+        assert_eq!(route.location(), location, "the route of `{location}`");
+        router.go(location);
+        let state = router.state().expect("a page");
+        assert_eq!(router.location(), location);
+        assert_eq!(
+            state.path(),
+            route.pattern(),
+            "`{location}` opened another route"
+        );
+        assert_eq!(state.route::<Route>(), Some(route));
+        assert_eq!(
+            router.can_pop(),
+            location != "/",
+            "home is beneath `{location}`"
+        );
+    }
+    let mut patterns: Vec<&str> = STRING_LOCATIONS
+        .iter()
+        .map(|location| Route::from_location(location).unwrap().pattern())
+        .collect();
+    patterns.dedup();
+    assert_eq!(
+        patterns,
+        Route::PATTERNS,
+        "a route no string location reaches"
+    );
+    // A task's id that is not a number is no route: the router's error page, as for a
+    // location that does not exist.
+    assert_eq!(Route::from_location("/task/three"), None);
+    router.go("/task/three");
+    assert_eq!(
+        router.state().map(|s| s.path().to_string()),
+        Some(String::new())
+    );
+}
+
 #[test]
 fn view_builds_a_non_empty_scene() {
     let bench = Bench::new(800.0, 600.0).with_tasks(&["a task"]);
