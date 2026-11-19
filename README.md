@@ -192,7 +192,7 @@ They are regenerated after a change rather than slowly going stale.</sub>
 | `frus doctor` | the toolchain, part by part: what is ready and what is missing; `--fix` installs it |
 | `frus devices` | this computer, the phones and emulators, the browsers, and the simulated phones and tablets |
 | `frus run [-d <device>]` | build, start, and show the log, with hot reload on the desktop, the web and Android; `--no-hot` to restart instead |
-| `frus build <apk\|web\|desktop>` | what you ship, in release |
+| `frus build <apk\|web\|desktop>` | what you ship, in release, its fonts cut to the characters it can show |
 | `frus emulators` | list, `--launch` and `--create` emulators |
 | `frus clean` | delete the application's builds |
 | `frus test` | the tests: a summary, each failure at its place |

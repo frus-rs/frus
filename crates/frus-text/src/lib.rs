@@ -59,27 +59,28 @@ use frus_core::DEFAULT_LINE_HEIGHT as LINE_HEIGHT_FACTOR;
 /// match on the primary family, so both are needed for `.bold()` to shape rather than
 /// fall through to platform lists that do not exist on Android.
 #[cfg(feature = "bundled-sans")]
-const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+const DEJAVU_SANS: &[u8] = frus_macros::include_font!("../assets/DejaVuSans.ttf");
 #[cfg(feature = "bundled-sans")]
-const DEJAVU_SANS_BOLD: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
+const DEJAVU_SANS_BOLD: &[u8] = frus_macros::include_font!("../assets/DejaVuSans-Bold.ttf");
 /// The **oblique** faces, for the same reason one step further: cosmic-text demands an
 /// exact *style* match too, so without them a plain `.italic()` used to **panic** ("no
 /// default font found") — caught on the Android device. They are 1.28 MB of the 3.4,
 /// so they are separable; when they are absent italic text is rendered **upright**
 /// rather than not at all.
 #[cfg(feature = "bundled-italic")]
-const DEJAVU_SANS_OBLIQUE: &[u8] = include_bytes!("../assets/DejaVuSans-Oblique.ttf");
+const DEJAVU_SANS_OBLIQUE: &[u8] = frus_macros::include_font!("../assets/DejaVuSans-Oblique.ttf");
 #[cfg(feature = "bundled-italic")]
-const DEJAVU_SANS_BOLD_OBLIQUE: &[u8] = include_bytes!("../assets/DejaVuSans-BoldOblique.ttf");
+const DEJAVU_SANS_BOLD_OBLIQUE: &[u8] =
+    frus_macros::include_font!("../assets/DejaVuSans-BoldOblique.ttf");
 /// The monospace face — only ever reached by widgets that ask for it (`Kbd`, code).
 #[cfg(feature = "bundled-mono")]
-const DEJAVU_MONO: &[u8] = include_bytes!("../assets/DejaVuSansMono.ttf");
+const DEJAVU_MONO: &[u8] = frus_macros::include_font!("../assets/DejaVuSansMono.ttf");
 /// **Arabic** (Noto Naskh): DejaVu does not cover the Arabic script — it has no
 /// contextual joining forms — so this face provides the fallback for Arabic runs.
 #[cfg(feature = "bundled-arabic")]
-const NOTO_ARABIC: &[u8] = include_bytes!("../assets/NotoNaskhArabic-Regular.ttf");
+const NOTO_ARABIC: &[u8] = frus_macros::include_font!("../assets/NotoNaskhArabic-Regular.ttf");
 #[cfg(feature = "bundled-arabic")]
-const NOTO_ARABIC_BOLD: &[u8] = include_bytes!("../assets/NotoNaskhArabic-Bold.ttf");
+const NOTO_ARABIC_BOLD: &[u8] = frus_macros::include_font!("../assets/NotoNaskhArabic-Bold.ttf");
 
 /// The bundled fonts' internal family names; they must match the TTFs.
 #[cfg(feature = "bundled-sans")]
@@ -128,15 +129,22 @@ static EXTRA_FONTS: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 /// place to look when a name the application gave matches nothing.
 static APP_FAMILIES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Embeds a font file like `include_bytes!`; `frus build` cuts it down in a release build
+/// (milestone 823). See the macro's own page.
+pub use frus_macros::include_font;
+
 /// Registers a font face from its bytes (TTF/OTF), for the whole process.
 ///
 /// Call it **before** starting the application: the renderer builds its font database
 /// at start-up and a face added afterwards will measure but not paint.
 ///
 /// ```ignore
-/// frus_text::add_font(include_bytes!("../fonts/Inter-Regular.ttf").to_vec());
+/// frus_text::add_font(frus_text::include_font!("../fonts/Inter-Regular.ttf").to_vec());
 /// frus_text::set_default_family("Inter");
 /// ```
+///
+/// [`include_font!`] embeds the file like `include_bytes!`, and lets a release build from
+/// `frus build` carry it cut down to the characters the application can show.
 ///
 /// Bytes that hold no face this build can read are not registered, and the console says
 /// so: a file that is not a font, or not the one you meant, is otherwise found on a device.
@@ -476,6 +484,23 @@ fn warn_once(message: String) {
         log::warn!("{message}");
         warned.push(message);
     }
+}
+
+/// Says, once per character, that `c` has no glyph in any loaded font and is drawn as the
+/// font's box. A box on screen says something is missing but not what, nor why; the log says
+/// both (milestone 823). Only measured text gets here, and a measurement is cached, so the
+/// check costs nothing on a frame that reuses one.
+fn name_missing(c: char) {
+    if c.is_whitespace() || c.is_control() {
+        return;
+    }
+    warn_once(format!(
+        "U+{:04X} ({c}) is drawn as a box: no loaded font has it. A release build from \
+         `frus build` keeps of each font only the characters the application can show; \
+         `frus help fonts` says how to keep more, and a face for the script can be added with \
+         `frus::fonts::add_font`.",
+        c as u32
+    ));
 }
 
 /// Takes the inventory of `db` and points its generic families at faces that are there.
@@ -1180,6 +1205,15 @@ fn measure_at(text: &str, style: &ResolvedTextStyle, max_width: Option<f32>) -> 
     for run in buffer.layout_runs() {
         width = width.max(run.line_w);
         lines += 1.0;
+        for glyph in run.glyphs.iter().filter(|g| g.glyph_id == 0) {
+            if let Some(c) = run
+                .text
+                .get(glyph.start..glyph.end)
+                .and_then(|t| t.chars().next())
+            {
+                name_missing(c);
+            }
+        }
     }
 
     // **Rounded up**, and this matters more than it looks. The layout engine rounds
@@ -2174,6 +2208,17 @@ impl TextLayout {
 
 #[cfg(test)]
 mod tests {
+    /// A character no font has is named in the log, once (milestone 823).
+    #[test]
+    fn a_character_no_font_has_is_named_once() {
+        // U+0378 is unassigned: no font has a glyph for it, on any system.
+        let _ = super::measure("a\u{0378}b", 16.0);
+        let _ = super::measure("\u{0378}\u{0378}", 17.0);
+        let warned = super::WARNED.lock().unwrap();
+        let named: Vec<_> = warned.iter().filter(|m| m.starts_with("U+0378 ")).collect();
+        assert_eq!(named.len(), 1, "{warned:?}");
+        assert!(named[0].contains("frus help fonts"));
+    }
 
     /// **Letter spacing widens a word by its spacing, once per character** (milestone 623):
     /// a word of eight letters spaced 2 px is about 16 px wider, and not the same width as

@@ -662,7 +662,9 @@ What makes an application smaller, largest first:
   `frus build` uses `[profile.release]` (link-time optimisation, one codegen unit,
   `panic = "abort"`, `strip = true`), and the web's `[profile.web-release]` adds
   `opt-level = "z"`.
-- **Bundle only the fonts you draw** (below): the four groups are about 3.4 MB.
+- **Let the build cut the fonts** (below): `frus build` keeps of each font the characters the
+  application can show, which takes the bundled 3.3 MB to well under 1 MB. Turning off a group
+  you never draw saves the rest.
 - **Drop the dictionaries if you do not show Thai, Lao, Khmer or Myanmar**: the
   `dictionary-line-breaks` feature (on by default) is about 1.1 MB of word lists; without it,
   text in those scripts breaks only at spaces and punctuation.
@@ -834,51 +836,55 @@ hold no font at all.
 
 ### Shipping only the glyphs you draw
 
-A face covers thousands of characters and an application draws a few hundred. Subsetting
-keeps those and drops the rest. Measured on the template's counter, release build for
-`arm64-v8a`, rustc 1.96.1, NDK 26.3, each number read from the file:
+A face covers thousands of characters and an application draws a few hundred. A release
+`frus build` keeps those and drops the rest, on every target, with nothing to install: every
+font embedded with `frus::fonts::include_font!` is cut down, frus's bundled faces included,
+and the build says what it kept:
 
-| fonts                                                      | APK     | `libmy_app.so` |
-| ---------------------------------------------------------- | ------- | -------------- |
-| all four bundled groups (the default)                      | 5.20 MB | 11.34 MB       |
-| `bundled-sans` only                                        | 4.17 MB | 9.36 MB        |
-| no bundled font, DejaVu Sans regular + bold cut to Latin   | 3.45 MB | 7.93 MB        |
-
-The last row's two faces weigh 43 kB together instead of 1.47 MB, and the APK is a third
-smaller than the default. The web build and the desktop binary were not measured.
-
-The step, with [`fonttools`](https://github.com/fonttools/fonttools) (`pip install fonttools`),
-once per face:
-
-```sh
-# Every character written in your sources, literals included, plus Basic Latin and Latin-1.
-cat src/*.rs > used.txt
-python -m fontTools.subset DejaVuSans.ttf     --unicodes=U+0020-007E,U+00A0-00FF --text-file=used.txt     --no-hinting --notdef-outline     --output-file=fonts/DejaVuSans-Subset.ttf
+```text
+Fonts: 3.3 MB → 607 kB, cut to the characters the application can show (Latin, Kana, Han, Thai).
 ```
 
-Take the faces from `crates/frus-text/assets/` in the repository, or use your own. Then
-turn the bundled ones off (`default-features = false`, keeping `images` if you show
-pictures) and register the result as above.
-Three things to know before you rely on it:
+Embed your own faces with `include_font!` rather than `include_bytes!`, so the cut reaches
+them; it takes the same path:
 
-- **The subset cannot know your runtime text.** Reading your sources finds what the interface
-  says; a name from an API, a task the user types, a translation you load later are not in
-  them. Declare the ranges they can fall in with `--unicodes`, as above for Latin-1, and add
-  the scripts your languages need. A character outside the subset is not a crash.
-- **A missing character is drawn as a box** — the face's `.notdef` glyph, which
-  `--notdef-outline` keeps, so a missing character shows while you test. In the measured build the Latin line rendered, and Greek, Japanese and Arabic each
-  became boxes.
-- **The framework draws text too.** The template's `−` button is the character U+2212, which
-  a plain Latin cut leaves out: the button drew a box until it was added. Reading your sources
-  catches this one, because the character is in `src/lib.rs`; a widget's own glyphs, in a
-  build of yours, are found by running every screen, not by reading code.
+```rust,ignore
+frus::main!({
+    use frus::fonts::{add_font, include_font};
+    add_font(include_font!("../fonts/Inter-Regular.ttf").to_vec());
+    add_font(include_font!("../fonts/Inter-Bold.ttf").to_vec());
+    frus::fonts::set_default_family("Inter");
+    FrusApp::stateful(Counter).title("my-app")
+});
+```
 
-Give each weight you use its own subset: the renderer asks the family for an exact weight (the
-note on the bundled sans in `frus-text` says why), so the measured build carried a regular and a
-bold cut; a regular one alone was not tried with `.bold()` text. And the name you pass
-to `set_default_family` is the one written *inside* the file — `pyftsubset` keeps it, and
-`python -c "from fontTools.ttLib import TTFont; print(TTFont('fonts/DejaVuSans-Subset.ttf')['name'].getDebugName(1))"`
-prints it. What a face's licence allows you to modify is for its licence to say.
+What it keeps is chosen by language, because most text on screen is not in your sources: a
+name the reader types, a title from a server, a translation loaded later. Latin is kept whole,
+with the scripts of the languages you declare or name in code (`Locale::new("ar")`), those of
+the languages the widgets speak, the symbols the widgets draw (the template's `−` among them),
+and every character written in your sources. A character outside them is drawn as a box and
+named once in the log. Declare more, or keep a font whole, in `Cargo.toml`:
+
+```toml
+[package.metadata.frus.fonts]
+locales = ["ar", "el"]
+ranges = ["U+2600-26FF"]
+keep = ["assets/fonts/Icons.ttf"]
+```
+
+`frus fonts` prints what a release build keeps of each font and what it weighs;
+`frus build --no-font-subset` embeds them whole. [Text and fonts](guide/text.md) has the whole of
+it. The sizes, measured on this repository's counter and on the Forge example
+([milestone 823](milestone-823.md) has how):
+
+| application | file | fonts whole | fonts cut |
+| --- | --- | --- | --- |
+| the counter, every bundled face | APK (arm64) | 6.59 MB | 5.18 MB |
+| | `.wasm`, gzip | 5.18 MB | 3.77 MB |
+| | Windows `.exe` | 16.00 MB | 13.17 MB |
+| Forge, four Inter weights | APK (arm64) | 6.01 MB | 5.61 MB |
+| | `.wasm`, gzip | 4.13 MB | 3.73 MB |
+| | Windows `.exe` | 15.00 MB | 14.21 MB |
 
 ## The application's icon
 

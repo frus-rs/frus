@@ -18,10 +18,13 @@ pub mod models;
 // `run()` it produces for the desktop.
 
 frus::main!({
-    frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-Bold.ttf").to_vec());
-    frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-Medium.ttf").to_vec());
-    frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-Regular.ttf").to_vec());
-    frus::fonts::add_font(include_bytes!("../assets/fonts/Inter-SemiBold.ttf").to_vec());
+    // `include_font!` embeds a file as `include_bytes!` does; a release `frus build` embeds it cut
+    // down to the characters the application can show.
+    use frus::fonts::{add_font, include_font};
+    add_font(include_font!("../assets/fonts/Inter-Bold.ttf").to_vec());
+    add_font(include_font!("../assets/fonts/Inter-Medium.ttf").to_vec());
+    add_font(include_font!("../assets/fonts/Inter-Regular.ttf").to_vec());
+    add_font(include_font!("../assets/fonts/Inter-SemiBold.ttf").to_vec());
     // The family name stored *inside* these TTFs (name ID 16), not the file name.
     frus::fonts::set_default_family("Inter 24pt");
     FrusApp::router(router(Auth::new())).title("Forge")

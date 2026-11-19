@@ -34,9 +34,9 @@ pub fn example() -> Box<dyn Widget> {
                 .child(Text::new("   42.50").family(FontFamily::Monospace)),
         )),
         // Your own font: register its bytes once at start-up with
-        // `frus::fonts::add_font(include_bytes!("../res/fonts/Brand.ttf").to_vec())`, then
-        // name its family. A name that matches no font falls back to the default rather
-        // than showing nothing — as this one does.
+        // `frus::fonts::add_font(frus::fonts::include_font!("../res/fonts/Brand.ttf").to_vec())`,
+        // then name its family. A name that matches no font falls back to the default
+        // rather than showing nothing — as this one does.
         Box::new(section(
             "Named (falls back when missing)",
             Text::styled(

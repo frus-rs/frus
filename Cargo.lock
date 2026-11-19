@@ -1588,9 +1588,9 @@ dependencies = [
 
 [[package]]
 name = "font-types"
-version = "0.12.5"
+version = "0.12.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8eb065f3251655b3c90e22e5e363f310fc5332fb3402e37bbc94752283248f6"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
 dependencies = [
  "bytemuck",
 ]
@@ -1673,6 +1673,8 @@ name = "frus-cli"
 version = "0.5.0"
 dependencies = [
  "frus-core",
+ "read-fonts 0.47.0",
+ "skera",
 ]
 
 [[package]]
@@ -1820,6 +1822,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "frus-macros"
+version = "0.5.0"
+
+[[package]]
 name = "frus-shaders"
 version = "0.5.0"
 dependencies = [
@@ -1916,6 +1922,7 @@ version = "0.5.0"
 dependencies = [
  "frus-core",
  "frus-cosmic-text",
+ "frus-macros",
  "log",
  "sys-locale",
  "unicode-script",
@@ -3881,8 +3888,22 @@ checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
 dependencies = [
  "bytemuck",
  "core_maths",
- "font-types 0.12.5",
+ "font-types 0.12.7",
  "once_cell",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a39d2f8f681030a7bcbbcf3e8568775ac2393afd51401a2e2133ee89e3953897"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "font-types 0.12.7",
+ "once_cell",
+ "smallvec",
+ "yoke",
 ]
 
 [[package]]
@@ -4390,6 +4411,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
+name = "skera"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02fa4a4dc04b2d2326e4cfdcf890234a58419d00953e512fbf2823d33965d26b"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.17.1",
+ "read-fonts 0.47.0",
+ "skrifa 0.50.0",
+ "thiserror 2.0.20",
+ "write-fonts",
+]
+
+[[package]]
 name = "skrifa"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4409,6 +4444,19 @@ dependencies = [
  "bytemuck",
  "core_maths",
  "read-fonts 0.41.0",
+]
+
+[[package]]
+name = "skrifa"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e85ba678a6023a063d0a78c8770f1c166674ef46af13523d05eff67430f79dfe"
+dependencies = [
+ "bytemuck",
+ "once_cell",
+ "read-fonts 0.47.0",
+ "smallvec",
+ "yoke",
 ]
 
 [[package]]
@@ -6013,6 +6061,17 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "write-fonts"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "944049531d52f9002812ea9de23ec8aa4e9577a7bee6869a1d0f297c679817ea"
+dependencies = [
+ "font-types 0.12.7",
+ "log",
+ "read-fonts 0.47.0",
+]
 
 [[package]]
 name = "writeable"
