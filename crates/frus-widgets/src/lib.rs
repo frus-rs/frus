@@ -381,9 +381,10 @@ pub use commandpalette::{
     fuzzy_match, CommandPalette, CommandPaletteState, CommandPaletteTheme, PaletteCommand,
 };
 pub use component::{
-    back_blocked, component, intervals, rebuild_requested, request_rebuild, take_rebuild,
-    take_rebuild_request, BuildContext, Component, Interval, IntoCleanup, Rebuild, State,
-    StateContext, StateHandle, StateStore, StatefulWidget, StatelessWidget, UseRef, UseState,
+    __set_intervals, back_blocked, component, intervals, rebuild_requested, request_rebuild,
+    take_rebuild, take_rebuild_request, BuildContext, Component, Interval, IntoCleanup, Rebuild,
+    State, StateContext, StateHandle, StateStore, StatefulWidget, StatelessWidget, UseRef,
+    UseState,
 };
 pub use connectivity::{
     connectivity, install_connectivity_watch, report_connectivity, take_connectivity_change,

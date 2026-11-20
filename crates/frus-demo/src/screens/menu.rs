@@ -122,6 +122,15 @@ fn menu_bar(menus: &UseState<MenuPath>, demo: &Rc<Demo>, router: &GoRouter) -> M
             pick(with(Demo::toggle_rtl)),
         ))
         .item(MenuItem::new("Next colour", pick(with(Demo::cycle_seed))))
+        // A second window (milestone 827).
+        .item(MenuItem::checked(
+            "Task summary window",
+            demo.summary_shown(),
+            pick(Rc::new({
+                let demo = demo.clone();
+                move || demo.show_summary(!demo.summary_shown())
+            })),
+        ))
         .divider()
         .submenu(
             SubmenuButton::new("Text size")

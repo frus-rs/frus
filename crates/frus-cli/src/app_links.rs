@@ -121,7 +121,9 @@ fn tool(command: &mut Command) -> Result<(), String> {
 
 /// Makes `apk` again around a manifest cargo-apk could not write: `autoVerify` on its `https`
 /// intent filters, when it has any, and frus's own activity with its code (milestone 801),
-/// unless the application names an activity of its own. True when the package was made again.
+/// unless the application names an activity of its own, and the background job service when
+/// its library declares headless entry points (milestone 828). True when the package was made
+/// again.
 ///
 /// The manifest beside the package is replaced by the one packaged, once the package is made,
 /// and the activity's code is left beside it as `classes.dex`: the split packages and the
@@ -147,9 +149,11 @@ pub(crate) fn finish_package(
     // Google Play Billing (milestone 807), when the application's library uses it.
     let libraries = crate::android_pack::packaged_libraries(apk)?;
     let billing = crate::android_billing::version_in(dir, &libraries);
+    // Headless entry points (milestone 828), when the application's library declares them.
+    let jobs = crate::android_jobs::library_in(dir, &libraries);
     let with_activity = activity.is_some();
     let with_code = with_activity || billing.is_some();
-    let unchanged = billing.as_ref().map(|_| current.to_string());
+    let unchanged = (billing.is_some() || jobs.is_some()).then(|| current.to_string());
     let Some(mut patched) = activity.or(verified).or(unchanged) else {
         return Ok(false);
     };
@@ -157,6 +161,9 @@ pub(crate) fn finish_package(
         patched = crate::android_billing::add_to_manifest(&patched, version);
         patched =
             crate::android_pack::set_attribute(&patched, "<application", "android:hasCode", "true");
+    }
+    if let Some(library) = &jobs {
+        patched = crate::android_jobs::add_to_manifest(&patched, library);
     }
     if patched.contains("android:autoVerify") && !manifest.contains("android:autoVerify") {
         crate::report::say("Asking Android to verify the https links (android:autoVerify)…");
@@ -214,14 +221,17 @@ pub(crate) fn finish_package(
         }
         std::fs::copy(dir.join(library), &to).map_err(|e| format!("{library}: {e}"))?;
     }
-    // The activity's code, and the Billing Library's, at the package's root.
-    let code = match &billing {
-        Some(version) => crate::android_billing::dex(version, with_activity, &jar)
-            .map_err(|e| format!("Google Play Billing Library: {e}"))?,
-        None => crate::android_activity::DEX.to_vec(),
+    // The activity's code, the Billing Library's and the job service's, at the package's root.
+    let primary = match &billing {
+        Some(version) => Some(
+            crate::android_billing::dex(version, with_activity, &jar)
+                .map_err(|e| format!("Google Play Billing Library: {e}"))?,
+        ),
+        None => with_code.then(|| crate::android_activity::DEX.to_vec()),
     };
-    if with_code {
-        std::fs::write(raw.join("classes.dex"), &code).map_err(|e| format!("classes.dex: {e}"))?;
+    let code = crate::android_jobs::dex_files(primary, jobs.is_some());
+    for (name, bytes) in &code {
+        std::fs::write(raw.join(name), bytes).map_err(|e| format!("{name}: {e}"))?;
     }
     if mode == Mode::Debug {
         package.args(["-0", ""]);
@@ -244,8 +254,9 @@ pub(crate) fn finish_package(
     std::fs::rename(&aligned, apk).map_err(|e| format!("{}: {e}", apk.display()))?;
     // What the package now holds, for the packages made again from it (`android_pack`).
     std::fs::write(&manifest_path, &patched).map_err(|e| e.to_string())?;
-    if with_code {
-        std::fs::write(dir.join("classes.dex"), &code).map_err(|e| format!("classes.dex: {e}"))?;
+    let _ = std::fs::remove_file(dir.join("classes2.dex"));
+    for (name, bytes) in &code {
+        std::fs::write(dir.join(name), bytes).map_err(|e| format!("{name}: {e}"))?;
     }
     let _ = std::fs::remove_file(&unaligned);
     let _ = std::fs::remove_dir_all(&patched_dir);

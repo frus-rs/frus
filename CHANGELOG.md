@@ -23,6 +23,35 @@ any release may break.
   installed "process text" applications (translate, search) behind a new **More** button; the
   text one returns replaces the selection. New `EditAction` variants: `More`, `ProcessText`,
   `ReplaceMisspelled`, `DeleteMisspelled`.
+- **Rust code that runs with no window** (J828, #215). `main!(app, headless: { "sync" => sync })`
+  declares headless entry points: plain functions, `fn(&HeadlessContext) -> anyhow::Result<()>`,
+  handed the job's name and input, the application's preferences and data folder (shared with
+  the window without a race), `write_file` (whole or not at all) and `notify`. `schedule_job`
+  (`BackgroundJob::periodic` / `once`, with `requires_network`, `requires_unmetered_network`,
+  `requires_charging`, `requires_idle`, `requires_battery_not_low`, `persisted`), `cancel_job`
+  and `run_headless`. On Android the system's job scheduler runs them through a job service
+  `frus build` and `frus run` add to the package (and declare in its manifest) only when the
+  library declares entry points; the job runs in the application's process, started for it with
+  no activity when the application is closed. On the desktop a schedule runs while the process
+  runs, and `app --frus-job <name>` runs one entry point with no window, for the system's own
+  scheduler. The web and iOS answer `JobError::Unsupported`. Preferences kept in a file are now
+  changed under a lock every process takes (`flock` on Android, whose standard library does not
+  lock files), after reading again what another process wrote. Logs are set up before the
+  application is made, so what it logs while it is made reaches the console. New example:
+  `crates/frus-background-example`, checked on a phone.
+- **More windows than one** (J827, #218). An application lists the windows it wants open
+  besides its main one with `Application::windows` (or `FrusApp::windows`), as values of its
+  state — `Window::new(id, on_close).title(..).size(..)` — and builds each with
+  `Application::window_view` (`FrusApp::window_view`). The shell opens a window newly listed,
+  closes one no longer listed and retitles one whose title changed; a window's close button sends
+  its message and the state decides. Each window has its own focus, scroll positions, overlays,
+  gestures, semantics tree and accessibility adapter; all share the application's state and one
+  GPU device, pipelines, glyph atlas and image textures (`frus_gpu::WindowSurface`,
+  `Renderer::add_surface`, `Renderer::render_to`). Desktops only: on Android and the web a
+  listed window is not opened, and the log says so once. Single-window applications change
+  nothing. The demo opens its task summary in a second window from the Stats section and the
+  View menu.
+
 - **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
   when it is laid out, from the width it is given, instead of from the screen's width read when
   it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own

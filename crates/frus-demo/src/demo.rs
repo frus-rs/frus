@@ -84,6 +84,9 @@ pub(crate) struct Demo {
     /// system's dialog (milestone 698). Names only, and only while the demo runs — it reads
     /// nothing from them.
     attachments: RefCell<HashMap<u64, Vec<String>>>,
+    /// Whether the task summary is open in a window of its own (milestone 827): the window is
+    /// this value, which the application's `windows` list reads.
+    summary: Cell<bool>,
 }
 
 impl Default for Demo {
@@ -98,6 +101,7 @@ impl Default for Demo {
             section: Cell::new(0),
             asking_clear: Cell::new(false),
             attachments: RefCell::default(),
+            summary: Cell::new(false),
         }
     }
 }
@@ -305,6 +309,17 @@ impl Demo {
     }
 
     /// Whether the "clear completed" confirmation is up.
+    /// Whether the task summary has a window of its own (milestone 827).
+    pub(crate) fn summary_shown(&self) -> bool {
+        self.summary.get()
+    }
+
+    /// Opens the task summary's window, or closes it: the application's `windows` list follows.
+    pub(crate) fn show_summary(&self, shown: bool) {
+        self.summary.set(shown);
+        request_rebuild();
+    }
+
     pub(crate) fn asking_clear(&self) -> bool {
         self.asking_clear.get()
     }
