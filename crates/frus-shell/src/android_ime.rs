@@ -152,6 +152,9 @@ fn try_install(app: &AndroidApp) -> Result<Bridge, jni::errors::Error> {
     crate::purchases::remember(&mut env, &loader, &activity);
     // And what an intent that opens the application carries (milestone 801).
     crate::android_link::install(&mut env, &loader);
+    // And the spell checker with the "process text" actions (milestone 829): loaded and
+    // wired only; nothing is asked of the platform until a field needs it.
+    crate::android_text_services::install(&mut env, &loader, &activity);
 
     let name = env.new_string("dev.frus.input.FrusTextBridge")?;
     let class_obj = env

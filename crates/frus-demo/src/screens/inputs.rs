@@ -140,12 +140,18 @@ pub(crate) struct FieldsState {
     query: String,
     amount: String,
     searched: String,
+    notes: String,
+    username: String,
 }
 
 impl StatefulWidget for FieldsPage {
     type State = FieldsState;
     fn create_state(&self) -> FieldsState {
-        FieldsState::default()
+        FieldsState {
+            // Two words the spell checker underlines from the start (milestone 829).
+            notes: "Teh quick brwn fox".into(),
+            ..FieldsState::default()
+        }
     }
 }
 
@@ -157,6 +163,27 @@ impl State for FieldsState {
         let email_error = (!self.email.is_empty() && !self.email.contains('@'))
             .then(|| "An email address has an @ in it.".to_string());
         let body = Flex::column()
+            .child(heading("Spell check", &theme))
+            .child(
+                // The platform's spell checker underlines misspelled words; a tap on one
+                // offers its corrections (milestone 829).
+                Field::new(
+                    TextField::new(&self.notes)
+                        .spell_check(true)
+                        .on_input(cx.handler(|s: &mut FieldsState, v: String| s.notes = v)),
+                )
+                .label("Notes"),
+            )
+            .child(
+                // A username is not prose: no corrections, no suggestions learned.
+                Field::new(
+                    TextField::new(&self.username)
+                        .autocorrect(false)
+                        .enable_suggestions(false)
+                        .on_input(cx.handler(|s: &mut FieldsState, v: String| s.username = v)),
+                )
+                .label("Username"),
+            )
             .child(heading("A field around a text field", &theme))
             .child(
                 Field::new(

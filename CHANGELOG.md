@@ -8,11 +8,21 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 826 so far, each documenting the objective, the alternatives
+> record — one per step, 829 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A text field gets the system's text services** (J829, #214). `TextField::spell_check(true)`
+  has the platform's spell checker read the field on Android: misspelled words are underlined (a
+  red wave by default; `misspelled_color`, `misspelled_wavy` and `misspelled_thickness` on the
+  field's style and theme), and a tap on one opens a bar with up to three suggestions and
+  *Delete*, which `TextField::spell_check_toolbar` can change. `TextField::autocorrect(bool)` and
+  `TextField::enable_suggestions(bool)` reach the keyboard as `InputType` flags; ordinary text
+  now asks to be corrected, which single-line fields never did. The selection bar lists the
+  installed "process text" applications (translate, search) behind a new **More** button; the
+  text one returns replaces the selection. New `EditAction` variants: `More`, `ProcessText`,
+  `ReplaceMisspelled`, `DeleteMisspelled`.
 - **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
   when it is laid out, from the width it is given, instead of from the screen's width read when
   it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own
