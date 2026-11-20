@@ -50,8 +50,11 @@ On the web the same answer drives the hidden input's `autocorrect` and `spellche
   says it has no checker.
 - **Android** (`FrusTextServices.java`, `android_text_services.rs`) opens one
   `SpellCheckerSession` (the person's spell checker language) on the first request, calls
-  `getSentenceSuggestions`, and reports each word whose attributes say "looks like a typo" and
-  not "in the dictionary", in UTF-16 offsets converted to characters on the Rust side.
+  `getSentenceSuggestions`, and reports each word the checker does not know (no "in the
+  dictionary" attribute) that it either marks as "looks like a typo" or offers replacements for,
+  since checkers differ in which they set; offsets are UTF-16, converted to characters on the
+  Rust side. Each answer leaves a debug line in logcat (`frus: spell check: N words checked, M
+  misspelled`).
 - **A tap** that puts the caret in or against a misspelled word opens the spell checker's bar
   over it: up to three suggestions (`MAX_SPELL_SUGGESTIONS`), then *Delete*, as a list of rows.
   A suggestion replaces the word (through the message typing sends, so undo and filters see it);
@@ -135,11 +138,18 @@ checking reads nothing. The bundled dex grows from 64,600 to 71,228 bytes.
     lists none, and the system logged "no available spell checker services found"). frus logged
     "spell check: the platform offers no spell checker" once and drew nothing, as the shell's
     unit test says it must. So the underline and the suggestions were **not** seen on a device.
+  - **Then with Gboard installed and selected as the spell checker** (SwiftKey still the
+    keyboard): the session opened and Gboard's checker answered, but it reported every word of
+    *Teh quick brwn fox* as in its dictionary (attributes `RESULT_ATTR_IN_THE_DICTIONARY`, no
+    suggestions), so nothing was underlined. The checker answers so while it has no dictionary
+    for the language, which it downloads only once Gboard is set up as a keyboard. frus did what
+    the checker said; nothing was changed on the phone to set Gboard up.
 
 ## Not done
 
-- **The spell checker's underline and suggestions are owed on a device**: the test phone has no
-  spell checker service, and nothing was installed on it. They are proven by unit tests and by
+- **The spell checker's underline and suggestions are owed on a device**: the test phone's only
+  spell checker (Gboard's, installed and selected) reports every word as correct, since Gboard
+  has no dictionary there until it is set up as a keyboard. They are proven by unit tests and by
   the shell driven through its own tap path only. Until a phone with a checker (Gboard, the AOSP
   keyboard) shows them, #214 stays open.
 - **A process-text answer written back** was not seen on the phone: the action tried opened a

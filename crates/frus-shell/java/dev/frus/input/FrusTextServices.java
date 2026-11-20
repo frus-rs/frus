@@ -92,6 +92,7 @@ public final class FrusTextServices {
 
         @Override
         public void onGetSentenceSuggestions(SentenceSuggestionsInfo[] results) {
+            int checked = 0;
             ArrayList<int[]> words = new ArrayList<int[]>();
             ArrayList<String> offered = new ArrayList<String>();
             if (results != null) {
@@ -104,10 +105,14 @@ public final class FrusTextServices {
                         if (info == null) {
                             continue;
                         }
+                        checked++;
                         int attributes = info.getSuggestionsAttributes();
                         boolean typo = (attributes & SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO) != 0;
                         boolean known = (attributes & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
-                        if (!typo || known) {
+                        // A word is misspelled when the checker says it looks like a typo, or,
+                        // as some checkers answer, offers replacements for a word it does not
+                        // know; a word it knows never is.
+                        if (known || !(typo || info.getSuggestionsCount() > 0)) {
                             continue;
                         }
                         StringBuilder joined = new StringBuilder();
@@ -122,6 +127,8 @@ public final class FrusTextServices {
                     }
                 }
             }
+            android.util.Log.d("frus", "spell check: " + checked + " words checked, "
+                    + words.size() + " misspelled");
             int[] starts = new int[words.size()];
             int[] lengths = new int[words.size()];
             for (int i = 0; i < words.size(); i++) {
