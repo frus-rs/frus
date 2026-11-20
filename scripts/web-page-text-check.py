@@ -193,6 +193,42 @@ def main(base):
             on = until(p, f"({ON_SCREEN}).includes({json.dumps(word)})", 4)
             expect("the application scrolled to it: it is on screen", bool(on), True)
 
+        print("the reader's own scrolling goes to the application, not to the boxes")
+        # The boxes scroll (a find must be able to scroll them), so the wheel and the finger
+        # must never reach them: the layer lets the pointer through, the canvas is what is
+        # under it, and a scroll goes up the target's ancestors, which the boxes are not.
+        p.js("location.hash = '#/settings'")
+        p.wait(1.5)
+        p.js("document.querySelector('#frus-text .s').scrollTop = 0")
+        p.wait(1)
+        p.js("""(() => {
+          window.__wheelTargets = [];
+          addEventListener('wheel', (e) => __wheelTargets.push(e.target.nodeName), {capture: true});
+          window.__boxScrolls = 0;
+          document.querySelectorAll('#frus-text .s').forEach((b) => b.addEventListener('scroll', () => __boxScrolls++));
+        })()""")
+        box = p.js("(() => { const b = document.querySelector('#frus-text .s').getBoundingClientRect();"
+                   " return [b.left + b.width / 2, b.top + b.height / 2]; })()")
+        under = p.js(f"document.elementFromPoint({box[0]}, {box[1]}).nodeName")
+        expect("what is under the pointer over a box", under, "CANVAS")
+        before = p.js("document.querySelector('#frus-text .s').scrollTop")
+        p.call("Input.dispatchMouseEvent", type="mouseMoved", x=box[0], y=box[1])
+        for _ in range(4):
+            p.call("Input.dispatchMouseEvent", type="mouseWheel", x=box[0], y=box[1], deltaX=0, deltaY=120)
+            p.wait(0.1)
+        p.wait(1.5)
+        targets = p.js("__wheelTargets")
+        expect_true("the wheel goes to the canvas", bool(targets) and set(targets) == {"CANVAS"}, f"{targets}")
+        after = p.js("document.querySelector('#frus-text .s').scrollTop")
+        expect_true("the application scrolled, and the box followed it", after > before + 50,
+                    f"{before:.0f} -> {after:.0f}")
+        settled = p.js("__boxScrolls")
+        p.wait(1.5)
+        expect("once the application stops, the box does not move again (no loop)",
+               p.js("__boxScrolls"), settled)
+        p.call("Input.dispatchMouseEvent", type="mouseWheel", x=box[0], y=box[1], deltaX=0, deltaY=-3000)
+        p.wait(1.5)
+
         print("a list of 5000 rows, of which a dozen are built")
         p.js("location.hash = '#/journal'")
         until(p, "[...document.querySelectorAll('#frus-text .t')].some((el) => el.textContent === 'Row 1')", 10)

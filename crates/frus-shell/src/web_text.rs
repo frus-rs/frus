@@ -285,12 +285,19 @@ mod live {
     /// The words are transparent: the canvas draws them. A find's highlight is the browser's,
     /// made translucent and drawn without its own copy of the words, so the canvas's show
     /// through it (`::search-text`, which a browser without it ignores, drawing its own).
+    ///
+    /// A region's box scrolls (`overflow: auto`, its bar hidden), though nothing but a find
+    /// scrolls it: Chrome on Android leaves an `overflow: hidden` box where it is when its find
+    /// bar lands on a match out of view (seen on a phone, milestone 830). The pointer goes
+    /// through the layer, so a wheel or a finger still scrolls the application, not the box.
     const CSS: &str = "\
 #frus-text{position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;\
 color:transparent;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;\
 margin:0;padding:0;z-index:0}\
 #frus-text div{position:absolute;margin:0;padding:0;box-sizing:border-box}\
-#frus-text .s{overflow:hidden}\
+#frus-text .s{overflow:auto;scrollbar-width:none}\
+#frus-text .s::-webkit-scrollbar{display:none}\
+#frus-text .s.n{scrollbar-width:auto}\
 #frus-text .z{position:relative}\
 #frus-text .t{white-space:pre-wrap;overflow-wrap:anywhere}\
 #frus-text ::search-text{color:transparent;background:rgb(255 214 0/.45)}\
@@ -672,10 +679,21 @@ background:#fff!important;display:block!important}\
                     live.sizer.set_attribute("style", &sizer_style).ok();
                     live.sizer_style = sizer_style;
                 }
-                // Scrolled as far as the application's region is.
+                // Scrolled as far as the application's region is, within what the box can
+                // scroll: a region pulled past its end (an overscroll, a bounce) puts the box at
+                // that end. Asked for more, the browser would stop the box there itself, and
+                // the scroll event of that stop would read as a find's request and end the
+                // bounce.
                 let (x, y) = region.scrolled();
-                let want = (f64::from(x * k), f64::from(y * k));
                 let el: &Element = live.outer.as_ref();
+                let room = (
+                    (number(el, "scrollWidth") - number(el, "clientWidth")).max(0.0),
+                    (number(el, "scrollHeight") - number(el, "clientHeight")).max(0.0),
+                );
+                let want = (
+                    f64::from(x * k).clamp(0.0, room.0),
+                    f64::from(y * k).clamp(0.0, room.1),
+                );
                 let now = (number(el, "scrollLeft"), number(el, "scrollTop"));
                 if (now.0 - want.0).abs() > 0.5 || (now.1 - want.1).abs() > 0.5 {
                     live.expected.set(want);
@@ -853,6 +871,7 @@ background:#fff!important;display:block!important}\
                     expected.set(at);
                     scrolls.borrow_mut().push((id, at));
                     window.request_redraw();
+                    repaint_later(&el);
                 }) as Box<dyn FnMut(web_sys::Event)>)
             };
             let target: &web_sys::EventTarget = outer.as_ref();
@@ -870,6 +889,28 @@ background:#fff!important;display:block!important}\
                 rows: None,
             })
         }
+    }
+
+    /// Has the browser paint `el`'s box again a moment after a find scrolled it. Chrome on
+    /// Android scrolls the box to the match but does not draw the match's highlight in it
+    /// until the box is painted again (seen on a phone, milestone 830): its scroll bar's
+    /// style, changed and changed back, is a change nobody sees that has it painted.
+    fn repaint_later(el: &Element) {
+        let Some(page) = web_sys::window() else {
+            return;
+        };
+        let at = |delay: i32, class: &'static str| {
+            let el = el.clone();
+            let callback = Closure::once_into_js(move || {
+                let _ = el.set_attribute("class", class);
+            });
+            let _ = page.set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.unchecked_ref(),
+                delay,
+            );
+        };
+        at(150, "s n");
+        at(200, "s");
     }
 
     impl Drop for TextLayer {

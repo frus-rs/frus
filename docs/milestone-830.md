@@ -63,10 +63,24 @@ words, so the canvas's words show through it; a browser without that pseudo-elem
 default highlight with the words in its own font, which is still readable.
 
 **Scroll regions are boxes.** Each `Scrollable` of the frame is a box in the layer
-(`overflow: hidden`, as big as its viewport) holding a sizer as big as its content, with the
-region's texts inside the sizer at their **content** position: the rect, less the content's
-origin. Nested regions nest. The box is scrolled (`scrollLeft`/`scrollTop`) as far as the
-application's region is; a reversed region counts from its far end.
+(as big as its viewport) holding a sizer as big as its content, with the region's texts inside
+the sizer at their **content** position: the rect, less the content's origin. Nested regions
+nest. The box is scrolled (`scrollLeft`/`scrollTop`) as far as the application's region is,
+within what the box can scroll (a region pulled past its end by an overscroll puts the box at
+that end, so the browser's own stop is not read as a request); a reversed region counts from
+its far end.
+
+**The box scrolls, the reader cannot scroll it.** It is `overflow: auto` with its scroll bar
+hidden. The first version had `overflow: hidden`, which a desktop browser's `scrollIntoView`
+scrolls, but **Chrome's find bar on Android does not**: on the phone it found "Vibrate 400 ms"
+(1/1) and left the box at 0, so the application never moved. A box that can scroll is scrolled
+by it. The layer lets the pointer through (`pointer-events: none`, inherited by every box), so
+the wheel, the touchpad and the finger land on the canvas, and a scroll goes up the target's
+ancestors, which the boxes are not: the reader's scrolling still goes to the application alone.
+Chrome on Android then scrolls the box but draws the match's highlight only once the box is
+painted again; a find's scroll (one that is not this module's echo) is followed, 150 ms later,
+by the box's scroll-bar style changed and changed back, which nobody sees and which has it
+painted.
 
 This gives two properties that make the whole design affordable:
 
@@ -230,6 +244,28 @@ layer then holds 5004 texts.
   region's box, fires its scroll event, and the application follows. The page was served by
   `python -m http.server` from `target/frus-web/frus-demo/`, and `git status` shows
   `crates/frus-demo/web/` unchanged after the build.
+
+  The script also checks that the reader's scrolling never reaches a box: over a region's box,
+  `elementFromPoint` is the canvas, four wheel turns all target the canvas, the application
+  scrolls and the box follows it (0 to 480 px), and once the application stops the box gets no
+  further scroll event (no loop between the box's event and the application's scroll). The
+  screen-reader bridge's check (`web-accessibility-check.py`, milestone 564) and the text
+  editing one (`web-text-editing-check.py`, milestone 711) pass on the same build.
+- **A phone, with Chrome's own find bar.** A Huawei STK-L21 (Android, Chrome 157), the demo
+  served from the built copy through `adb reverse`, opened at the settings screen; find opened
+  from Chrome's menu and the words typed into its bar; the page read over the DevTools
+  protocol (`adb forward`) and the screen captured.
+  - **On screen**: "Volume" is found (1/1) and highlighted on the canvas's word (77 highlight
+    pixels, on the word's line).
+  - **Out of view**: with the first version's `overflow: hidden` box, "Vibrate 400 ms" was
+    found (1/1) but the box stayed at 0 and the application did not move. With the scrolling
+    box, the find scrolls it to 823 px, the application follows (the accessibility tree has
+    "Vibrate 400 ms" afterwards) and the match is highlighted over the button (446 highlight
+    pixels). Without the repaint after the scroll, the button showed no highlight.
+  - **A finger** dragged over a region (`input motionevent`): every pointer and touch event
+    targets the canvas (1 down, 14 moves, 1 up), and the box and the page do not scroll.
+    The demo did not scroll for that injected drag either, with the layer hidden too, so the
+    application's own response to it is not shown here.
 - **The routine check**, on Windows: `cargo fmt --check`; clippy `-D warnings` on the host
   (all targets) and for wasm32; the tests of `frus-shell`, `frus-widgets`, `frus-cli`, `frus`
   and `frus-demo`; `cargo doc` with `-D warnings`; the eight frus-examples and the gallery's
@@ -241,12 +277,12 @@ layer then holds 5004 texts.
 
 ## Not done
 
-- **The real find bar was not driven.** No automation reaches the browser's own find bar, so
-  "the match scrolls into view" is the script's `scrollIntoView`, standing in for it. Pressing
-  Ctrl+F by hand in a windowed Edge or Chrome is the remaining check, and Firefox and Safari
-  were not tried at all (Firefox has no `::search-text`, so its default highlight shows).
-- **Not run on a phone.** The layer is the same on a phone's browser, but neither Android
-  Chrome's find nor its printing was tried.
+- **A desktop's find bar was not driven.** Chrome's bar on Android was (above); on the desktop
+  the script's `scrollIntoView` stands in for the bar. Firefox and Safari were not tried
+  (Firefox has no `::search-text`, so its default highlight shows), nor printing on the phone.
+- **The phone's drag.** An injected drag (`adb input`) did not scroll the demo in Chrome, with
+  or without the layer; whether that is the injection or the application's touch handling on
+  the web is for another look. The layer is not in its way: every event went to the canvas.
 - **Opening find from the browser's menu** does not lay a lazy list's rows in: no event says
   it happened. Ctrl+F (or Cmd+F) does.
 - **Highlights are approximate.** The browser lays the words out in its own font, so a long
