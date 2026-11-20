@@ -65,6 +65,7 @@ public final class FrusTextServices {
                     return;
                 }
                 pendingSequence = sequence;
+                pendingText = text;
                 checker.getSentenceSuggestions(
                         new TextInfo[] {new TextInfo(text)}, MAX_SUGGESTIONS);
             }
@@ -86,15 +87,65 @@ public final class FrusTextServices {
         return session;
     }
 
+    /** The text of the request being answered, for the words a second question names. */
+    private static String pendingText = "";
+
+    /**
+     * The misspelled words of the answer being assembled: offset and length, and their
+     * suggestions joined by newlines. Kept while the word-level question below is out.
+     */
+    private static ArrayList<int[]> foundWords = new ArrayList<int[]>();
+    private static ArrayList<String> foundSuggestions = new ArrayList<String>();
+
+    private static void report() {
+        int[] starts = new int[foundWords.size()];
+        int[] lengths = new int[foundWords.size()];
+        for (int i = 0; i < foundWords.size(); i++) {
+            starts[i] = foundWords.get(i)[0];
+            lengths[i] = foundWords.get(i)[1];
+        }
+        nativeSpellResults(pendingSequence, starts, lengths,
+                foundSuggestions.toArray(new String[0]));
+    }
+
+    private static String joined(SuggestionsInfo info) {
+        StringBuilder joined = new StringBuilder();
+        for (int s = 0; s < Math.max(0, info.getSuggestionsCount()); s++) {
+            if (s > 0) {
+                joined.append('\n');
+            }
+            joined.append(info.getSuggestionAt(s));
+        }
+        return joined.toString();
+    }
+
     private static final class Listener implements SpellCheckerSession.SpellCheckerSessionListener {
+        /**
+         * The word-level answer for the misspelled words the sentence answer gave no
+         * suggestions for: some checkers (Gboard's among them) find the typo in a sentence but
+         * offer replacements only when asked about the word. The cookie is the word's index.
+         */
         @Override
-        public void onGetSuggestions(SuggestionsInfo[] results) {}
+        public void onGetSuggestions(SuggestionsInfo[] results) {
+            android.util.Log.d("frus", "spell check: word-level answer for "
+                    + (results == null ? 0 : results.length) + " words");
+            if (results != null) {
+                for (SuggestionsInfo info : results) {
+                    int index = info == null ? -1 : info.getCookie();
+                    if (index >= 0 && index < foundSuggestions.size()) {
+                        foundSuggestions.set(index, joined(info));
+                    }
+                }
+            }
+            report();
+        }
 
         @Override
         public void onGetSentenceSuggestions(SentenceSuggestionsInfo[] results) {
             int checked = 0;
-            ArrayList<int[]> words = new ArrayList<int[]>();
-            ArrayList<String> offered = new ArrayList<String>();
+            foundWords = new ArrayList<int[]>();
+            foundSuggestions = new ArrayList<String>();
+            ArrayList<TextInfo> ask = new ArrayList<TextInfo>();
             if (results != null) {
                 for (SentenceSuggestionsInfo sentence : results) {
                     if (sentence == null) {
@@ -115,28 +166,25 @@ public final class FrusTextServices {
                         if (known || !(typo || info.getSuggestionsCount() > 0)) {
                             continue;
                         }
-                        StringBuilder joined = new StringBuilder();
-                        for (int s = 0; s < Math.max(0, info.getSuggestionsCount()); s++) {
-                            if (s > 0) {
-                                joined.append('\n');
-                            }
-                            joined.append(info.getSuggestionAt(s));
+                        int start = sentence.getOffsetAt(i);
+                        int length = sentence.getLengthAt(i);
+                        String offered = joined(info);
+                        if (offered.isEmpty() && start >= 0 && start + length <= pendingText.length()) {
+                            ask.add(new TextInfo(pendingText.substring(start, start + length),
+                                    foundWords.size(), 0));
                         }
-                        words.add(new int[] {sentence.getOffsetAt(i), sentence.getLengthAt(i)});
-                        offered.add(joined.toString());
+                        foundWords.add(new int[] {start, length});
+                        foundSuggestions.add(offered);
                     }
                 }
             }
             android.util.Log.d("frus", "spell check: " + checked + " words checked, "
-                    + words.size() + " misspelled");
-            int[] starts = new int[words.size()];
-            int[] lengths = new int[words.size()];
-            for (int i = 0; i < words.size(); i++) {
-                starts[i] = words.get(i)[0];
-                lengths[i] = words.get(i)[1];
+                    + foundWords.size() + " misspelled, " + ask.size() + " asked again");
+            if (ask.isEmpty() || session == null) {
+                report();
+            } else {
+                session.getSuggestions(ask.toArray(new TextInfo[0]), MAX_SUGGESTIONS, false);
             }
-            nativeSpellResults(pendingSequence, starts, lengths,
-                    offered.toArray(new String[0]));
         }
     }
 

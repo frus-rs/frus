@@ -52,7 +52,8 @@ On the web the same answer drives the hidden input's `autocorrect` and `spellche
   `SpellCheckerSession` (the person's spell checker language) on the first request, calls
   `getSentenceSuggestions`, and reports each word the checker does not know (no "in the
   dictionary" attribute) that it either marks as "looks like a typo" or offers replacements for,
-  since checkers differ in which they set; offsets are UTF-16, converted to characters on the
+  since checkers differ in which they set. A typo the sentence answer offered nothing for is asked
+  about again on its own (`getSuggestions`), since some checkers only suggest there. Offsets are UTF-16, converted to characters on the
   Rust side. Each answer leaves a debug line in logcat (`frus: spell check: N words checked, M
   misspelled`).
 - **A tap** that puts the caret in or against a misspelled word opens the spell checker's bar
@@ -144,14 +145,23 @@ checking reads nothing. The bundled dex grows from 64,600 to 71,228 bytes.
     suggestions), so nothing was underlined. The checker answers so while it has no dictionary
     for the language, which it downloads only once Gboard is set up as a keyboard. frus did what
     the checker said; nothing was changed on the phone to set Gboard up.
+  - **Then with Gboard set up as the keyboard too** (its English and French dictionaries
+    downloaded): Gboard's checker marked *brwn* as a typo (`RESULT_ATTR_LOOKS_LIKE_TYPO`) and
+    the field drew the red wave under it, and under *jumpd* once typed. A tap in *brwn* opened
+    the spell checker's bar. A tap on *Delete* took the word and one space away ("Teh quick fox
+    jumpd"), and the wave under *jumpd* moved with it before the next answer came. But the
+    checker offered **no suggestions** for either word, neither in the sentence answer nor when
+    asked about the word alone (`getSuggestions`: attributes 2, 0 suggestions, from the debug
+    log), so the bar held only *Delete*, while Gboard's own strip offered *brown*. *Teh* it
+    reports as known (the keyboard is set to English and French).
 
 ## Not done
 
-- **The spell checker's underline and suggestions are owed on a device**: the test phone's only
-  spell checker (Gboard's, installed and selected) reports every word as correct, since Gboard
-  has no dictionary there until it is set up as a keyboard. They are proven by unit tests and by
-  the shell driven through its own tap path only. Until a phone with a checker (Gboard, the AOSP
-  keyboard) shows them, #214 stays open.
+- **Suggestions from the spell checker are owed on a device**: on the test phone Gboard's
+  checker finds the typos (underlined, tappable, deletable on the device) but answers no
+  replacements, sentence- or word-level. A phone whose checker offers them (the AOSP keyboard's,
+  or Gboard on a newer Android) would show them; the path from an answer with suggestions to the
+  bar and to the replaced word is covered by the unit tests and the driven tap test only.
 - **A process-text answer written back** was not seen on the phone: the action tried opened a
   search, which returns nothing.
 - **The `<queries>` manifest entry** an Android 11+ device needs to see the process-text
