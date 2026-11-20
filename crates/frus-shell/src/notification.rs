@@ -190,6 +190,34 @@ impl SystemNotification {
     /// Shows it through the desktop's library, and brings the window forward on a click.
     #[cfg(desktop)]
     fn show_desktop(&self) -> Result<NotificationResponse, NotificationError> {
+        let error = |e: notify_rust::error::Error| NotificationError(e.to_string());
+        let mut answer = NotificationResponse::Closed;
+        self.native()
+            .show()
+            .map_err(error)?
+            .wait_for_response(|platform: &notify_rust::NotificationResponse| {
+                answer = response(platform);
+            })
+            .map_err(error)?;
+        if answer == NotificationResponse::Clicked {
+            RAISE.store(true, Ordering::Relaxed);
+        }
+        Ok(answer)
+    }
+
+    /// Shows it through the desktop's library without waiting for an answer: what a
+    /// background job does, with no window to bring forward (milestone 828).
+    #[cfg(desktop)]
+    pub(crate) fn post_desktop(&self) -> Result<(), NotificationError> {
+        self.native()
+            .show()
+            .map(drop)
+            .map_err(|e| NotificationError(e.to_string()))
+    }
+
+    /// The notification, for the desktop's library.
+    #[cfg(desktop)]
+    fn native(&self) -> notify_rust::Notification {
         let sender = SENDER.lock().ok().and_then(|sender| sender.clone());
         let mut native = notify_rust::Notification::new();
         native.summary(&self.title).body(&self.body);
@@ -231,19 +259,7 @@ impl SystemNotification {
                 let _ = notify_rust::set_application(&bundle);
             }
         }
-        let error = |e: notify_rust::error::Error| NotificationError(e.to_string());
-        let mut answer = NotificationResponse::Closed;
         native
-            .show()
-            .map_err(error)?
-            .wait_for_response(|platform: &notify_rust::NotificationResponse| {
-                answer = response(platform);
-            })
-            .map_err(error)?;
-        if answer == NotificationResponse::Clicked {
-            RAISE.store(true, Ordering::Relaxed);
-        }
-        Ok(answer)
     }
 }
 

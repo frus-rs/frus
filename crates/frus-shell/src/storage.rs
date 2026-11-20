@@ -83,6 +83,17 @@ pub(crate) mod android {
         let _ = VM.set(app.vm_as_ptr() as usize);
     }
 
+    /// Records the application's `files` folder, handed over by the job service when no
+    /// activity runs (milestone 828).
+    pub(crate) fn record_files(files: PathBuf) {
+        let _ = FILES.set(files);
+    }
+
+    /// Records the process's Java VM, handed over by the job service.
+    pub(crate) fn record_vm(vm: &jni::JavaVM) {
+        let _ = VM.set(vm.get_java_vm_pointer() as usize);
+    }
+
     /// The application's `files` folder (`Context.getFilesDir`).
     pub(crate) fn files_dir() -> Option<PathBuf> {
         FILES.get().cloned()
@@ -97,12 +108,42 @@ pub(crate) mod android {
 }
 
 /// Called by [`crate::main!`] on Android before the application is made: records the
-/// application's folder and sets up its preferences.
+/// application's folder, sets up its preferences and its logs.
 #[cfg(android)]
 #[doc(hidden)]
 pub fn __android_started(app: &winit::platform::android::activity::AndroidApp) {
     android::record(app);
     __install_storage();
+    // Before the application is made, so that what it logs while it is made reaches logcat.
+    crate::logging::init::<()>();
+}
+
+/// Holds `file` locked against other processes until it is closed.
+#[cfg(not(any(web, android)))]
+fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    file.lock()
+}
+
+/// Holds `file` locked against other processes until it is closed. Android's standard library
+/// does not lock files (`lock()` answers "not supported"), yet a background job and the
+/// window can both write the preferences; its C library has `flock`, which does.
+#[cfg(android)]
+fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    const LOCK_EX: i32 = 2;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    loop {
+        // SAFETY: the descriptor is the open file's, alive for the whole call.
+        if unsafe { flock(file.as_raw_fd(), LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
 }
 
 /// Writes `bytes` to `path` whole or not at all: to a temporary file beside it, flushed to the
@@ -129,21 +170,82 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()>
 }
 
 /// The preferences in one JSON file.
+///
+/// Another process may keep the same file: a background job run by the system scheduler on
+/// the desktop, while the window is open (milestone 828). A change is made under a lock on
+/// `<file>.lock` that every process takes, after reading the file again if another process
+/// wrote it since this one last did; a read looks at the file's stamp at most every
+/// [`RECHECK`], and reads it again when it changed. On Android the job and the window share
+/// one process, and the store, so neither costs anything there beyond the look.
 #[cfg(not(web))]
 pub(crate) struct FileStorage {
     path: PathBuf,
+    seen: std::sync::Mutex<Seen>,
+}
+
+/// What a [`FileStorage`] knows of its file.
+#[cfg(not(web))]
+#[derive(Default)]
+struct Seen {
+    /// The file as this process last read or wrote it.
+    stamp: Option<Stamp>,
+    /// When a read last looked at the file; `None` makes the next look happen.
+    looked: Option<std::time::Instant>,
+}
+
+/// How often a read looks at the file for another process's change.
+#[cfg(not(web))]
+pub(crate) const RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A file's version as seen from outside: every write renames a new file over the old one,
+/// so its time, its length and (on Unix) its inode change with it.
+#[cfg(not(web))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+    inode: u64,
+}
+
+#[cfg(not(web))]
+fn stamp_of(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Some(Stamp {
+        modified: meta.modified().ok(),
+        len: meta.len(),
+        inode,
+    })
 }
 
 #[cfg(not(web))]
 impl FileStorage {
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            seen: std::sync::Mutex::new(Seen::default()),
+        }
+    }
+
+    fn seen(&self) -> std::sync::MutexGuard<'_, Seen> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Remembers the file as it is now: this process just read or wrote it.
+    fn note_stamp(&self) {
+        let stamp = stamp_of(&self.path);
+        self.seen().stamp = stamp;
     }
 }
 
 #[cfg(not(web))]
 impl PrefsStorage for FileStorage {
     fn load(&self) -> Result<PrefsMap, PrefsError> {
+        // Noted before reading: a write that lands in between is seen at the next look.
+        self.note_stamp();
         let bytes = match std::fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(PrefsMap::new()),
@@ -176,7 +278,44 @@ impl PrefsStorage for FileStorage {
                 "{} could not be written: {err}",
                 self.path.display()
             ))
-        })
+        })?;
+        self.note_stamp();
+        Ok(())
+    }
+
+    fn lock(&self) -> Result<Option<Box<dyn std::any::Any>>, PrefsError> {
+        let mut name = self.path.file_name().unwrap_or_default().to_owned();
+        name.push(".lock");
+        let path = self.path.with_file_name(name);
+        let refused = |err: std::io::Error| {
+            PrefsError::Storage(format!("{} could not be locked: {err}", path.display()))
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(refused)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(refused)?;
+        lock_exclusive(&file).map_err(refused)?;
+        // The change about to be made looks at the file now, not at the last read's look.
+        self.seen().looked = None;
+        Ok(Some(Box::new(file)))
+    }
+
+    fn changed_elsewhere(&self) -> bool {
+        let mut seen = self.seen();
+        let now = std::time::Instant::now();
+        if seen
+            .looked
+            .is_some_and(|at| now.duration_since(at) < RECHECK)
+        {
+            return false;
+        }
+        seen.looked = Some(now);
+        stamp_of(&self.path) != seen.stamp
     }
 }
 
@@ -279,6 +418,61 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, vec![std::ffi::OsString::from("prefs.json")]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two processes over one file (milestone 828): each sees the other's write, at once for
+    /// a change (under the lock) and within a read's recheck; its own writes are not news.
+    #[test]
+    fn a_write_from_another_process_is_seen() {
+        let dir = scratch("shared");
+        let path = dir.join("prefs.json");
+        let window = FileStorage::new(path.clone());
+        let job = FileStorage::new(path.clone());
+        let mut map = PrefsMap::new();
+        map.insert("theme".into(), json::json!("dark"));
+        window.save(&map, PrefsChange::Clear).unwrap();
+        assert!(!window.changed_elsewhere(), "its own write");
+        job.load().unwrap();
+        map.insert("runs".into(), json::json!(1));
+        // Another length: seen whatever the clock's resolution.
+        job.save(&map, PrefsChange::Clear).unwrap();
+        let held = window.lock().unwrap();
+        assert!(held.is_some(), "a file is locked");
+        assert!(
+            window.changed_elsewhere(),
+            "seen under the lock, without waiting"
+        );
+        drop(held);
+        assert_eq!(window.load().unwrap(), map);
+        assert!(!window.changed_elsewhere());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The lock keeps a second holder waiting until the first lets go.
+    #[test]
+    fn the_lock_is_exclusive() {
+        let dir = scratch("exclusive");
+        let path = dir.join("prefs.json");
+        let one = FileStorage::new(path.clone());
+        let held = one.lock().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let two = FileStorage::new(path);
+            let _held = two.lock().unwrap();
+            sender.send(()).unwrap();
+        });
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "taken while held"
+        );
+        drop(held);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("taken once let go");
+        waiter.join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

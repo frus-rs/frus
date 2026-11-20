@@ -63,6 +63,23 @@ pub trait PrefsStorage: Send + Sync {
     fn load(&self) -> Result<PrefsMap, PrefsError>;
     /// Keeps `change`; `all` is every preference once it is made.
     fn save(&self, all: &PrefsMap, change: PrefsChange<'_>) -> Result<(), PrefsError>;
+
+    /// Holds every other process off the store until the guard is dropped: taken around each
+    /// change, which reads the store again first when [`changed_elsewhere`] says so, so that
+    /// a change another process made (a background job, milestone 828) is never written over.
+    /// `None` for a store only this process uses.
+    ///
+    /// [`changed_elsewhere`]: Self::changed_elsewhere
+    fn lock(&self) -> Result<Option<Box<dyn std::any::Any>>, PrefsError> {
+        Ok(None)
+    }
+
+    /// Whether the store was changed by another process since this one last loaded or saved
+    /// it: asked before every read and every change, so it must be cheap (a file's storage
+    /// looks at the file at most every quarter of a second for a read).
+    fn changed_elsewhere(&self) -> bool {
+        false
+    }
 }
 
 /// Why a preference could not be read or kept.
@@ -302,10 +319,24 @@ impl Prefs {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// Reads the map, loading it the first time; `None` without a storage.
+    /// Reads the map, loading it the first time; `None` without a storage. A store another
+    /// process changed is read again.
     fn with_map<R>(&self, read: impl FnOnce(&PrefsMap) -> R) -> Option<R> {
         let mut inner = self.lock();
+        self.reload_if_changed_elsewhere(&mut inner);
         Self::loaded(&mut inner).ok().map(|map| read(map))
+    }
+
+    /// Forgets what was read when another process changed the store since.
+    fn reload_if_changed_elsewhere(&self, inner: &mut Inner) {
+        let changed = inner
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.changed_elsewhere());
+        if changed && inner.cache.is_some() {
+            inner.cache = None;
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
     }
 
     fn loaded(inner: &mut Inner) -> Result<&mut PrefsMap, PrefsError> {
@@ -333,6 +364,13 @@ impl Prefs {
     ) -> Result<(), PrefsError> {
         {
             let mut inner = self.lock();
+            // No other process changes the store from here until it is kept: what it changed
+            // before is read first.
+            let _held = match inner.storage.as_ref() {
+                Some(storage) => storage.lock()?,
+                None => None,
+            };
+            self.reload_if_changed_elsewhere(&mut inner);
             let current = Self::loaded(&mut inner)?;
             let mut next = current.clone();
             let Some(change) = edit(&mut next) else {
@@ -442,6 +480,71 @@ mod tests {
             *self.saved.lock().unwrap() = all.clone();
             Ok(())
         }
+    }
+
+    /// One file two processes keep: each `Shared` is one process's view of it.
+    struct Shared {
+        file: Arc<Mutex<PrefsMap>>,
+        /// The version of the file this process last read or wrote.
+        seen: Mutex<u64>,
+        version: Arc<AtomicU64>,
+    }
+
+    impl Shared {
+        fn pair() -> (Self, Self) {
+            let file = Arc::new(Mutex::new(PrefsMap::new()));
+            let version = Arc::new(AtomicU64::new(0));
+            let one = || Shared {
+                file: file.clone(),
+                seen: Mutex::new(0),
+                version: version.clone(),
+            };
+            (one(), one())
+        }
+    }
+
+    impl PrefsStorage for Shared {
+        fn load(&self) -> Result<PrefsMap, PrefsError> {
+            *self.seen.lock().unwrap() = self.version.load(Ordering::SeqCst);
+            Ok(self.file.lock().unwrap().clone())
+        }
+        fn save(&self, all: &PrefsMap, _: PrefsChange<'_>) -> Result<(), PrefsError> {
+            *self.file.lock().unwrap() = all.clone();
+            *self.seen.lock().unwrap() = self.version.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(())
+        }
+        fn changed_elsewhere(&self) -> bool {
+            *self.seen.lock().unwrap() != self.version.load(Ordering::SeqCst)
+        }
+    }
+
+    /// A background job in another process writes one key while the window's process holds
+    /// the store in memory: the window reads the job's value, and its own next change keeps
+    /// it rather than writing its stale copy over it (milestone 828).
+    #[test]
+    fn a_change_another_process_made_is_read_and_kept() {
+        let (window, job) = Shared::pair();
+        let file = window.file.clone();
+        let window = Prefs::with_storage(Box::new(window));
+        let job = Prefs::with_storage(Box::new(job));
+        window.set("theme", "dark").unwrap();
+        assert_eq!(window.get::<String>("theme").as_deref(), Some("dark"));
+
+        job.set("last_sync", 42).unwrap();
+        let before = window.generation();
+        assert_eq!(window.get::<u32>("last_sync"), Some(42), "read again");
+        assert!(window.generation() > before, "a cached value is stale now");
+
+        job.set("last_sync", 43).unwrap();
+        window.set("volume", 3).unwrap();
+        let (fresh, _) = Shared::pair();
+        let fresh = Prefs::with_storage(Box::new(Shared {
+            file: file.clone(),
+            ..fresh
+        }));
+        assert_eq!(fresh.get::<u32>("last_sync"), Some(43), "not written over");
+        assert_eq!(fresh.get::<u32>("volume"), Some(3));
+        assert_eq!(fresh.get::<String>("theme").as_deref(), Some("dark"));
     }
 
     #[test]

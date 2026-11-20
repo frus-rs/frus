@@ -182,6 +182,14 @@ impl Filter {
 /// The web has its own: `console_error_panic_hook`, set up beside the logger.
 #[cfg(android)]
 fn log_panics() {
+    // Once per process: the activity and a background job both set logging up (milestone
+    // 828), and a second hook would log each panic twice.
+    static SET: std::sync::Once = std::sync::Once::new();
+    SET.call_once(log_panics_now);
+}
+
+#[cfg(android)]
+fn log_panics_now() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let place = info

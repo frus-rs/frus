@@ -1658,6 +1658,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "frus-background-example"
+version = "0.5.0"
+dependencies = [
+ "frus",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "frus-bench"
 version = "0.5.0"
 dependencies = [
