@@ -166,7 +166,9 @@ frus already follows; a second activity for a second window is left for later.
   state, and a check that `parked` is empty in the few places that look at other windows. No
   frame does more work. Nothing is read on a turn the loop does not take, so the idle cost is
   unchanged.
-- **Binary size**: the `ci/size-budget.toml` budgets are unchanged and the check passes.
+- **Binary size**: `ci/size-budget.toml` is unchanged. On Android (what the budget measures)
+  the new code is the window list's warning and the per-window state's `Box`; the window
+  opening code is desktop-only. The CI size job measures it.
 
 ## How it was tested
 
@@ -174,7 +176,13 @@ frus already follows; a second activity for a second window is left for later.
   listed opens, one no longer listed closes, a changed title is set, a window without a title
   takes the application's, a window listed twice opens once.
 - `app/windows.rs`: the loop waits for whichever window needs it first.
-- `frus-gpu`: compiles and its tests pass; the surface path is exercised by the real run below.
+- `frus-gpu`: its tests pass; the surface path is exercised by the real run below. The
+  goldens were not run: they render through `render_offscreen` and `Painters::render`, which
+  this change does not touch (the only compositor change is `swap_targets`, used by
+  `render_to` alone).
+- Clippy with `-D warnings` for the workspace, for `wasm32-unknown-unknown` and for
+  `aarch64-linux-android`; rustdoc with `-D warnings`; the eight `frus-examples` projects and
+  the gallery's wasm build.
 - The whole frus-shell suite, which drives the single-window shell through `testing::Driver`,
   passes unchanged: the per-window refactor kept every behaviour.
 - **On Windows, for real** (Intel Iris Xe, DirectX 12): the demo, with its data folder
