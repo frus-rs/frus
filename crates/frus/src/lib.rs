@@ -135,6 +135,12 @@ pub use frus_shell::{
     Subscription, Taskbar, TaskbarProgress, Tray, DECORATIVE_FRAME_RATE,
 };
 
+// Headless entry points and the jobs that run them with no window (milestone 828).
+pub use frus_shell::{
+    cancel_job, is_job_scheduled, run_headless, schedule_job, BackgroundJob, HeadlessContext,
+    HeadlessEntry, JobError, MIN_JOB_PERIOD,
+};
+
 // Named by the guide's web and phone pages (milestone 819): how the address bar writes a
 // location, and turning a link into a location.
 pub use frus_shell::{link_among, location_of_link, LocationStrategy};

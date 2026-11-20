@@ -173,6 +173,15 @@ pub fn intervals() -> Vec<Interval> {
     INTERVALS.with(|intervals| intervals.borrow().clone())
 }
 
+/// Puts back the timers of every window's latest build, after one window was built: a build
+/// keeps only its own, and the shell, which keeps each window's, says what all of them ask for
+/// (milestone 827). Not for applications.
+#[doc(hidden)]
+#[inline(never)]
+pub fn __set_intervals(all: Vec<Interval>) {
+    INTERVALS.with(|intervals| *intervals.borrow_mut() = all);
+}
+
 /// Asks the shell to rebuild the **whole** tree on its next frame. Anything that changed what
 /// components may build without belonging to one of them — a controller, a setting, a value
 /// shared between components — calls this; an application rarely does.

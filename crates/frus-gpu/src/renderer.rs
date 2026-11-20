@@ -52,6 +52,31 @@ pub struct Renderer {
     /// The compiled pipelines kept between launches, its file and what was read from it:
     /// written again when an application's shader adds a pipeline (milestone 792).
     pipeline_cache: Option<(wgpu::PipelineCache, std::path::PathBuf, Option<Vec<u8>>)>,
+    /// The instance and the adapter the device came from: another window's surface is made
+    /// from them, to be drawn by the same device (milestone 827).
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+}
+
+/// **Another window's surface, drawn by a [`Renderer`]** that already draws one (milestone
+/// 827): the same device, the same pipelines, the same glyph atlas and the same image
+/// textures, so that a second window costs its surface and the targets of its own size, not a
+/// second GPU context.
+///
+/// Made by [`Renderer::add_surface`], drawn by [`Renderer::render_to`]. It belongs to the
+/// renderer that made it: after a lost device, a new renderer makes new ones.
+pub struct WindowSurface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    /// What the painters keep for this surface between its frames.
+    targets: crate::compositor::SurfaceTargets,
+}
+
+impl WindowSurface {
+    /// The surface's size, in physical pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
 }
 
 impl Renderer {
@@ -363,7 +388,87 @@ impl Renderer {
             timings: RenderTimings::default(),
             see_through,
             pipeline_cache,
+            instance,
+            adapter,
         })
+    }
+
+    /// **A surface on another window**, drawn by this renderer's device (milestone 827).
+    ///
+    /// It is drawn in this renderer's format, which every surface of the same adapter on the
+    /// same system offers; one that does not is refused. Its frames are opaque, whatever this
+    /// renderer's own are: a see-through main window does not make the others see-through.
+    pub fn add_surface(
+        &self,
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<WindowSurface> {
+        let surface = self.instance.create_surface(target)?;
+        let caps = surface.get_capabilities(&self.adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.add_srgb_suffix() == self.render_format.add_srgb_suffix())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "this window's surface offers none of the formats the renderer draws in \
+                     ({:?}): {:?}",
+                    self.render_format,
+                    caps.formats
+                )
+            })?;
+        let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            wgpu::CompositeAlphaMode::Opaque
+        } else {
+            caps.alpha_modes[0]
+        };
+        let view_formats = if self.render_format == format {
+            vec![]
+        } else {
+            vec![self.render_format]
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode,
+            view_formats,
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&self.device, &config);
+        Ok(WindowSurface {
+            surface,
+            config,
+            targets: Default::default(),
+        })
+    }
+
+    /// Reconfigures another window's surface after that window is resized.
+    pub fn resize_surface(&self, surface: &mut WindowSurface, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            surface.config.width = width;
+            surface.config.height = height;
+            surface.surface.configure(&self.device, &surface.config);
+        }
+    }
+
+    /// Reapplies another window's surface configuration, after it was lost or outdated.
+    pub fn reconfigure_surface(&self, surface: &mut WindowSurface) {
+        surface.surface.configure(&self.device, &surface.config);
+    }
+
+    /// Draws `scene` into another window's surface and presents it: as
+    /// [`render`](Self::render) does for this renderer's own (milestone 827).
+    pub fn render_to(&mut self, surface: &mut WindowSurface, scene: &Scene) -> RenderOutcome {
+        self.painters.swap_targets(&mut surface.targets);
+        let outcome = self.draw(Some(surface), scene);
+        self.painters.swap_targets(&mut surface.targets);
+        outcome
     }
 
     /// Whether the device is gone: see [`RenderOutcome::DeviceLost`].
@@ -417,13 +522,22 @@ impl Renderer {
 
     /// Draws the scene — rectangles, images, paths, text, layers — and presents it.
     pub fn render(&mut self, scene: &Scene) -> RenderOutcome {
+        self.draw(None, scene)
+    }
+
+    /// Draws a frame into `other`'s surface, or this renderer's own.
+    fn draw(&mut self, other: Option<&WindowSurface>, scene: &Scene) -> RenderOutcome {
+        let (surface, config, see_through) = match other {
+            Some(other) => (&other.surface, &other.config, false),
+            None => (&self.surface, &self.config, self.see_through),
+        };
         // Without waiting: a lost device is reported when the device is polled (milestone 686).
         let _ = self.device.poll(wgpu::PollType::Poll);
         if self.lost.load(std::sync::atomic::Ordering::SeqCst) {
             return RenderOutcome::DeviceLost;
         }
         let clock = Clock::start();
-        let frame = match self.surface.get_current_texture() {
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -452,11 +566,11 @@ impl Renderer {
             &self.queue,
             self.render_format,
             &view,
-            self.config.width,
-            self.config.height,
+            config.width,
+            config.height,
             scene,
             // A see-through frame starts transparent: what its owner paints is all there is.
-            Some(if self.see_through {
+            Some(if see_through {
                 wgpu::Color::TRANSPARENT
             } else {
                 CLEAR_COLOR

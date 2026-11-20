@@ -207,6 +207,75 @@ pub trait Application {
     /// when it happens — a whole screen laid out to the width of its widest line.
     fn view(&self, theme: &Theme) -> Box<dyn Widget<Self::Message>>;
 
+    /// **The windows the application wants open besides its main one** (milestone 827),
+    /// read from the state after every turn of the event loop. None by default.
+    ///
+    /// A window listed for the first time opens; one no longer listed closes; one whose title
+    /// changed is retitled. Each is built by [`window_view`](Self::window_view), with its own
+    /// focus, scroll positions, overlays and accessibility tree; all of them share the
+    /// application's state, its theme and one GPU device. A message from any window goes to
+    /// [`update`](Self::update), and every window is built again after it.
+    ///
+    /// The main window stays the application's: closing it ends the application, and the
+    /// other windows with it.
+    ///
+    /// Only the desktops (Windows, macOS, Linux) have more than one window. On Android and on
+    /// the Web this is not read: an application there has its one surface, and a window it
+    /// lists is never opened (a browser tab is a page of its own, with its own copy of the
+    /// application).
+    ///
+    /// ```
+    /// use frus_shell::{Application, Command, Window};
+    /// use frus_widgets::{button, Theme, Widget};
+    ///
+    /// #[derive(Default)]
+    /// struct Editor {
+    ///     inspector: bool,
+    /// }
+    ///
+    /// #[derive(Clone)]
+    /// enum Msg {
+    ///     OpenInspector,
+    ///     CloseInspector,
+    /// }
+    ///
+    /// impl Application for Editor {
+    ///     type Message = Msg;
+    ///
+    ///     fn update(&mut self, message: Msg) -> Command<Msg> {
+    ///         self.inspector = matches!(message, Msg::OpenInspector);
+    ///         Command::none()
+    ///     }
+    ///
+    ///     fn view(&self, _: &Theme) -> Box<dyn Widget<Msg>> {
+    ///         Box::new(button("Inspector", Msg::OpenInspector))
+    ///     }
+    ///
+    ///     fn windows(&self) -> Vec<Window<Msg>> {
+    ///         if self.inspector {
+    ///             vec![Window::new("inspector", Msg::CloseInspector).title("Inspector")]
+    ///         } else {
+    ///             Vec::new()
+    ///         }
+    ///     }
+    ///
+    ///     fn window_view(&self, _id: &str, _: &Theme) -> Box<dyn Widget<Msg>> {
+    ///         Box::new(button("Close", Msg::CloseInspector))
+    ///     }
+    /// }
+    /// ```
+    fn windows(&self) -> Vec<crate::Window<Self::Message>> {
+        Vec::new()
+    }
+
+    /// **Builds the interface of the window listed as `id`** by [`windows`](Self::windows)
+    /// (milestone 827), as [`view`](Self::view) builds the main window's: under that window's
+    /// own surface, so `MediaQuery::of()` reads its size. An empty box by default.
+    fn window_view(&self, id: &str, theme: &Theme) -> Box<dyn Widget<Self::Message>> {
+        let _ = (id, theme);
+        Box::new(frus_widgets::SizedBox::empty())
+    }
+
     /// **The application's theme** — its light one, where it has two (`app.dart:425`).
     ///
     /// This is the whole answer for an application with a single theme. One that follows
