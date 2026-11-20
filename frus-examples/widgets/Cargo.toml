@@ -19,6 +19,10 @@ crate-type = ["rlib", "cdylib"]
 # crate instead:  frus = "0.3"
 frus = { path = "../../crates/frus" }
 
+# The tests drive the demos' pages with no window (`frus::Tester`).
+[dev-dependencies]
+frus = { path = "../../crates/frus", features = ["testing"] }
+
 # Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

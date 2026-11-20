@@ -64,6 +64,10 @@ crate::transparent::forward_transparent!(expand KeepAlive {
         self.inner.expand(id, runtime, theme)
     }
 
+    fn scoped_values(&self, out: &mut Vec<crate::ScopedValue>) {
+        self.inner.scoped_values(out)
+    }
+
     /// Forwarded: keeping a row alive is not an identity — `KeepAlive(Keyed(..))` is found
     /// by the key.
     fn key(&self) -> Option<u64> {

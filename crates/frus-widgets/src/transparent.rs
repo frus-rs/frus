@@ -103,7 +103,8 @@ macro_rules! forward_transparent {
         });
     };
     // A wrapper that **does something as its child is built** — `KeepAlive` (milestone 748),
-    // which asks its list to keep its row — states `expand` itself, forwarding it after.
+    // which asks its list to keep its row, and `Scoped` (milestone 825), which puts a value
+    // in scope — states `expand` and `scoped_values` itself, forwarding them after.
     (expand $ty:ident { $($extra:item)* }) => {
         $crate::transparent::forward_transparent!(@body $ty {
             $($extra)*
@@ -1054,6 +1055,11 @@ macro_rules! forward_expand_hook {
             // Also with the identity untouched: what a component built is where the
             // component is.
             self.inner.expand(id, runtime, theme)
+        }
+
+        // The values a `Scoped` inside puts in scope are the wrapper's too (milestone 825).
+        fn scoped_values(&self, out: &mut Vec<$crate::ScopedValue>) {
+            self.inner.scoped_values(out)
         }
     };
 }

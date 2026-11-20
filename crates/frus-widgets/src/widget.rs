@@ -1565,6 +1565,12 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// The values this widget puts in scope for **its subtree** (milestone 825), added to
+    /// `out`, outermost first: only [`Scoped`](crate::Scoped) adds any. The walks that build
+    /// components hold them while they are down the subtree, and a component below finds the
+    /// nearest with [`BuildContext::watch`](crate::BuildContext::watch) and its kin.
+    fn scoped_values(&self, _out: &mut Vec<crate::ScopedValue>) {}
+
     /// Builds this widget's subtree **from the ambient theme**, for the widgets that
     /// defer that decision — see [`ThemeBuilder`](crate::ThemeBuilder). Does nothing by
     /// default, which is what all but a handful of widgets want.
@@ -2210,6 +2216,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn scroll_behavior_override(&self) -> Option<crate::ScrollBehavior> {
         (**self).scroll_behavior_override()
+    }
+    fn scoped_values(&self, out: &mut Vec<crate::ScopedValue>) {
+        (**self).scoped_values(out)
     }
     fn build_themed(&self, theme: &Theme) {
         (**self).build_themed(theme)

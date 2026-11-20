@@ -102,6 +102,13 @@ impl ChangeNotifier {
     /// A listener that adds or drops another during the notification does not disturb it:
     /// the ones told are those there when it began.
     pub fn notify_listeners(&self) {
+        self.tell_listeners();
+        request_rebuild();
+    }
+
+    /// Tells every listener, and asks for nothing: what a [`Model`](crate::Model) does, whose
+    /// readers are marked one by one (milestone 825).
+    pub(crate) fn tell_listeners(&self) {
         let told: Vec<Listener> = self
             .listeners
             .entries
@@ -112,7 +119,6 @@ impl ChangeNotifier {
         for listener in told {
             listener();
         }
-        request_rebuild();
     }
 
     /// How many listeners there are.
