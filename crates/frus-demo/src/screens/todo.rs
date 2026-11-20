@@ -578,6 +578,24 @@ impl HomeState {
                 .color(theme.muted),
         ]
         .gap(10.0);
+        // The tasks in a window of their own, beside this one (milestone 827): the desktops
+        // have more than one window.
+        if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
+            let demo = cx.widget().demo.clone();
+            let shown = demo.summary_shown();
+            detail_col = detail_col.child(
+                button(
+                    if shown {
+                        "Close the summary window"
+                    } else {
+                        "Open the summary in a window"
+                    },
+                    on(move || demo.show_summary(!shown)),
+                )
+                .variant(Variant::Outlined)
+                .size(15.0),
+            );
+        }
         // In single-pane mode, a way back to the list.
         if class != SizeClass::Expanded {
             detail_col = detail_col.child(

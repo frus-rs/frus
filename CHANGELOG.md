@@ -8,10 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 826 so far, each documenting the objective, the alternatives
+> record — one per step, 827 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **More windows than one** (J827, #218). An application lists the windows it wants open
+  besides its main one with `Application::windows` (or `FrusApp::windows`), as values of its
+  state — `Window::new(id, on_close).title(..).size(..)` — and builds each with
+  `Application::window_view` (`FrusApp::window_view`). The shell opens a window newly listed,
+  closes one no longer listed and retitles one whose title changed; a window's close button sends
+  its message and the state decides. Each window has its own focus, scroll positions, overlays,
+  gestures, semantics tree and accessibility adapter; all share the application's state and one
+  GPU device, pipelines, glyph atlas and image textures (`frus_gpu::WindowSurface`,
+  `Renderer::add_surface`, `Renderer::render_to`). Desktops only: on Android and the web a
+  listed window is not opened, and the log says so once. Single-window applications change
+  nothing. The demo opens its task summary in a second window from the Stats section and the
+  View menu.
 
 - **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
   when it is laid out, from the width it is given, instead of from the screen's width read when
