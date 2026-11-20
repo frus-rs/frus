@@ -343,23 +343,34 @@ impl<'a> Built<'a> {
         Ok(path)
     }
 
-    /// Whether the manifest names frus's activity, whose code the package must then carry: left
-    /// beside cargo-apk's package as `classes.dex` (`app_links::finish_package`), and written
-    /// there again in case it is not.
-    fn has_code(&self) -> Result<bool, String> {
+    /// The dex files the package must carry, by name: frus's activity's code when the manifest
+    /// names it, left beside cargo-apk's package as `classes.dex` (`app_links::finish_package`)
+    /// and written there again in case it is not, and the job service's (milestone 828).
+    fn code(&self) -> Result<Vec<&'static str>, String> {
         let written = self.dir.join("AndroidManifest.xml");
         let xml = std::fs::read_to_string(&written).map_err(|e| e.to_string())?;
+        let write = |name: &'static str, bytes: &[u8]| {
+            std::fs::write(self.dir.join(name), bytes).map_err(|e| format!("{name}: {e}"))
+        };
+        let mut names = Vec::new();
         // The Billing Library's code (milestone 807) is in the dex `finish_package` left: it
         // stays as it is.
         if crate::android_billing::in_manifest(&xml) && self.dir.join("classes.dex").is_file() {
-            return Ok(true);
+            names.push("classes.dex");
+        } else if crate::android_activity::uses_frus_activity(&xml) {
+            write("classes.dex", crate::android_activity::DEX)?;
+            names.push("classes.dex");
         }
-        if !crate::android_activity::uses_frus_activity(&xml) {
-            return Ok(false);
+        if crate::android_jobs::in_manifest(&xml) {
+            let name = if names.is_empty() {
+                "classes.dex"
+            } else {
+                "classes2.dex"
+            };
+            write(name, crate::android_jobs::DEX)?;
+            names.push(name);
         }
-        std::fs::write(self.dir.join("classes.dex"), crate::android_activity::DEX)
-            .map_err(|e| format!("classes.dex: {e}"))?;
-        Ok(true)
+        Ok(names)
     }
 
     /// `aapt2 link`: the manifest and the resources, as an APK or (`proto`) as a bundle's.
@@ -419,10 +430,9 @@ impl<'a> Built<'a> {
         for abi in abis {
             add.args(self.libraries(abi)?);
         }
-        // frus's activity, which the manifest names (milestone 801): its code, at the root.
-        if self.has_code()? {
-            add.arg("classes.dex");
-        }
+        // frus's activity, which the manifest names (milestone 801), and the job service
+        // (milestone 828): their code, at the root.
+        add.args(self.code()?);
         add.stdout(std::process::Stdio::null());
         cargo::run(&mut add)?;
         let apk = self.dir.join(format!("{name}.apk"));
@@ -555,10 +565,10 @@ pub(crate) fn app_bundle(project: &Project, mode: Mode, apk: &Path) -> Result<Pa
             entries.push((lib, bytes));
         }
     }
-    if built.has_code()? {
-        let dex = built.dir.join("classes.dex");
+    for name in built.code()? {
+        let dex = built.dir.join(name);
         entries.push((
-            "dex/classes.dex".to_string(),
+            format!("dex/{name}"),
             std::fs::read(&dex).map_err(|e| format!("{}: {e}", dex.display()))?,
         ));
     }
