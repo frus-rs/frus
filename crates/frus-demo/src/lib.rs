@@ -54,6 +54,7 @@ pub(crate) fn build() -> (FrusApp, GoRouter, Rc<Demo>) {
     let (save, restore, start) = (demo.clone(), demo.clone(), demo.clone());
     let (window, pages) = (demo.clone(), router.clone());
     let shared = demo.clone();
+    let (listed, summary) = (demo.clone(), demo.clone());
     let app = FrusApp::router(router.clone())
         .title("frus — Todo")
         // **State restoration** (milestone 753): the page, the draft and the scroll come back
@@ -87,6 +88,14 @@ pub(crate) fn build() -> (FrusApp, GoRouter, Rc<Demo>) {
                 }
             }
         })
+        // **A second window** (milestone 827): the task summary, opened from the Stats
+        // section or the View menu, and listed while the shared state says it is open. The
+        // desktops open it; a phone or a browser has the one surface.
+        .windows(move || match listed.summary_shown() {
+            true => vec![screens::summary_window(&listed)],
+            false => Vec::new(),
+        })
+        .window_view(move |cx, _id| screens::summary(cx, &summary))
         // Live-reload: the essentials of the state survive a recompilation — the tasks, the
         // theme (light/dark + seed).
         .persist(

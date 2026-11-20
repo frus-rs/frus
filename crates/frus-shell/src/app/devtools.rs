@@ -93,7 +93,7 @@ impl<A: Application> App<A> {
 
     /// The surface's logical size.
     fn devtools_size(&self) -> Value {
-        let (width, height) = self.last_size.unwrap_or((0.0, 0.0));
+        let (width, height) = self.win.last_size.unwrap_or((0.0, 0.0));
         json!({ "width": width, "height": height })
     }
 
@@ -108,7 +108,7 @@ impl<A: Application> App<A> {
                 "devicePixelRatio": self.total_scale(),
             })),
             "tree" => {
-                let ui = self.ui.as_ref().ok_or("nothing is laid out yet")?;
+                let ui = self.win.ui.as_ref().ok_or("nothing is laid out yet")?;
                 let extras = Extras::of(ui.scene().primitives(), ui.semantics());
                 Ok(json!({
                     "size": self.devtools_size(),
@@ -122,7 +122,7 @@ impl<A: Application> App<A> {
                     .and_then(Value::as_str)
                     .and_then(dt::parse_id)
                     .ok_or("`node` takes the `id` of a widget")?;
-                let ui = self.ui.as_ref().ok_or("nothing is laid out yet")?;
+                let ui = self.win.ui.as_ref().ok_or("nothing is laid out yet")?;
                 let extras = Extras::of(ui.scene().primitives(), ui.semantics());
                 let index = self
                     .devtools
@@ -141,7 +141,7 @@ impl<A: Application> App<A> {
                             _ => (true, true),
                         })
                 };
-                let surface = self.last_size.unwrap_or((0.0, 0.0));
+                let surface = self.win.last_size.unwrap_or((0.0, 0.0));
                 Ok(dt::details_json(
                     &self.devtools.nodes,
                     index,
@@ -153,7 +153,7 @@ impl<A: Application> App<A> {
             "find" => {
                 let finder = Finder::of(params)
                     .ok_or("`find` takes `text`, `label`, `type`, `key` or `id`")?;
-                let ui = self.ui.as_ref().ok_or("nothing is laid out yet")?;
+                let ui = self.win.ui.as_ref().ok_or("nothing is laid out yet")?;
                 let extras = Extras::of(ui.scene().primitives(), ui.semantics());
                 let found: Vec<Value> = finder
                     .find(&self.devtools.nodes, &extras)
@@ -164,7 +164,7 @@ impl<A: Application> App<A> {
             }
             "at" => {
                 let at = point_of(params).ok_or("`at` takes `x` and `y`")?;
-                let ui = self.ui.as_ref().ok_or("nothing is laid out yet")?;
+                let ui = self.win.ui.as_ref().ok_or("nothing is laid out yet")?;
                 let extras = Extras::of(ui.scene().primitives(), ui.semantics());
                 let node = frus_widgets::node_at(&self.devtools.nodes, at);
                 let index =
@@ -188,12 +188,12 @@ impl<A: Application> App<A> {
                 let (at, _) = self.devtools_target(params)?;
                 let dx = params.get("dx").and_then(Value::as_f64).unwrap_or(0.0) as f32;
                 let dy = params.get("dy").and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                let moved_from = self.cursor;
-                self.cursor = at;
+                let moved_from = self.win.cursor;
+                self.win.cursor = at;
                 // `dy > 0` brings what is further down into view, as a finger moving up does:
                 // the opposite of a wheel's number.
                 self.wheel_scroll(-dx, -dy);
-                self.cursor = moved_from;
+                self.win.cursor = moved_from;
                 Ok(json!({ "x": at.x, "y": at.y }))
             }
             "type" => {
@@ -210,8 +210,9 @@ impl<A: Application> App<A> {
                 // commits text: on Android the keys' own path is closed to typing while the
                 // input bridge is installed — editing goes through the input connection
                 // alone — and keys sent there were dropped (milestone 788).
-                let field = self.runtime.input.focused.filter(|&id| {
-                    self.tree
+                let field = self.win.runtime.input.focused.filter(|&id| {
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                         .is_some_and(wants_keyboard)
@@ -247,7 +248,7 @@ impl<A: Application> App<A> {
                 self.request_redraw();
                 Ok(json!({
                     "typed": text.chars().count(),
-                    "focused": self.runtime.input.focused.map(dt::id_text),
+                    "focused": self.win.runtime.input.focused.map(dt::id_text),
                 }))
             }
             "setText" => {
@@ -281,7 +282,7 @@ impl<A: Application> App<A> {
             "state" => Ok(self.devtools_state()),
             "set" => {
                 self.devtools_set(params)?;
-                self.build_dirty = true;
+                self.win.build_dirty = true;
                 self.request_redraw();
                 Ok(self.devtools_state())
             }
@@ -312,7 +313,7 @@ impl<A: Application> App<A> {
         }
         let finder = Finder::of(params)
             .ok_or("name a widget (`text`, `label`, `type`, `key`, `id`) or a point (`x`, `y`)")?;
-        let ui = self.ui.as_ref().ok_or("nothing is laid out yet")?;
+        let ui = self.win.ui.as_ref().ok_or("nothing is laid out yet")?;
         let extras = Extras::of(ui.scene().primitives(), ui.semantics());
         let found = finder.find(&self.devtools.nodes, &extras);
         let node = found
@@ -429,7 +430,7 @@ impl<A: Application> App<A> {
         if !self.devtools.select_mode {
             return false;
         }
-        self.cursor = event.position;
+        self.win.cursor = event.position;
         if event.kind == PointerKind::Down {
             if let Some(node) = frus_widgets::node_at(&self.devtools.nodes, event.position) {
                 self.devtools.selected = Some(node.id);
@@ -452,7 +453,7 @@ impl<A: Application> App<A> {
         nodes: &'n [frus_widgets::InspectorNode],
     ) -> Option<&'n frus_widgets::InspectorNode> {
         if self.devtools.select_mode {
-            if let Some(node) = frus_widgets::node_at(nodes, self.cursor) {
+            if let Some(node) = frus_widgets::node_at(nodes, self.win.cursor) {
                 return Some(node);
             }
         }

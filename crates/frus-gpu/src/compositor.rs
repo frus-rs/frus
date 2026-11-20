@@ -518,6 +518,16 @@ struct CachedLayer {
     image: Option<ImageFilter>,
 }
 
+/// What the painters keep for one surface from a frame to the next: the multisampled scratch
+/// targets, the staging texture and the cached layers. The main surface's live in the painters;
+/// each other window's in its own [`WindowSurface`](crate::WindowSurface) (milestone 827).
+#[derive(Default)]
+pub(crate) struct SurfaceTargets {
+    msaa: Vec<MsaaScratch>,
+    stage: Option<MsaaScratch>,
+    layers: Vec<CachedLayer>,
+}
+
 /// An intermediate MSAA texture reused as a render target: painting happens there,
 /// multisampled, then **resolves** to the single-sample target. One is enough — the
 /// layer pre-passes and the main pass are all full-surface and take turns using it,
@@ -1091,6 +1101,16 @@ impl Painters {
     /// memory, and a full-screen one stops costing 40 MB (milestone 796).
     pub(crate) fn set_transient_scratch(&mut self, transient: bool) {
         self.transient = transient;
+    }
+
+    /// Trades the targets kept for one surface — its multisampled scratch, its staging
+    /// texture and its cached layers — with `other`'s: a renderer drawing into several windows
+    /// keeps each window's apart, so that drawing one never lets the other's go (milestone
+    /// 827). Swapped in before that window's frame, and back after it.
+    pub(crate) fn swap_targets(&mut self, other: &mut SurfaceTargets) {
+        std::mem::swap(&mut self.msaa, &mut other.msaa);
+        std::mem::swap(&mut self.stage, &mut other.stage);
+        std::mem::swap(&mut self.layer_cache, &mut other.layers);
     }
 
     /// The GPU memory the painters hold in textures of their own, at the end of the last

@@ -45,6 +45,9 @@ type Root = Rc<dyn Fn(&BuildContext) -> Box<dyn Widget>>;
 /// What goes around the root: called on every rebuild, with the root to put inside.
 type Wrap = Rc<dyn Fn(&BuildContext, Box<dyn Widget>) -> Box<dyn Widget>>;
 
+/// What builds another window's interface, from its id (milestone 827).
+type WindowView = Rc<dyn Fn(&BuildContext, &str) -> Box<dyn Widget>>;
+
 /// How many popped pages a router keeps on the Web, for the browser's Forward button.
 #[cfg(web)]
 const WEB_KEPT_PAGES: usize = 4;
@@ -79,6 +82,8 @@ pub struct FrusApp {
     tray: Option<Box<dyn Fn() -> crate::Tray<Callback>>>,
     taskbar: Option<Box<dyn Fn() -> crate::Taskbar>>,
     shortcuts: Option<Box<dyn Fn() -> Vec<crate::GlobalShortcut<Callback>>>>,
+    windows: Option<Box<dyn Fn() -> Vec<crate::Window<Callback>>>>,
+    window_view: Option<WindowView>,
     save: Option<Save>,
     restore: Option<Restore>,
     strategy: LocationStrategy,
@@ -159,6 +164,8 @@ impl FrusApp {
             tray: None,
             taskbar: None,
             shortcuts: None,
+            windows: None,
+            window_view: None,
             save: None,
             restore: None,
             strategy: LocationStrategy::Hash,
@@ -347,6 +354,56 @@ impl FrusApp {
         self
     }
 
+    /// **The windows the application wants open besides its main one** (milestone 827):
+    /// `windows` is asked after every change, from the state it reads, and the shell opens a
+    /// window newly listed, closes one no longer listed and retitles one whose title changed.
+    /// Each is built by [`window_view`](Self::window_view). Desktops only; see
+    /// [`Application::windows`].
+    ///
+    /// ```
+    /// use std::{cell::Cell, rc::Rc};
+    ///
+    /// use frus_shell::{FrusApp, Window};
+    /// use frus_widgets::{button, text, BuildContext, Widget};
+    ///
+    /// let open = Rc::new(Cell::new(false));
+    /// let (opener, listed, closer) = (open.clone(), open.clone(), open.clone());
+    /// let app = FrusApp::from_fn(move |_: &BuildContext| -> Box<dyn Widget> {
+    ///     let opener = opener.clone();
+    ///     Box::new(button("Open the inspector", move || {
+    ///         opener.set(true);
+    ///         frus_widgets::request_rebuild();
+    ///     }))
+    /// })
+    /// .windows(move || {
+    ///     let closer = closer.clone();
+    ///     match listed.get() {
+    ///         true => vec![Window::new("inspector", move || closer.set(false)).title("Inspector")],
+    ///         false => Vec::new(),
+    ///     }
+    /// })
+    /// .window_view(|_: &BuildContext, id: &str| -> Box<dyn Widget> {
+    ///     Box::new(text(format!("The {id} window")))
+    /// });
+    /// # let _ = app;
+    /// ```
+    pub fn windows(mut self, windows: impl Fn() -> Vec<crate::Window<Callback>> + 'static) -> Self {
+        self.windows = Some(Box::new(windows));
+        self
+    }
+
+    /// **Builds the interface of the window listed as `id`** by [`windows`](Self::windows)
+    /// (milestone 827): a function of the build context, as [`from_fn`](Self::from_fn)'s, so
+    /// hooks may be called in it. Its components keep their state for as long as the window
+    /// stays open.
+    pub fn window_view(
+        mut self,
+        view: impl Fn(&BuildContext, &str) -> Box<dyn Widget> + 'static,
+    ) -> Self {
+        self.window_view = Some(Rc::new(view));
+        self
+    }
+
     /// What the application's **taskbar button** shows (milestone 708): `taskbar` is asked
     /// after every change, and the shell makes the button follow. See
     /// [`Taskbar`](crate::Taskbar).
@@ -507,6 +564,21 @@ impl Application for FrusApp {
             .as_ref()
             .map(|shortcuts| shortcuts())
             .unwrap_or_default()
+    }
+
+    fn windows(&self) -> Vec<crate::Window<Callback>> {
+        self.windows
+            .as_ref()
+            .map(|windows| windows())
+            .unwrap_or_default()
+    }
+
+    fn window_view(&self, id: &str, _theme: &Theme) -> Box<dyn Widget<Callback>> {
+        let Some(view) = self.window_view.clone() else {
+            return Box::new(SizedBox::empty());
+        };
+        let id = id.to_string();
+        Box::new(Component::stateless(move |cx: &BuildContext| view(cx, &id)))
     }
 
     fn tray(&self) -> Option<crate::Tray<Callback>> {

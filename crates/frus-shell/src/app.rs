@@ -69,6 +69,10 @@ use crate::gesture::{PointerEvent, PointerKind, PressRecognizer};
 #[cfg(debug_assertions)]
 mod devtools;
 
+/// More windows than one (milestone 827).
+mod windows;
+use windows::sooner;
+
 /// What a key asks of the clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ClipCommand {
@@ -986,8 +990,20 @@ fn rebuild_marked<Msg>(tree: &dyn Widget<Msg>, theme: &Theme, runtime: &frus_wid
     build_deferred(tree, theme, runtime);
 }
 
+#[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
 fn build_view<A: Application>(
     app: &A,
+    theme: &Theme,
+    runtime: &frus_widgets::Runtime,
+) -> Box<dyn Widget<A::Message>> {
+    build_window_view(app, None, theme, runtime)
+}
+
+/// [`build_view`] for the window the application calls `id` — `None`, the main one — built by
+/// [`Application::window_view`] (milestone 827).
+fn build_window_view<A: Application>(
+    app: &A,
+    id: Option<&str>,
     theme: &Theme,
     runtime: &frus_widgets::Runtime,
 ) -> Box<dyn Widget<A::Message>> {
@@ -998,7 +1014,10 @@ fn build_view<A: Application>(
     // Every state a component keeps is marked as reached while the tree is built, and
     // what a build did not reach is let go when the frame that laid it out is done.
     runtime.states.begin_build();
-    let tree = app.view(theme);
+    let tree = match id {
+        Some(id) => app.window_view(id, theme),
+        None => app.view(theme),
+    };
     build_deferred(tree.as_ref(), theme, runtime);
     tree
 }
@@ -1051,7 +1070,6 @@ pub struct App<A: Application> {
     app: A,
     /// The channel that feeds back the messages effects produce, from their threads.
     proxy: Mailbox<A::Message>,
-    window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     /// The renderer's GPU device was lost: a new renderer is made at the next frame's start
     /// (milestone 686).
@@ -1072,38 +1090,12 @@ pub struct App<A: Application> {
     /// path, which the `Path` way of writing needs. Read once, at launch.
     #[cfg(web)]
     address: (crate::LocationStrategy, String),
-    /// The window's accessibility bridge (AccessKit) — desktop only.
-    #[cfg(desktop)]
-    a11y: Option<crate::a11y::A11y>,
-    /// The window's accessibility bridge, projected into the canvas's DOM — web only.
-    #[cfg(web)]
-    a11y: Option<crate::a11y_web::A11y>,
     /// The element the focused text field is edited through, on the web (milestone 711).
     #[cfg(web)]
     web_editor: Option<crate::web_editing::Editor>,
     /// The scrolls the keyboard set off, taken back if the page pans for it (milestone 779).
     #[cfg(web)]
     keyboard_reveal: crate::web_page::KeyboardReveal,
-    /// The last interface built, used for hit testing, focus and scrolling.
-    ui: Option<Ui<A::Message>>,
-    /// The last widget tree built, used for keyboard and editing routing.
-    tree: Option<Box<dyn Widget<A::Message>>>,
-    /// The pointer's last known position, in **logical** pixels.
-    cursor: Point,
-    /// Where the pointer that **hovers** is: a mouse once it has moved, a finger only
-    /// while it touches. Kept as a place and asked of each frame — see [`crate::hover`].
-    hover: crate::hover::Hover,
-    /// The screen's DPI scale factor (physical = logical × scale × density).
-    scale: f32,
-    /// The last **logical** size handed to the app, to detect breakpoints.
-    last_size: Option<(f32, f32)>,
-    /// State retained between frames: hover and focus, scroll, caret and selection.
-    runtime: Runtime,
-    /// **The theme on display and the fade toward the one now asked for** — the
-    /// framework's, not the application's, since milestone 452. It resolves the
-    /// application's themes against the platform's brightness and the reader's contrast
-    /// setting once a frame, and crosses between two of them over time.
-    themes: crate::theming::ThemeFade,
     /// Live-reload watching (development, `FRUS_WATCH=1`): relaunch on recompilation.
     reload: Option<crate::reload::ReloadWatcher>,
     /// The channel `frus run` listens on, when it started this application — see [`crate::dev`].
@@ -1133,16 +1125,168 @@ pub struct App<A: Application> {
     /// [`apple_keyboard`]. A test's shell says no, whatever the machine running it, so that a
     /// test reads the same on every machine; a test of the Apple keyboard says yes.
     apple_keys: bool,
-    /// The remembered "goal" visual column for Up/Down/PgUp/PgDn: crossing shorter
-    /// lines keeps the original column, the way an editor does. Cleared as soon as any
-    /// other caret movement happens.
-    goal_x: Option<f32>,
     /// Clipboard access: `arboard` on the desktop, the platform's on Android, the
     /// browser's on the web, nothing yet on iOS.
     clipboard: clip::Clipboard,
     /// Has the startup effect (`init`) already run? This keeps it from being replayed
     /// when the surface is recreated, as it is when Android returns from background.
     started: bool,
+    /// The delayed messages of a shell a test drives, each due at a time of that same clock:
+    /// with no event loop to wake it, a `Command::after` would otherwise never arrive, and
+    /// a test that waits for a snack bar to go would wait for ever (milestone 716).
+    driver_timers: Vec<(f32, A::Message)>,
+    /// When the loop's current turn began, before it read the input waiting for it, and when
+    /// the turn before it began: the second is what a long press is decided against
+    /// (milestone 769). See [`decide_hold`](Self::decide_hold).
+    turn_began: Instant,
+    previous_turn_began: Instant,
+    /// The form last shown to the platform's autofill service, as it was shown
+    /// (milestone 512) — what a returned value is routed against, and what a value the
+    /// service has not heard is told apart from.
+    #[cfg(android)]
+    autofill_reported: Vec<crate::autofill::AutofillField>,
+    /// The field of that form the service was told has focus.
+    #[cfg(android)]
+    autofill_focus: Option<WidgetId>,
+    /// The [`frus_widgets::AutofillGroup`] that form is, while it is on screen.
+    #[cfg(android)]
+    autofill_group: Option<WidgetId>,
+    /// What [`App::click_clock`] counts from in an application.
+    clock_origin: Instant,
+    /// How many values the work components started had brought when this shell last looked
+    /// (milestone 585).
+    task_arrivals: u64,
+    /// How many images had landed when this shell last looked (milestone 795).
+    image_landings: u64,
+    /// The running subscriptions: id → cancellation handle, dropping which stops it.
+    running_subs: HashMap<u64, SubHandle>,
+    /// How smooth the frames are, when asked (milestone 609).
+    frame_stats: crate::frame_stats::FrameStats,
+    /// What the frame being drawn has cost so far, while frames are measured.
+    frame_costs: crate::frame_stats::FrameCosts,
+    /// The tray icon as the system has it (milestone 706).
+    #[cfg(all(desktop, feature = "tray"))]
+    tray: Option<crate::tray::native::Live>,
+    /// Whether closing the window leaves the application running in its tray.
+    #[cfg(all(desktop, feature = "tray"))]
+    tray_keeps_running: bool,
+    /// What the taskbar button shows of the application's (milestone 708).
+    #[cfg(all(desktop, feature = "taskbar"))]
+    taskbar: crate::Taskbar,
+    /// The global shortcuts the system holds for the application (milestone 709).
+    #[cfg(all(desktop, feature = "global-shortcuts"))]
+    shortcuts: crate::shortcuts::native::Registered,
+    /// Combinations already refused for their spelling, so each is told once.
+    #[cfg(all(desktop, feature = "global-shortcuts"))]
+    shortcuts_refused: std::collections::HashSet<String>,
+    /// The application's icon, kept for the life of the program, to paint on the line.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    window_icon: Option<&'static [u8]>,
+    /// What the **platform** last said about the person using it: the font-size slider,
+    /// the night setting, the accessibility switches.
+    ///
+    /// Cached rather than read per frame, because reading it is a walk across the JNI
+    /// boundary and the answer changes about once a year. It is refreshed when the
+    /// surface appears — which on Android is also when it *reappears* — on a configuration
+    /// change the manifest declares (milestone 755: the font size, the night setting, the
+    /// language), and on a theme change where the platform sends one.
+    platform: PlatformSettings,
+    /// The Android activity's handle, used to query the insets, the keyboard and so on.
+    /// The current **lifecycle** state, so the app is notified only on real
+    /// **transitions**.
+    lifecycle: Lifecycle,
+    #[cfg(android)]
+    android_app: Option<winit::platform::android::activity::AndroidApp>,
+    /// Is the software keyboard being asked for? It follows the text fields' focus.
+    #[cfg(android)]
+    soft_input_shown: bool,
+    /// The screen reader's view of the window (milestone 782): the virtual view ids, the
+    /// tree last published, and the announcement last read out.
+    #[cfg(android)]
+    a11y_ids: crate::a11y_android::VirtualIds,
+    #[cfg(android)]
+    a11y_tree: Option<crate::a11y_android::AndroidTree>,
+    #[cfg(android)]
+    a11y_announced: String,
+    /// The native views that exist and whose each touch is (milestone 794).
+    #[cfg(android)]
+    platform_views: crate::platform_view::PlatformViews,
+    #[cfg(android)]
+    touch_router: crate::platform_view::TouchRouter,
+    /// The native view holding the input focus, as it last said.
+    #[cfg(android)]
+    native_focus: Option<i32>,
+    /// The system bars as the platform was last told them, so that it is told only of a
+    /// change (#46).
+    #[cfg(android)]
+    system_bars: Option<frus_widgets::SystemBars>,
+    /// What was last handed to the platform to keep for restoration (milestone 753).
+    restoration_published: Option<Vec<u8>>,
+    /// The page's background as it was last painted, on the Web (milestone 749).
+    #[cfg(web)]
+    page_background: Option<frus_widgets::Color>,
+    /// The page's `theme-color` as it was last set, on the Web (milestone 751).
+    #[cfg(web)]
+    page_toolbar: Option<frus_widgets::Color>,
+    /// The window whose events and frame are being handled: the main one, or another the
+    /// application listed (milestone 827). Every input and frame method reads this one; the
+    /// others wait in `parked`, and an event for one of them swaps it in.
+    win: Box<WindowState<A>>,
+    /// The windows not in front of the shell's code right now, with the winit id of each.
+    parked: Vec<(WindowId, Box<WindowState<A>>)>,
+    /// When the application's own animations were last advanced: with more than one window
+    /// drawing, they are advanced by the time that passed, not once per window (milestone 827).
+    app_clock: Option<Instant>,
+}
+
+/// **What one window keeps** (milestone 827): its surface, its interface and everything the
+/// input and the frames work on — focus, scroll positions, overlays, gestures, the semantics
+/// tree and its accessibility adapter. The application's state, its theme settings, the
+/// clipboard, the tray and the rest are the shell's, shared by every window.
+struct WindowState<A: Application> {
+    /// What the application calls this window: `None` for the main one.
+    id: Option<String>,
+    /// The title it was last given.
+    #[cfg_attr(not(desktop), allow(dead_code))]
+    title: String,
+    /// The message its close button sends; the main window's ends the application instead.
+    on_close: Option<A::Message>,
+    /// This window's surface, drawn by the main window's renderer: `None` for the main one,
+    /// which the renderer draws itself.
+    surface: Option<frus_gpu::WindowSurface>,
+    /// The timers this window's components asked for at its latest build.
+    intervals: Vec<frus_widgets::Interval>,
+    window: Option<Arc<Window>>,
+    /// The window's accessibility bridge (AccessKit) — desktop only.
+    #[cfg(desktop)]
+    a11y: Option<crate::a11y::A11y>,
+    /// The window's accessibility bridge, projected into the canvas's DOM — web only.
+    #[cfg(web)]
+    a11y: Option<crate::a11y_web::A11y>,
+    /// The last interface built, used for hit testing, focus and scrolling.
+    ui: Option<Ui<A::Message>>,
+    /// The last widget tree built, used for keyboard and editing routing.
+    tree: Option<Box<dyn Widget<A::Message>>>,
+    /// The pointer's last known position, in **logical** pixels.
+    cursor: Point,
+    /// Where the pointer that **hovers** is: a mouse once it has moved, a finger only
+    /// while it touches. Kept as a place and asked of each frame — see [`crate::hover`].
+    hover: crate::hover::Hover,
+    /// The screen's DPI scale factor (physical = logical × scale × density).
+    scale: f32,
+    /// The last **logical** size handed to the app, to detect breakpoints.
+    last_size: Option<(f32, f32)>,
+    /// State retained between frames: hover and focus, scroll, caret and selection.
+    runtime: Runtime,
+    /// **The theme on display and the fade toward the one now asked for** — the
+    /// framework's, not the application's, since milestone 452. It resolves the
+    /// application's themes against the platform's brightness and the reader's contrast
+    /// setting once a frame, and crosses between two of them over time.
+    themes: crate::theming::ThemeFade,
+    /// The remembered "goal" visual column for Up/Down/PgUp/PgDn: crossing shorter
+    /// lines keeps the original column, the way an editor does. Cleared as soon as any
+    /// other caret movement happens.
+    goal_x: Option<f32>,
     /// The last frame's instant, for the animations' dt.
     last_frame: Option<Instant>,
     /// The **build** phase is dirty: the app's state, or the size, changed and the
@@ -1182,10 +1326,6 @@ pub struct App<A: Application> {
     /// any speed, in either direction, and a test that let go of a scroll saw it thrown back
     /// to the top (milestone 584, seen in CI).
     gesture_clock: Option<(f32, f32)>,
-    /// The delayed messages of a shell a test drives, each due at a time of that same clock:
-    /// with no event loop to wake it, a `Command::after` would otherwise never arrive, and
-    /// a test that waits for a snack bar to go would wait for ever (milestone 716).
-    driver_timers: Vec<(f32, A::Message)>,
     gesture_start: Instant,
     /// The pointer's **smoothed** abscissa during a reorder: it springs toward the
     /// real position, giving the columns' sliding a gentle inertia — the background
@@ -1207,11 +1347,6 @@ pub struct App<A: Application> {
     live_regions: crate::live_region::LiveRegions,
     /// The tap-or-long-press recogniser (gesture tier 1).
     press: PressRecognizer,
-    /// When the loop's current turn began, before it read the input waiting for it, and when
-    /// the turn before it began: the second is what a long press is decided against
-    /// (milestone 769). See [`decide_hold`](Self::decide_hold).
-    turn_began: Instant,
-    previous_turn_began: Instant,
     /// The pressed target's long-press message, captured on the press.
     long_press_msg: Option<A::Message>,
     /// A **text field** pressed with a finger: a hold there selects the word under it
@@ -1232,17 +1367,6 @@ pub struct App<A: Application> {
     pending_field_press: Option<FieldPress>,
     /// The focused field's caret blink (milestone 513).
     caret: crate::caret::CaretBlink,
-    /// The form last shown to the platform's autofill service, as it was shown
-    /// (milestone 512) — what a returned value is routed against, and what a value the
-    /// service has not heard is told apart from.
-    #[cfg(android)]
-    autofill_reported: Vec<crate::autofill::AutofillField>,
-    /// The field of that form the service was told has focus.
-    #[cfg(android)]
-    autofill_focus: Option<WidgetId>,
-    /// The [`frus_widgets::AutofillGroup`] that form is, while it is on screen.
-    #[cfg(android)]
-    autofill_group: Option<WidgetId>,
     /// When the last **recorded** edit happened, for the pause that breaks a run of
     /// typing into two steps of undo. One field and not one per text field, because only
     /// the focused one is being typed into, and leaving a field ends its run anyway.
@@ -1265,8 +1389,6 @@ pub struct App<A: Application> {
     /// When and where the last press began a selection in a selection area: a second one soon
     /// after and close by is a double click.
     last_region_click: Option<(f32, Point)>,
-    /// What [`App::click_clock`] counts from in an application.
-    clock_origin: Instant,
     /// The texts a selection area's selection has been worked out over, in reading order,
     /// with their words — kept while texts leave the frame (milestone 739): a selection dragged
     /// down a scrolling area, which scrolls under it, would otherwise lose its beginning as
@@ -1277,11 +1399,6 @@ pub struct App<A: Application> {
     region_autoscrolled: bool,
     /// A first tap waiting to see whether it is half of a double tap (milestone 581).
     pending_tap: Option<PendingTap<A::Message>>,
-    /// How many values the work components started had brought when this shell last looked
-    /// (milestone 585).
-    task_arrivals: u64,
-    /// How many images had landed when this shell last looked (milestone 795).
-    image_landings: u64,
     /// The regions the pointer is in, the innermost first, each with its box when it was
     /// last seen (milestone 583).
     entered: Vec<(WidgetId, Rect)>,
@@ -1292,8 +1409,6 @@ pub struct App<A: Application> {
     captured: Vec<(WidgetId, Rect)>,
     /// A counter for the keys of leaving events, which fade out.
     leaving_counter: u64,
-    /// The running subscriptions: id → cancellation handle, dropping which stops it.
-    running_subs: HashMap<u64, SubHandle>,
     /// Pending focus requests — the keys `Command::focus` produced — resolved against
     /// the **freshly built** tree on the next frame.
     pending_focus: Vec<u64>,
@@ -1324,10 +1439,6 @@ pub struct App<A: Application> {
     /// The widgets that took the focus on appearing, as of the last frame: one that is new
     /// this frame takes it (milestone 605).
     autofocused: std::collections::HashSet<WidgetId>,
-    /// How smooth the frames are, when asked (milestone 609).
-    frame_stats: crate::frame_stats::FrameStats,
-    /// What the frame being drawn has cost so far, while frames are measured.
-    frame_costs: crate::frame_stats::FrameCosts,
     /// The window is occluded, so rendering is suspended.
     occluded: bool,
     /// Cumulative elapsed time, in seconds, for the continuous animations.
@@ -1353,24 +1464,6 @@ pub struct App<A: Application> {
     #[cfg_attr(not(windows), allow(dead_code))]
     title_bar_on: bool,
     title_bar: Option<frus_widgets::TitleBar>,
-    /// The tray icon as the system has it (milestone 706).
-    #[cfg(all(desktop, feature = "tray"))]
-    tray: Option<crate::tray::native::Live>,
-    /// Whether closing the window leaves the application running in its tray.
-    #[cfg(all(desktop, feature = "tray"))]
-    tray_keeps_running: bool,
-    /// What the taskbar button shows of the application's (milestone 708).
-    #[cfg(all(desktop, feature = "taskbar"))]
-    taskbar: crate::Taskbar,
-    /// The global shortcuts the system holds for the application (milestone 709).
-    #[cfg(all(desktop, feature = "global-shortcuts"))]
-    shortcuts: crate::shortcuts::native::Registered,
-    /// Combinations already refused for their spelling, so each is told once.
-    #[cfg(all(desktop, feature = "global-shortcuts"))]
-    shortcuts_refused: std::collections::HashSet<String>,
-    /// The application's icon, kept for the life of the program, to paint on the line.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    window_icon: Option<&'static [u8]>,
     /// The soft keyboard has just grown, so the focused widget is brought back into view
     /// once the frame that lays out the shortened window is built: the keyboard covers
     /// the bottom of the screen, and a field under it is a field the reader cannot see
@@ -1383,44 +1476,10 @@ pub struct App<A: Application> {
     /// blink — the window kept the keyboard's inset, the bottom of the screen empty, until
     /// the next touch.
     keyboard_settle: Option<Instant>,
-    /// What the **platform** last said about the person using it: the font-size slider,
-    /// the night setting, the accessibility switches.
-    ///
-    /// Cached rather than read per frame, because reading it is a walk across the JNI
-    /// boundary and the answer changes about once a year. It is refreshed when the
-    /// surface appears — which on Android is also when it *reappears* — on a configuration
-    /// change the manifest declares (milestone 755: the font size, the night setting, the
-    /// language), and on a theme change where the platform sends one.
-    platform: PlatformSettings,
     /// The **keyboard-free** inset baseline, along with the physical size it was
     /// taken at — a rotation resets it: whatever bottom inset exceeds it is credited
     /// to the software keyboard.
     inset_baseline: Option<(Insets, (u32, u32))>,
-    /// The Android activity's handle, used to query the insets, the keyboard and so on.
-    /// The current **lifecycle** state, so the app is notified only on real
-    /// **transitions**.
-    lifecycle: Lifecycle,
-    #[cfg(android)]
-    android_app: Option<winit::platform::android::activity::AndroidApp>,
-    /// Is the software keyboard being asked for? It follows the text fields' focus.
-    #[cfg(android)]
-    soft_input_shown: bool,
-    /// The screen reader's view of the window (milestone 782): the virtual view ids, the
-    /// tree last published, and the announcement last read out.
-    #[cfg(android)]
-    a11y_ids: crate::a11y_android::VirtualIds,
-    #[cfg(android)]
-    a11y_tree: Option<crate::a11y_android::AndroidTree>,
-    #[cfg(android)]
-    a11y_announced: String,
-    /// The native views that exist and whose each touch is (milestone 794).
-    #[cfg(android)]
-    platform_views: crate::platform_view::PlatformViews,
-    #[cfg(android)]
-    touch_router: crate::platform_view::TouchRouter,
-    /// The native view holding the input focus, as it last said.
-    #[cfg(android)]
-    native_focus: Option<i32>,
     /// The native views hosted over frus's surface, Windows' child windows and the page's
     /// elements (milestone 802): which exist, the host that makes them (made with the first),
     /// the ones a dialog covers, and the one holding the input focus.
@@ -1432,21 +1491,103 @@ pub struct App<A: Application> {
     view_covers: crate::view_host::Covers,
     #[cfg(any(windows, web))]
     hosted_focus: Option<i32>,
-    /// The system bars as the platform was last told them, so that it is told only of a
-    /// change (#46).
-    #[cfg(android)]
-    system_bars: Option<frus_widgets::SystemBars>,
-    /// What was last handed to the platform to keep for restoration (milestone 753).
-    restoration_published: Option<Vec<u8>>,
-    /// The page's background as it was last painted, on the Web (milestone 749).
-    #[cfg(web)]
-    page_background: Option<frus_widgets::Color>,
-    /// The page's `theme-color` as it was last set, on the Web (milestone 751).
-    #[cfg(web)]
-    page_toolbar: Option<frus_widgets::Color>,
 }
 
 /// The host of the native views laid over frus's surface (milestone 802).
+impl<A: Application> WindowState<A> {
+    /// A window's state before its first frame: the main one's when `id` is `None`.
+    fn new(id: Option<String>) -> Self {
+        Self {
+            id,
+            title: String::new(),
+            on_close: None,
+            surface: None,
+            intervals: Vec::new(),
+            window: None,
+            #[cfg(desktop)]
+            a11y: None,
+            #[cfg(web)]
+            a11y: None,
+            ui: None,
+            tree: None,
+            cursor: Point::new(0.0, 0.0),
+            hover: crate::hover::Hover::default(),
+            scale: 1.0,
+            last_size: None,
+            runtime: Runtime::default(),
+            themes: crate::theming::ThemeFade::default(),
+            goal_x: None,
+            last_frame: None,
+            build_dirty: true,
+            components_dirty: false,
+            app_was_animating: false,
+            drag: None,
+            file_drag: None,
+            pointer_touch: false,
+            gesture_velocity: VelocityTracker::default(),
+            gesture_clock: None,
+            gesture_start: Instant::now(),
+            reorder_x: 0.0,
+            reorder_y: 0.0,
+            #[cfg(any(desktop, web, android))]
+            announce: String::new(),
+            #[cfg(any(desktop, web, android))]
+            live_regions: Default::default(),
+            press: PressRecognizer::new(),
+            long_press_msg: None,
+            pending_word: None,
+            pending_region_hold: false,
+            pending_tap_focus: None,
+            pending_field_press: None,
+            caret: crate::caret::CaretBlink::new(),
+            last_edit_at: None,
+            pending_lift: None,
+            pending_reorder: None,
+            last_click: None,
+            last_region_click: None,
+            region_known: None,
+            region_autoscrolled: false,
+            pending_tap: None,
+            entered: Vec::new(),
+            pointer_held: false,
+            captured: Vec::new(),
+            leaving_counter: 0,
+            pending_focus: Vec::new(),
+            pending_scroll: Vec::new(),
+            retry_scroll: Vec::new(),
+            pending_sheet: Vec::new(),
+            retry_sheet: Vec::new(),
+            focus_history: Vec::new(),
+            prev_focus: None,
+            focus_reported: None,
+            autofocused: std::collections::HashSet::new(),
+            occluded: false,
+            elapsed: 0.0,
+            last_insets: WindowInsets::ZERO,
+            simulated: None,
+            #[cfg(desktop)]
+            window_memory: None,
+            #[cfg(desktop)]
+            window_moved: false,
+            decoration_due: None,
+            decoration_period: None,
+            title_bar_on: false,
+            title_bar: None,
+            reveal_after_keyboard: false,
+            keyboard_settle: None,
+            inset_baseline: None,
+            #[cfg(any(windows, web))]
+            hosted_views: Default::default(),
+            #[cfg(any(windows, web))]
+            view_host: None,
+            #[cfg(any(windows, web))]
+            view_covers: Default::default(),
+            #[cfg(any(windows, web))]
+            hosted_focus: None,
+        }
+    }
+}
+
 #[cfg(windows)]
 type NativeHost = crate::windows_platform_view::Host;
 #[cfg(web)]
@@ -1466,8 +1607,8 @@ impl<A: Application> App<A> {
         crate::windows_platform_view::register_builtins();
         #[cfg(web)]
         crate::web_platform_view::register_builtins();
-        shell.simulated = crate::simulated::Simulated::from_env();
-        if let Some(simulated) = &shell.simulated {
+        shell.win.simulated = crate::simulated::Simulated::from_env();
+        if let Some(simulated) = &shell.win.simulated {
             frus_widgets::set_debug_default_target_platform_override(Some(
                 simulated.profile.platform,
             ));
@@ -1505,7 +1646,6 @@ impl<A: Application> App<A> {
         Self {
             app,
             proxy,
-            window: None,
             renderer: None,
             renderer_lost: false,
             #[cfg(web)]
@@ -1516,22 +1656,10 @@ impl<A: Application> App<A> {
             history: crate::history::History::new(),
             #[cfg(web)]
             address: (crate::LocationStrategy::Hash, "/".to_string()),
-            #[cfg(desktop)]
-            a11y: None,
-            #[cfg(web)]
-            a11y: None,
             #[cfg(web)]
             web_editor: None,
             #[cfg(web)]
             keyboard_reveal: Default::default(),
-            ui: None,
-            tree: None,
-            cursor: Point::new(0.0, 0.0),
-            hover: crate::hover::Hover::default(),
-            scale: 1.0,
-            last_size: None,
-            runtime: Runtime::default(),
-            themes: crate::theming::ThemeFade::default(),
             reload: crate::reload::ReloadWatcher::new(),
             #[cfg(any(desktop, android))]
             dev: None,
@@ -1546,80 +1674,23 @@ impl<A: Application> App<A> {
             alt: false,
             meta: false,
             apple_keys: apple_keyboard(),
-            goal_x: None,
             clipboard: clip::Clipboard::new(),
             started: false,
-            last_frame: None,
-            build_dirty: true,
-            components_dirty: false,
-            app_was_animating: false,
-            drag: None,
-            file_drag: None,
-            pointer_touch: false,
-            gesture_velocity: VelocityTracker::default(),
-            gesture_clock: None,
             driver_timers: Vec::new(),
-            gesture_start: Instant::now(),
-            reorder_x: 0.0,
-            reorder_y: 0.0,
-            #[cfg(any(desktop, web, android))]
-            announce: String::new(),
-            #[cfg(any(desktop, web, android))]
-            live_regions: Default::default(),
-            press: PressRecognizer::new(),
-            long_press_msg: None,
-            pending_word: None,
-            pending_region_hold: false,
-            pending_tap_focus: None,
-            pending_field_press: None,
-            caret: crate::caret::CaretBlink::new(),
             #[cfg(android)]
             autofill_reported: Vec::new(),
             #[cfg(android)]
             autofill_focus: None,
             #[cfg(android)]
             autofill_group: None,
-            last_edit_at: None,
-            pending_lift: None,
-            pending_reorder: None,
-            last_click: None,
-            last_region_click: None,
             clock_origin: Instant::now(),
             turn_began: Instant::now(),
             previous_turn_began: Instant::now(),
-            region_known: None,
-            region_autoscrolled: false,
-            pending_tap: None,
             task_arrivals: 0,
             image_landings: 0,
-            entered: Vec::new(),
-            pointer_held: false,
-            captured: Vec::new(),
-            leaving_counter: 0,
             running_subs: HashMap::new(),
-            pending_focus: Vec::new(),
-            pending_scroll: Vec::new(),
-            retry_scroll: Vec::new(),
-            pending_sheet: Vec::new(),
-            retry_sheet: Vec::new(),
-            focus_history: Vec::new(),
-            prev_focus: None,
-            focus_reported: None,
-            autofocused: std::collections::HashSet::new(),
             frame_stats: crate::frame_stats::FrameStats::new(),
             frame_costs: crate::frame_stats::FrameCosts::default(),
-            occluded: false,
-            elapsed: 0.0,
-            last_insets: WindowInsets::ZERO,
-            simulated: None,
-            #[cfg(desktop)]
-            window_memory: None,
-            #[cfg(desktop)]
-            window_moved: false,
-            decoration_due: None,
-            decoration_period: None,
-            title_bar_on: false,
-            title_bar: None,
             #[cfg(all(desktop, feature = "tray"))]
             tray: None,
             #[cfg(all(desktop, feature = "tray"))]
@@ -1631,10 +1702,7 @@ impl<A: Application> App<A> {
             #[cfg(all(desktop, feature = "global-shortcuts"))]
             shortcuts_refused: Default::default(),
             window_icon: None,
-            reveal_after_keyboard: false,
-            keyboard_settle: None,
             platform: PlatformSettings::default(),
-            inset_baseline: None,
             // The app starts out detached; `resumed` will move it to `Resumed`.
             lifecycle: Lifecycle::Detached,
             #[cfg(android)]
@@ -1653,14 +1721,6 @@ impl<A: Application> App<A> {
             touch_router: Default::default(),
             #[cfg(android)]
             native_focus: None,
-            #[cfg(any(windows, web))]
-            hosted_views: Default::default(),
-            #[cfg(any(windows, web))]
-            view_host: None,
-            #[cfg(any(windows, web))]
-            view_covers: Default::default(),
-            #[cfg(any(windows, web))]
-            hosted_focus: None,
             #[cfg(android)]
             system_bars: None,
             restoration_published: None,
@@ -1668,6 +1728,9 @@ impl<A: Application> App<A> {
             page_background: None,
             #[cfg(web)]
             page_toolbar: None,
+            win: Box::new(WindowState::new(None)),
+            parked: Vec::new(),
+            app_clock: None,
         }
         .with_restoration()
     }
@@ -1679,12 +1742,12 @@ impl<A: Application> App<A> {
         let Some(id) = self.app.restoration_scope_id() else {
             return self;
         };
-        self.runtime.restoration.enable(id);
+        self.win.runtime.restoration.enable(id);
         #[cfg(web)]
-        self.runtime.restoration.set_restores_router(false);
+        self.win.runtime.restoration.set_restores_router(false);
         #[cfg(android)]
         if let Some(bytes) = crate::restoration::take_restored() {
-            if self.runtime.restoration.restore(&bytes) {
+            if self.win.runtime.restoration.restore(&bytes) {
                 log::info!(
                     "restoring the state the system kept ({} bytes)",
                     bytes.len()
@@ -1699,14 +1762,19 @@ impl<A: Application> App<A> {
     /// its editing action (milestone 568), on the field the bar is open on.
     #[cfg(any(desktop, web, android))]
     fn activate_for_assistive_tech(&mut self, id: WidgetId) {
-        if let Some(action) = self.ui.as_ref().and_then(|ui| ui.edit_action_for(id)) {
+        if let Some(action) = self.win.ui.as_ref().and_then(|ui| ui.edit_action_for(id)) {
             self.perform_edit_action(action);
             return;
         }
-        if let Some(msg) = self.ui.as_ref().and_then(|ui| ui.msg_for(id)) {
+        if let Some(msg) = self.win.ui.as_ref().and_then(|ui| ui.msg_for(id)) {
             // An item of the application's own on the bar closes it, as a press does.
-            if self.ui.as_ref().is_some_and(|ui| ui.hit_is_on_toolbar(id)) {
-                self.runtime.selection_handles = None;
+            if self
+                .win
+                .ui
+                .as_ref()
+                .is_some_and(|ui| ui.hit_is_on_toolbar(id))
+            {
+                self.win.runtime.selection_handles = None;
                 self.hide_selection_toolbar();
             }
             self.dispatch(msg);
@@ -1719,6 +1787,7 @@ impl<A: Application> App<A> {
     #[cfg(any(desktop, android))]
     fn custom_action_for_assistive_tech(&mut self, id: WidgetId, index: usize) {
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -1735,6 +1804,7 @@ impl<A: Application> App<A> {
     #[cfg(any(desktop, android, test, feature = "testing", debug_assertions))]
     fn set_value_for_assistive_tech(&mut self, id: WidgetId, value: String) {
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -1742,7 +1812,7 @@ impl<A: Application> App<A> {
         let Some(message) = message else {
             return;
         };
-        self.runtime.edits.insert(
+        self.win.runtime.edits.insert(
             id,
             Edit {
                 affinity: Default::default(),
@@ -1760,7 +1830,7 @@ impl<A: Application> App<A> {
     #[cfg(desktop)]
     fn drain_a11y_actions(&mut self) {
         use crate::a11y::A11yAction;
-        let actions = match self.a11y.as_ref() {
+        let actions = match self.win.a11y.as_ref() {
             Some(a11y) => a11y.take_actions(),
             None => return,
         };
@@ -1773,10 +1843,15 @@ impl<A: Application> App<A> {
                     // A button of the selection bar takes no focus: the bar acts on the
                     // field, and a focus that left it would end the very selection the bar
                     // is open on before the click that follows the focus got to use it.
-                    if self.ui.as_ref().is_some_and(|ui| ui.hit_is_on_toolbar(id)) {
+                    if self
+                        .win
+                        .ui
+                        .as_ref()
+                        .is_some_and(|ui| ui.hit_is_on_toolbar(id))
+                    {
                         continue;
                     }
-                    self.runtime.input.focused = Some(id);
+                    self.win.runtime.input.focused = Some(id);
                     // A move of the focus an assistive technology asked for: shown, as a
                     // key's would be.
                     self.note_input(true);
@@ -1794,7 +1869,7 @@ impl<A: Application> App<A> {
         // A simulated device's field is in its screen, inside the canvas, and laid out in the
         // window's own pixels: one CSS pixel each.
         let placement = self.placement();
-        let css = if self.simulated.is_some() {
+        let css = if self.win.simulated.is_some() {
             1.0
         } else {
             self.app.density()
@@ -1803,8 +1878,9 @@ impl<A: Application> App<A> {
             return;
         }
         // The focused field that takes typing, whether or not this frame laid it out.
-        let typing = self.runtime.input.focused.filter(|&id| {
-            self.tree
+        let typing = self.win.runtime.input.focused.filter(|&id| {
+            self.win
+                .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
                 .is_some_and(wants_keyboard)
@@ -1813,6 +1889,7 @@ impl<A: Application> App<A> {
         // after it is borrowed to change.
         let caret_line = typing.and_then(|id| {
             let (_, rect, _) = self
+                .win
                 .ui
                 .as_ref()?
                 .semantics()
@@ -1821,8 +1898,9 @@ impl<A: Application> App<A> {
             self.caret_line(id, rect)
         });
         let field = typing.and_then(|id| {
-            let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+            let widget = find_widget(self.win.tree.as_ref()?.as_ref(), id)?;
             let (_, rect, semantics) = self
+                .win
                 .ui
                 .as_ref()?
                 .semantics()
@@ -1843,7 +1921,7 @@ impl<A: Application> App<A> {
                 },
                 label: semantics.label.as_deref(),
                 text: widget.text_value().unwrap_or_default(),
-                edit: self.runtime.edits.get(&id).copied().unwrap_or_default(),
+                edit: self.win.runtime.edits.get(&id).copied().unwrap_or_default(),
                 caret_line,
             })
         });
@@ -1868,12 +1946,17 @@ impl<A: Application> App<A> {
     /// scrolls in a viewport of its own; `None` for the others (milestone 779).
     #[cfg(web)]
     fn caret_line(&self, id: WidgetId, rect: &frus_widgets::Rect) -> Option<(f32, f32)> {
-        let viewport = self.ui.as_ref()?.scrollable_viewport(id)?;
-        let edit = self.runtime.edits.get(&id).copied().unwrap_or_default();
-        let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+        let viewport = self.win.ui.as_ref()?.scrollable_viewport(id)?;
+        let edit = self.win.runtime.edits.get(&id).copied().unwrap_or_default();
+        let widget = find_widget(self.win.tree.as_ref()?.as_ref(), id)?;
         let (_, visible, caret_top, caret_height) =
             widget.text_metrics(viewport.width, edit.position())?;
-        let scrolled = self.runtime.scroll.get(&id).map_or(0.0, |offset| offset.1);
+        let scrolled = self
+            .win
+            .runtime
+            .scroll
+            .get(&id)
+            .map_or(0.0, |offset| offset.1);
         // The text starts below the box's top padding, which the field does not say: the
         // padding around the visible lines is taken as even, a few pixels at most from the
         // field's own, which a band as tall as the strip absorbs.
@@ -1887,19 +1970,20 @@ impl<A: Application> App<A> {
     /// panned to the field, when it does not — a phone in landscape leaves a few dozen pixels.
     #[cfg(web)]
     fn fit_web_keyboard(&mut self) {
-        let css = if self.simulated.is_some() {
+        let css = if self.win.simulated.is_some() {
             1.0
         } else {
             self.app.density()
         };
-        let focused = self.runtime.input.focused.filter(|&id| {
-            self.tree
+        let focused = self.win.runtime.input.focused.filter(|&id| {
+            self.win
+                .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
                 .is_some_and(wants_keyboard)
         });
         let focused = focused.map(|id| {
-            let height = self.ui.as_ref().and_then(|ui| {
+            let height = self.win.ui.as_ref().and_then(|ui| {
                 ui.semantics()
                     .iter()
                     .find(|(node, ..)| *node == id)
@@ -1916,12 +2000,12 @@ impl<A: Application> App<A> {
         // its region, panned to where nothing of it shows, and the page stays scrolled after
         // the keyboard goes (milestone 779). Under a resize they stay, as made.
         if editor.keyboard_fit() == crate::web_page::KeyboardFit::Pan {
-            relayout |= self.keyboard_reveal.undo(&mut self.runtime);
+            relayout |= self.keyboard_reveal.undo(&mut self.win.runtime);
         } else {
             self.keyboard_reveal.forget();
         }
         if relayout {
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             self.request_redraw();
         }
     }
@@ -1942,13 +2026,14 @@ impl<A: Application> App<A> {
         }
         for (id, element) in changes {
             // A change to a field that has lost the focus since is not for it any more.
-            if self.runtime.input.focused != Some(id) {
+            if self.win.runtime.input.focused != Some(id) {
                 continue;
             }
             let (value, browser) = crate::web_editing::read(&element);
             // Through the field's own typing, so its filter and its limit apply (milestone
             // 749).
             let Some((message, edit)) = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -1956,7 +2041,7 @@ impl<A: Application> App<A> {
             else {
                 continue;
             };
-            self.runtime.edits.insert(id, edit);
+            self.win.runtime.edits.insert(id, edit);
             if let Some(message) = message {
                 self.dispatch_edit(message);
             }
@@ -1969,7 +2054,7 @@ impl<A: Application> App<A> {
     #[cfg(web)]
     fn drain_a11y_actions(&mut self) {
         use crate::a11y_web::A11yAction;
-        let actions = match self.a11y.as_ref() {
+        let actions = match self.win.a11y.as_ref() {
             Some(a11y) => a11y.take_actions(),
             None => return,
         };
@@ -1980,10 +2065,15 @@ impl<A: Application> App<A> {
                     // A button of the selection bar takes no focus: the bar acts on the
                     // field, and a focus that left it would end the very selection the bar
                     // is open on before the click that follows the focus got to use it.
-                    if self.ui.as_ref().is_some_and(|ui| ui.hit_is_on_toolbar(id)) {
+                    if self
+                        .win
+                        .ui
+                        .as_ref()
+                        .is_some_and(|ui| ui.hit_is_on_toolbar(id))
+                    {
                         continue;
                     }
-                    self.runtime.input.focused = Some(id);
+                    self.win.runtime.input.focused = Some(id);
                     // A move of the focus an assistive technology asked for: shown, as a
                     // key's would be.
                     self.note_input(true);
@@ -1998,7 +2088,7 @@ impl<A: Application> App<A> {
     /// native view, before or now, does nothing.
     #[cfg(android)]
     fn sync_platform_views(&mut self) {
-        let Some(ui) = self.ui.as_ref() else {
+        let Some(ui) = self.win.ui.as_ref() else {
             return;
         };
         // Calls for every web view (cookies, a page let go: milestone 799), sent after this
@@ -2101,7 +2191,7 @@ impl<A: Application> App<A> {
                     self.native_focus = Some(view);
                     // The native view has the keyboard now: frus's own field lets go of
                     // the focus, without closing it.
-                    if self.runtime.input.focused.take().is_some() {
+                    if self.win.runtime.input.focused.take().is_some() {
                         self.request_redraw();
                     }
                 } else if self.native_focus == Some(view) {
@@ -2111,6 +2201,7 @@ impl<A: Application> App<A> {
                 log::warn!("native view {view}: {}", event.data);
             }
             let message = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), widget))
@@ -2130,27 +2221,27 @@ impl<A: Application> App<A> {
     fn sync_hosted_views(&mut self) {
         use crate::platform_view::{Shape, Wanted};
         // The views whose picture the frame just presented drew go now (see `Covers`).
-        let due = self.view_covers.take_due();
-        if let Some(host) = self.view_host.as_mut() {
+        let due = self.win.view_covers.take_due();
+        if let Some(host) = self.win.view_host.as_mut() {
             for view in due {
                 crate::view_host::ViewHost::shape(host, view, &Shape::Covered);
             }
         }
-        let Some(ui) = self.ui.as_ref() else {
+        let Some(ui) = self.win.ui.as_ref() else {
             return;
         };
         let placements = ui.platform_views();
-        if placements.is_empty() && self.hosted_views.is_empty() {
+        if placements.is_empty() && self.win.hosted_views.is_empty() {
             return;
         }
         // The host's pixels: the window's physical ones on Windows, the page's CSS pixels on
         // the web. A simulated device's screen sits inside the window, zoomed.
         #[cfg(windows)]
-        let unit = self.scale;
+        let unit = self.win.scale;
         #[cfg(web)]
         let unit = 1.0;
         let placement = self.placement();
-        let content = self.total_scale() / self.scale.max(0.01) * unit;
+        let content = self.total_scale() / self.win.scale.max(0.01) * unit;
         let to_host = |r: Rect| -> Rect {
             let (r, factor) = match placement {
                 Some(placement) => (crate::simulated::Simulated::to_window(placement, r), unit),
@@ -2183,37 +2274,37 @@ impl<A: Application> App<A> {
                 }
             })
             .collect();
-        let before: Vec<(WidgetId, i32)> = self.hosted_views.views().collect();
-        let commands = self.hosted_views.sync(&wanted, 1.0);
+        let before: Vec<(WidgetId, i32)> = self.win.hosted_views.views().collect();
+        let commands = self.win.hosted_views.sync(&wanted, 1.0);
         drop(wanted);
         for (widget, view) in before {
-            if self.hosted_views.view_of(widget) != Some(view) {
+            if self.win.hosted_views.view_of(widget) != Some(view) {
                 // The view went: its picture and its focus with it.
                 frus_widgets::set_platform_view_frame(widget, None);
-                self.view_covers.release(view);
-                if self.hosted_focus == Some(view) {
-                    self.hosted_focus = None;
+                self.win.view_covers.release(view);
+                if self.win.hosted_focus == Some(view) {
+                    self.win.hosted_focus = None;
                 }
             }
         }
         if commands.is_empty() {
             return;
         }
-        if self.view_host.is_none() {
-            self.view_host = self.make_view_host();
+        if self.win.view_host.is_none() {
+            self.win.view_host = self.make_view_host();
         }
         #[cfg(windows)]
         let font_scale = self.total_scale() * placement.map_or(1.0, |p| p.zoom.min(1.0));
-        let Some(host) = self.view_host.as_mut() else {
+        let Some(host) = self.win.view_host.as_mut() else {
             return;
         };
         #[cfg(windows)]
         host.set_scale(font_scale);
-        crate::view_host::run(host, &commands, &mut self.view_covers);
+        crate::view_host::run(host, &commands, &mut self.win.view_covers);
         let mut redraw = false;
         // A view covered whole: its picture, drawn by the next frame under what covers it.
-        for (view, picture) in self.view_covers.take_fresh() {
-            if let Some(widget) = self.hosted_views.widget_of(view) {
+        for (view, picture) in self.win.view_covers.take_fresh() {
+            if let Some(widget) = self.win.hosted_views.widget_of(view) {
                 frus_widgets::set_platform_view_frame(widget, Some(picture));
                 redraw = true;
             }
@@ -2221,8 +2312,8 @@ impl<A: Application> App<A> {
         // A view shown again: its picture is no longer needed.
         for command in &commands {
             if let crate::platform_view::Command::Clip { view, shape } = command {
-                if shape.shows() && self.view_covers.release(*view) {
-                    if let Some(widget) = self.hosted_views.widget_of(*view) {
+                if shape.shows() && self.win.view_covers.release(*view) {
+                    if let Some(widget) = self.win.hosted_views.widget_of(*view) {
                         frus_widgets::set_platform_view_frame(widget, None);
                         redraw = true;
                     }
@@ -2243,7 +2334,7 @@ impl<A: Application> App<A> {
         if calls.is_empty() {
             return;
         }
-        if self.view_host.is_none() {
+        if self.win.view_host.is_none() {
             // A page let go with no host never had a view; a cookie call needs the host.
             if calls
                 .iter()
@@ -2251,9 +2342,9 @@ impl<A: Application> App<A> {
             {
                 return;
             }
-            self.view_host = self.make_view_host();
+            self.win.view_host = self.make_view_host();
         }
-        if let Some(host) = self.view_host.as_mut() {
+        if let Some(host) = self.win.view_host.as_mut() {
             for (method, arguments) in &calls {
                 host.web_global(method, arguments);
             }
@@ -2263,7 +2354,7 @@ impl<A: Application> App<A> {
     /// The host of the native views, made with the first of them.
     #[cfg(any(windows, web))]
     fn make_view_host(&self) -> Option<NativeHost> {
-        let window = self.window.as_ref()?;
+        let window = self.win.window.as_ref()?;
         #[cfg(windows)]
         {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -2286,7 +2377,7 @@ impl<A: Application> App<A> {
     /// takes it from frus's own fields.
     #[cfg(any(windows, web))]
     fn drain_hosted_views(&mut self) {
-        if self.hosted_views.is_empty() {
+        if self.win.hosted_views.is_empty() {
             // What no view in particular answered, a web views' cookie call (milestone 804),
             // can come with no view left.
             #[cfg(feature = "webview")]
@@ -2305,27 +2396,28 @@ impl<A: Application> App<A> {
                 }
                 continue;
             }
-            let Some(widget) = self.hosted_views.widget_of(view) else {
+            let Some(widget) = self.win.hosted_views.widget_of(view) else {
                 continue;
             };
             let event = frus_widgets::PlatformViewEvent::new(name, data);
             if event.name == frus_widgets::PlatformViewEvent::FOCUS {
                 if event.data == "true" {
-                    self.hosted_focus = Some(view);
-                    if self.runtime.input.focused.take().is_some() {
+                    self.win.hosted_focus = Some(view);
+                    if self.win.runtime.input.focused.take().is_some() {
                         self.request_redraw();
                     }
                     // The window is still the one in use, though frus's own lost the focus.
                     if self.lifecycle == Lifecycle::Inactive {
                         self.set_lifecycle(Lifecycle::Resumed);
                     }
-                } else if self.hosted_focus == Some(view) {
-                    self.hosted_focus = None;
+                } else if self.win.hosted_focus == Some(view) {
+                    self.win.hosted_focus = None;
                 }
             } else if event.is_error() {
                 log::warn!("native view {view}: {}", event.data);
             }
             let message = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), widget))
@@ -2341,8 +2433,8 @@ impl<A: Application> App<A> {
     /// press outside a native field does (milestone 802).
     #[cfg(any(windows, web))]
     fn release_hosted_focus(&mut self) {
-        if self.hosted_focus.take().is_some() {
-            if let Some(host) = self.view_host.as_mut() {
+        if self.win.hosted_focus.take().is_some() {
+            if let Some(host) = self.win.view_host.as_mut() {
                 crate::view_host::ViewHost::clear_focus(host);
             }
         }
@@ -2353,10 +2445,10 @@ impl<A: Application> App<A> {
     #[cfg(windows)]
     fn focus_in_hosted_view(&self) -> bool {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if self.hosted_views.is_empty() {
+        if self.win.hosted_views.is_empty() {
             return false;
         }
-        let Some(window) = self.window.as_ref() else {
+        let Some(window) = self.win.window.as_ref() else {
             return false;
         };
         match window.window_handle().map(|h| h.as_raw()) {
@@ -2390,7 +2482,7 @@ impl<A: Application> App<A> {
             TouchPhase::Cancelled => Phase::Cancelled,
         };
         let at = (touch.location.x as f32, touch.location.y as f32);
-        let ui = self.ui.as_ref();
+        let ui = self.win.ui.as_ref();
         let views = &self.platform_views;
         let routed = self.touch_router.route(touch.id, phase, at, || {
             let ui = ui?;
@@ -2449,7 +2541,7 @@ impl<A: Application> App<A> {
             TouchPhase::Cancelled => Phase::Cancelled,
         };
         let at = (touch.location.x as f32, touch.location.y as f32);
-        let ui = self.ui.as_ref();
+        let ui = self.win.ui.as_ref();
         let views = &self.platform_views;
         let routed = self.touch_router.route(touch.id, phase, at, || {
             let placement = ui?.platform_view_at(position)?;
@@ -2481,10 +2573,10 @@ impl<A: Application> App<A> {
         if !crate::android_accessibility::enabled() {
             // A service turned on again starts from a whole tree.
             self.a11y_tree = None;
-            self.a11y_announced = self.announce.clone();
+            self.a11y_announced = self.win.announce.clone();
             return;
         }
-        let Some(ui) = self.ui.as_ref() else {
+        let Some(ui) = self.win.ui.as_ref() else {
             return;
         };
         let areas: Vec<crate::a11y_android::ScrollArea> = ui
@@ -2495,6 +2587,7 @@ impl<A: Application> App<A> {
                 viewport: area.viewport,
                 max: (area.max_x, area.max_y),
                 offset: self
+                    .win
                     .runtime
                     .scroll
                     .get(&area.id)
@@ -2505,7 +2598,7 @@ impl<A: Application> App<A> {
         let mut tree = crate::a11y_android::build(
             ui.semantics(),
             &areas,
-            self.runtime.input.focused,
+            self.win.runtime.input.focused,
             self.total_scale(),
             &mut self.a11y_ids,
         );
@@ -2514,8 +2607,8 @@ impl<A: Application> App<A> {
             let views = &self.platform_views;
             crate::a11y_android::embed_views(&mut tree, &self.a11y_ids, |w| views.view_of(w));
         }
-        let announce = (self.announce != self.a11y_announced && !self.announce.is_empty())
-            .then_some(self.announce.as_str());
+        let announce = (self.win.announce != self.a11y_announced && !self.win.announce.is_empty())
+            .then_some(self.win.announce.as_str());
         let events = match self.a11y_tree.as_ref() {
             Some(old) => crate::a11y_android::diff(old, &tree),
             None => crate::a11y_android::diff(&Default::default(), &tree),
@@ -2524,7 +2617,7 @@ impl<A: Application> App<A> {
             return;
         }
         crate::android_accessibility::publish(&tree, &events, announce);
-        self.a11y_announced = self.announce.clone();
+        self.a11y_announced = self.win.announce.clone();
         self.a11y_tree = Some(tree);
     }
 
@@ -2551,6 +2644,7 @@ impl<A: Application> App<A> {
                     // A field is pressed to be typed into: it takes the focus, and the keyboard
                     // follows, as a tap on it does.
                     let field = self
+                        .win
                         .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -2564,8 +2658,8 @@ impl<A: Application> App<A> {
                 A11yAction::Custom(id, index) => self.custom_action_for_assistive_tech(id, index),
                 A11yAction::Focus(id) => self.focus_for_assistive_tech(id),
                 A11yAction::ClearFocus(id) => {
-                    if self.runtime.input.focused == Some(id) {
-                        self.runtime.input.focused = None;
+                    if self.win.runtime.input.focused == Some(id) {
+                        self.win.runtime.input.focused = None;
                         self.request_redraw();
                     }
                 }
@@ -2584,6 +2678,7 @@ impl<A: Application> App<A> {
                         }
                     };
                     let response = self
+                        .win
                         .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -2595,6 +2690,7 @@ impl<A: Application> App<A> {
                 }
                 A11yAction::SetFraction(id, fraction) => {
                     let message = self
+                        .win
                         .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -2612,10 +2708,15 @@ impl<A: Application> App<A> {
     #[cfg(android)]
     fn focus_for_assistive_tech(&mut self, id: WidgetId) {
         // A button of the selection bar takes no focus: the bar acts on the field.
-        if self.ui.as_ref().is_some_and(|ui| ui.hit_is_on_toolbar(id)) {
+        if self
+            .win
+            .ui
+            .as_ref()
+            .is_some_and(|ui| ui.hit_is_on_toolbar(id))
+        {
             return;
         }
-        self.runtime.input.focused = Some(id);
+        self.win.runtime.input.focused = Some(id);
         self.note_input(true);
         self.request_redraw();
     }
@@ -2625,20 +2726,30 @@ impl<A: Application> App<A> {
     /// its ends.
     #[cfg(android)]
     fn scroll_page_for_assistive_tech(&mut self, id: WidgetId, forward: bool) {
-        let Some(area) = self.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
+        let Some(area) = self.win.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
             return;
         };
-        self.runtime.forget_restored_scroll();
-        self.runtime.stop_scroll_fling(id);
-        let current = self.runtime.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
+        self.win.runtime.forget_restored_scroll();
+        self.win.runtime.stop_scroll_fling(id);
+        let current = self
+            .win
+            .runtime
+            .scroll
+            .get(&id)
+            .copied()
+            .unwrap_or((0.0, 0.0));
         let target = crate::a11y_android::page_target(
             area.viewport,
             (area.max_x, area.max_y),
             current,
             forward,
         );
-        self.runtime.scroll_target.insert(id, target);
-        self.runtime.scroll_velocity.entry(id).or_insert((0.0, 0.0));
+        self.win.runtime.scroll_target.insert(id, target);
+        self.win
+            .runtime
+            .scroll_velocity
+            .entry(id)
+            .or_insert((0.0, 0.0));
         self.request_redraw();
     }
 
@@ -2662,10 +2773,10 @@ impl<A: Application> App<A> {
     fn sync_system_bars(&mut self, theme: &Theme) {
         #[cfg(any(android, web))]
         {
-            let Some(ui) = self.ui.as_ref() else {
+            let Some(ui) = self.win.ui.as_ref() else {
                 return;
             };
-            let Some(window) = self.window.as_ref() else {
+            let Some(window) = self.win.window.as_ref() else {
                 return;
             };
             let scale = self.total_scale();
@@ -2673,7 +2784,7 @@ impl<A: Application> App<A> {
             let (width, height) = (size.width as f32 / scale, size.height as f32 / scale);
             #[cfg(android)]
             {
-                let edges = self.last_insets.padding;
+                let edges = self.win.last_insets.padding;
                 let bars = ui
                     .system_ui_style(
                         frus_widgets::Point::new(width / 2.0, edges.top + 0.5),
@@ -2721,47 +2832,51 @@ impl<A: Application> App<A> {
     fn sync_soft_input(&mut self) {
         // A simulated device's keyboard comes up the same way, and is the shell's to draw
         // (milestone 722).
-        if self.simulated.is_some() {
+        if self.win.simulated.is_some() {
             let editing = self
+                .win
                 .runtime
                 .input
                 .focused
                 .and_then(|id| {
-                    self.tree
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                 })
                 .is_some_and(wants_keyboard);
-            if let Some(simulated) = self.simulated.as_mut() {
+            if let Some(simulated) = self.win.simulated.as_mut() {
                 if simulated.keyboard != editing {
                     simulated.keyboard = editing;
-                    self.build_dirty = true;
+                    self.win.build_dirty = true;
                     self.request_redraw();
                 }
             }
         }
         // The device's own keyboard, when the window is not standing in for another.
         #[cfg(android)]
-        if self.simulated.is_none() {
+        if self.win.simulated.is_none() {
             let editing = self
+                .win
                 .runtime
                 .input
                 .focused
                 .and_then(|id| {
-                    self.tree
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                 })
                 .is_some_and(wants_keyboard);
             if editing != self.soft_input_shown {
                 self.soft_input_shown = editing;
-                self.keyboard_settle = Some(Instant::now() + KEYBOARD_SETTLE);
+                self.win.keyboard_settle = Some(Instant::now() + KEYBOARD_SETTLE);
                 self.request_redraw();
                 self.end_composition();
                 if crate::android_ime::installed() {
                     // The InputConnection bridge: the Java view captures the IME.
                     if editing {
-                        if let Some(id) = self.runtime.input.focused {
+                        if let Some(id) = self.win.runtime.input.focused {
                             self.push_ime_context(id);
                         }
                         crate::android_ime::start_input(self.focused_ime());
@@ -2789,11 +2904,13 @@ impl<A: Application> App<A> {
     /// is what every field got before this was asked at all.
     #[cfg(android)]
     fn focused_ime(&self) -> frus_widgets::Ime {
-        self.runtime
+        self.win
+            .runtime
             .input
             .focused
             .and_then(|id| {
-                self.tree
+                self.win
+                    .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), id))
             })
@@ -2842,11 +2959,13 @@ impl<A: Application> App<A> {
             // Only a field that takes typing: a tap in a paragraph made selectable is a tap
             // in words to select, not in a form.
             let typing = self
+                .win
                 .runtime
                 .input
                 .focused
                 .and_then(|id| {
-                    self.tree
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                 })
@@ -2855,10 +2974,10 @@ impl<A: Application> App<A> {
                 return;
             }
             self.soft_input_shown = true;
-            self.keyboard_settle = Some(Instant::now() + KEYBOARD_SETTLE);
+            self.win.keyboard_settle = Some(Instant::now() + KEYBOARD_SETTLE);
             self.end_composition();
             if crate::android_ime::installed() {
-                if let Some(id) = self.runtime.input.focused {
+                if let Some(id) = self.win.runtime.input.focused {
                     self.push_ime_context(id);
                 }
                 crate::android_ime::start_input(self.focused_ime());
@@ -2879,11 +2998,12 @@ impl<A: Application> App<A> {
         if events.is_empty() {
             return;
         }
-        let Some(focused) = self.runtime.input.focused else {
+        let Some(focused) = self.win.runtime.input.focused else {
             return;
         };
         for event in events {
             let edit = self
+                .win
                 .runtime
                 .edits
                 .get(&focused)
@@ -2892,6 +3012,7 @@ impl<A: Application> App<A> {
             // Planned against the field as it stands before this operation: its text,
             // its caret and the composition it underlines (milestone 510).
             let text = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), focused))
@@ -2900,18 +3021,18 @@ impl<A: Application> App<A> {
             for step in crate::ime::plan(&event, &edit, &text) {
                 match step {
                     Step::Place { cursor, anchor } => {
-                        let edit = self.runtime.edits.entry(focused).or_default();
+                        let edit = self.win.runtime.edits.entry(focused).or_default();
                         edit.cursor = cursor;
                         edit.anchor = anchor;
                     }
                     Step::Key(key) => self.apply_key(focused, key),
                     Step::Compose(region) => {
-                        if let Some(edit) = self.runtime.edits.get_mut(&focused) {
+                        if let Some(edit) = self.win.runtime.edits.get_mut(&focused) {
                             edit.composing = region;
                         }
                     }
                     Step::ComposeTo(start) => {
-                        if let Some(edit) = self.runtime.edits.get_mut(&focused) {
+                        if let Some(edit) = self.win.runtime.edits.get_mut(&focused) {
                             let end = edit.cursor;
                             edit.composing = (end > start).then_some((start, end));
                         }
@@ -2938,7 +3059,7 @@ impl<A: Application> App<A> {
             return;
         }
         let scale = self.total_scale();
-        let (Some(ui), Some(tree)) = (self.ui.as_ref(), self.tree.as_ref()) else {
+        let (Some(ui), Some(tree)) = (self.win.ui.as_ref(), self.win.tree.as_ref()) else {
             return;
         };
         let fields_of = |id: WidgetId| {
@@ -2952,7 +3073,7 @@ impl<A: Application> App<A> {
             })
         };
         // The focused field, when it takes part: it says what it is for.
-        let focus = self.runtime.input.focused.filter(|&id| {
+        let focus = self.win.runtime.input.focused.filter(|&id| {
             find_widget(tree.as_ref(), id).is_some_and(|w| !w.autofill_hints().is_empty())
         });
         if focus != self.autofill_focus {
@@ -3003,12 +3124,13 @@ impl<A: Application> App<A> {
         }
         for (widget, value) in crate::autofill::route(&self.autofill_reported, fills) {
             let message = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), widget))
                 .and_then(|w| w.replace_value(value.clone()));
             if let Some(message) = message {
-                self.runtime.edits.insert(
+                self.win.runtime.edits.insert(
                     widget,
                     Edit {
                         cursor: value.chars().count(),
@@ -3020,7 +3142,7 @@ impl<A: Application> App<A> {
                 self.dispatch_edit(message);
             }
         }
-        if let Some(id) = self.runtime.input.focused {
+        if let Some(id) = self.win.runtime.input.focused {
             self.push_ime_context(id);
         }
         self.request_redraw();
@@ -3031,12 +3153,13 @@ impl<A: Application> App<A> {
     #[cfg(android)]
     fn push_ime_context(&self, id: WidgetId) {
         let value = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
             .and_then(|widget| widget.text_value().map(|s| s.to_string()));
         if let Some(text) = value {
-            let edit = self.runtime.edits.get(&id).copied().unwrap_or_default();
+            let edit = self.win.runtime.edits.get(&id).copied().unwrap_or_default();
             crate::android_ime::set_editor_state(&text, edit.cursor, edit.selection_range());
             // And the keyboard is **told**, as an Android editor tells it on every change:
             // a keyboard that predicts keeps its own model of the field, and one never
@@ -3056,8 +3179,8 @@ impl<A: Application> App<A> {
     /// started again, and a keyboard started again has forgotten it.
     #[cfg(android)]
     fn end_composition(&mut self) {
-        if let Some(id) = self.runtime.input.focused {
-            if let Some(edit) = self.runtime.edits.get_mut(&id) {
+        if let Some(id) = self.win.runtime.input.focused {
+            if let Some(edit) = self.win.runtime.edits.get_mut(&id) {
                 edit.composing = None;
             }
         }
@@ -3097,9 +3220,9 @@ impl<A: Application> App<A> {
             }
         }
         // The Web: the on-screen keyboard covers the bottom of a canvas that keeps its size
-        // (milestone 749). It comes in CSS pixels; a CSS pixel is `self.scale` physical ones.
+        // (milestone 749). It comes in CSS pixels; a CSS pixel is `self.win.scale` physical ones.
         #[cfg(web)]
-        if let Some(canvas) = self.window.as_ref().and_then(|window| {
+        if let Some(canvas) = self.win.window.as_ref().and_then(|window| {
             use winit::platform::web::WindowExtWebSys;
             window.canvas()
         }) {
@@ -3116,7 +3239,7 @@ impl<A: Application> App<A> {
             };
             let [top, right, bottom, left] =
                 crate::web_page::window_insets(crate::web_page::safe_area(), cover)
-                    .map(|css| css as f32 * self.scale / scale);
+                    .map(|css| css as f32 * self.win.scale / scale);
             return Insets::new(top, right, bottom, left);
         }
         let _ = (phys_w, phys_h, scale);
@@ -3134,7 +3257,7 @@ impl<A: Application> App<A> {
             let read = crate::android_settings::read(app);
             if read != self.platform {
                 self.platform = read;
-                self.build_dirty = true;
+                self.win.build_dirty = true;
             }
             return;
         }
@@ -3144,6 +3267,7 @@ impl<A: Application> App<A> {
         // at 1 there and an application that knows better says so itself. That is a
         // missing wire and is written down rather than papered over.
         let brightness = self
+            .win
             .window
             .as_ref()
             .and_then(|window| window.theme())
@@ -3154,7 +3278,7 @@ impl<A: Application> App<A> {
             .unwrap_or_default();
         if brightness != self.platform.brightness {
             self.platform.brightness = brightness;
-            self.build_dirty = true;
+            self.win.build_dirty = true;
         }
 
         // **Reduced motion** (milestone 778): the system's own switch, where it has one and
@@ -3162,7 +3286,7 @@ impl<A: Application> App<A> {
         if let Some(reduce) = crate::reduce_motion::system_reduce_motion() {
             if reduce != self.platform.accessibility.disable_animations {
                 self.platform.accessibility.disable_animations = reduce;
-                self.build_dirty = true;
+                self.win.build_dirty = true;
             }
         }
 
@@ -3176,7 +3300,7 @@ impl<A: Application> App<A> {
             let read = platform_locales();
             if !read.is_empty() {
                 self.platform.locales = read;
-                self.build_dirty = true;
+                self.win.build_dirty = true;
             }
         }
     }
@@ -3240,7 +3364,7 @@ fn memory_trimmed() {
 
 impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if self.win.window.is_some() {
             return;
         }
         // Back in the foreground, or starting up: the surface is (re)born below.
@@ -3288,7 +3412,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // A simulated device: a window the device's shape, shrunk to fit the monitor
         // (milestone 721). What the application asked for is the desktop window's size.
         #[cfg(desktop)]
-        if let Some(simulated) = &self.simulated {
+        if let Some(simulated) = &self.win.simulated {
             let room = simulated.window_size();
             let fit = event_loop
                 .primary_monitor()
@@ -3357,8 +3481,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // `RedrawRequested`. `init` runs right away, since it does not touch the GPU.
         #[cfg(web)]
         {
-            self.scale = window.scale_factor() as f32;
-            self.window = Some(window.clone());
+            self.win.scale = window.scale_factor() as f32;
+            self.win.window = Some(window.clone());
             // A task on the interface's thread, woken from wherever it waited, asks this
             // window for the frame that runs it (milestone 714).
             {
@@ -3373,7 +3497,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             }
             // The accessibility bridge (#18): the canvas exists as soon as the window
             // does, so there is no "still hidden" step to wait for here.
-            self.a11y = crate::a11y_web::A11y::new(&window);
+            self.win.a11y = crate::a11y_web::A11y::new(&window);
             // And the element a text field is edited through (milestone 711).
             self.web_editor = crate::web_editing::Editor::new(&window);
             // The browser keeps none of its own gestures over the canvas: a finger drags the
@@ -3390,7 +3514,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             crate::web_page::recover_lost_contexts(&window, self.context_restored.clone());
             // The tab's icon: the application's, or the frus logo where the page has none.
             crate::web_icon::apply(&self.app.icon());
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             if !self.started {
                 self.started = true;
                 let command = self.app.init();
@@ -3399,7 +3523,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.open_launch_address(&window);
                 crate::dev_commands::set_window(Some(window.clone()));
                 if let Some(states) = crate::web_dev::start() {
-                    self.runtime.states.restore_from(&states);
+                    self.win.runtime.states.restore_from(&states);
                 }
                 #[cfg(feature = "hot-reload")]
                 {
@@ -3452,12 +3576,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             match renderer {
                 Ok(renderer) => {
                     crate::startup::renderer_made(renderer.startup_times());
-                    self.scale = window.scale_factor() as f32;
+                    self.win.scale = window.scale_factor() as f32;
                     // The accessibility bridge (AccessKit), created while the window is
                     // still hidden, after which we reveal it. Inert with no screen reader.
                     #[cfg(desktop)]
                     {
-                        self.a11y = Some(crate::a11y::A11y::new(event_loop, &window));
+                        self.win.a11y = Some(crate::a11y::A11y::new(event_loop, &window));
                         // Followed from here on, the bounds it opens with first: a window
                         // opened maximized keeps the ones it goes back to (milestone 783).
                         self.follow_window(&window, remembered);
@@ -3471,7 +3595,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         // a frame.
                         crate::instance::set_window(window.clone());
                     }
-                    self.window = Some(window.clone());
+                    self.win.window = Some(window.clone());
                     // A task on the interface's thread, woken from wherever it waited, asks this
                     // window for the frame that runs it (milestone 714).
                     {
@@ -3495,7 +3619,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     crate::android_lifecycle::set_window(Some(window.clone()));
                     self.renderer = Some(renderer);
                     // The surface was (re)created: force a full rebuild on the first frame.
-                    self.build_dirty = true;
+                    self.win.build_dirty = true;
                     // The startup effect, an initial load and so on: once only, not on
                     // every surface recreation, such as returning from the background.
                     if !self.started {
@@ -3538,25 +3662,26 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 .as_ref()
                 .and_then(|a| a.internal_data_path())
             {
-                crate::dev::keep_states(&storage, &self.runtime.states.snapshot());
+                crate::dev::keep_states(&storage, &self.win.runtime.states.snapshot());
             }
         }
         self.renderer = None;
-        self.window = None;
+        self.win.window = None;
         #[cfg(android)]
         crate::android_ime::set_window(None);
         #[cfg(android)]
         crate::dev_commands::set_window(None);
         #[cfg(android)]
         crate::android_lifecycle::set_window(None);
-        self.last_frame = None;
+        self.win.last_frame = None;
     }
 
     /// The event loop is ending, on close: a final `Detached` notification, where the
     /// app can persist its state before the process disappears.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.set_lifecycle(Lifecycle::Detached);
-        // The window, as it was left, for the next run (milestone 783).
+        // The window, as it was left, for the next run (milestone 783): the main one.
+        self.activate_main();
         #[cfg(desktop)]
         self.keep_window();
     }
@@ -3574,7 +3699,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // A click on a notification brings the window forward with its message.
         #[cfg(all(desktop, feature = "notifications"))]
         if crate::notification::take_raise() {
-            if let Some(window) = &self.window {
+            if let Some(window) = self.main_window() {
                 window.set_minimized(false);
                 window.focus_window();
             }
@@ -3585,24 +3710,29 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
     /// The loop has run out of events: dropped files are handed over now that every one
     /// of them has arrived, and files still held over the window are looked for where
-    /// the system can say (milestone 695).
+    /// the system can say (milestone 695). The windows the application lists are opened and
+    /// closed here, once its messages are all in (milestone 827).
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Where the window is now that its events are all in (milestone 783).
         #[cfg(desktop)]
-        self.note_window();
-        if self.decide_hold() {
-            event_loop.set_control_flow(self.idle_control_flow());
-        }
-        // A frame of decoration is owed: its deadline is set by the frame just drawn, after
-        // the turn's start chose how long to wait, so the wait is chosen again (milestone 783).
-        if self.decoration_due.is_some() {
-            event_loop.set_control_flow(self.idle_control_flow());
+        self.sync_windows(event_loop);
+        // Elsewhere there is one surface: a window the application lists is said, once, not
+        // to open (milestone 827).
+        #[cfg(not(desktop))]
+        {
+            static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !TOLD.load(std::sync::atomic::Ordering::Relaxed) && !self.app.windows().is_empty() {
+                TOLD.store(true, std::sync::atomic::Ordering::Relaxed);
+                log::warn!(
+                    "this platform has one window: the other windows the application lists \
+                     are not opened"
+                );
+            }
         }
         // The activity is being destroyed (milestone 755): its `onDestroy` waits for the loop
         // to end, and winit does not pass the destruction on. The window is always gone first,
         // so the activity is only asked while there is none.
         #[cfg(android)]
-        if activity_ended(self.window.is_some(), || {
+        if activity_ended(self.win.window.is_some(), || {
             self.android_app
                 .as_ref()
                 .is_some_and(crate::android_lifecycle::activity_destroyed)
@@ -3611,19 +3741,20 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             event_loop.exit();
             return;
         }
+        // Each window's own business, and the soonest any of them must wake the loop.
+        let mut flow = None;
+        self.each_window(|shell| {
+            if let Some(wanted) = shell.window_about_to_wait() {
+                flow = Some(sooner(flow, wanted));
+            }
+        });
+        if let Some(flow) = flow {
+            event_loop.set_control_flow(flow);
+        }
         #[cfg(all(desktop, feature = "global-shortcuts"))]
         self.shortcut_presses();
         #[cfg(all(desktop, feature = "tray"))]
         self.tray_events(event_loop);
-        if self.file_drag.is_none() {
-            return;
-        }
-        self.deliver_dropped_files();
-        if self.file_drag.is_some() {
-            let at = self.system_cursor();
-            self.files_moved(at);
-        }
-        event_loop.set_control_flow(self.idle_control_flow());
     }
 
     /// The loop woke up. Whether a press held past the long-press deadline is a hold is
@@ -3631,26 +3762,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// (`decide_hold`, milestone 769).
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         self.previous_turn_began = std::mem::replace(&mut self.turn_began, Instant::now());
-        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
-            self.poll_pending_tap(Instant::now());
-        }
-
-        // The caret's turn is due: a frame to show it, or to hide it, in (milestone 513).
-        if matches!(cause, StartCause::ResumeTimeReached { .. })
-            && self.lifecycle == Lifecycle::Resumed
-            && self.caret.next_toggle(Instant::now()).is_some()
-        {
-            self.request_redraw();
-        }
-
-        // Decoration's next frame is due (milestone 783).
-        if self
-            .decoration_due
-            .is_some_and(|due| Instant::now() + DECORATION_SLACK >= due)
-        {
-            self.decoration_due = None;
-            self.request_redraw();
-        }
+        let timer = matches!(cause, StartCause::ResumeTimeReached { .. });
 
         // Pending IME operations, from the Android input bridge.
         #[cfg(android)]
@@ -3658,25 +3770,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // And the values an autofill service chose, from the same bridge.
         #[cfg(android)]
         self.drain_autofill();
-
-        // Actions an assistive technology asked for, through AccessKit.
-        #[cfg(desktop)]
-        self.drain_a11y_actions();
-        // Actions a screen reader asked for, through the DOM bridge (#18).
-        #[cfg(web)]
-        self.drain_a11y_actions();
-        // And through the Android node provider (milestone 782).
+        // Actions a screen reader asked for, through the Android node provider (milestone 782).
         #[cfg(android)]
         self.drain_android_a11y();
         // What the native views sent: new images, events (milestone 794).
         #[cfg(android)]
         self.drain_platform_views();
-        // And what the views hosted over the surface sent (milestone 802).
-        #[cfg(any(windows, web))]
-        self.drain_hosted_views();
-        // And what the browser did to the field it edits for the application (milestone 711).
-        #[cfg(web)]
-        self.drain_web_editing();
 
         // Live reload, in development: the binary was replaced by a recompilation, so
         // capture the state and relaunch the new binary. This does not return.
@@ -3685,28 +3784,48 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 watcher.handoff(self.app.save_state());
             }
         }
-        event_loop.set_control_flow(self.idle_control_flow());
+        // Each window's own business, and the soonest any of them must wake the loop.
+        let mut flow = ControlFlow::Wait;
+        self.each_window(|shell| {
+            shell.window_new_events(timer);
+            flow = sooner(Some(flow), shell.idle_control_flow());
+        });
+        event_loop.set_control_flow(flow);
     }
 
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // The window the event is for, in front of what follows; an event for a window
+        // already closed is dropped (milestone 827).
+        if !self.activate(window_id) {
+            return;
+        }
         // The AccessKit adapter observes the window events: focus, size and so on.
         #[cfg(desktop)]
-        if let (Some(a11y), Some(window)) = (self.a11y.as_mut(), self.window.as_ref()) {
+        if let (Some(a11y), Some(window)) = (self.win.a11y.as_mut(), self.win.window.as_ref()) {
             a11y.process_event(window, &event);
         }
 
         match event {
             WindowEvent::CloseRequested => {
+                // Another window's close button only asks: its message, whose handler takes
+                // it out of the state, or keeps it (milestone 827).
+                if self.win.id.is_some() {
+                    if let Some(message) = self.win.on_close.clone() {
+                        self.dispatch(message);
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 // A tray that keeps the application running: the window goes, the
                 // application stays, until a quit item (milestone 706).
                 #[cfg(all(desktop, feature = "tray"))]
                 if self.tray.is_some() && self.tray_keeps_running {
-                    if let Some(window) = &self.window {
+                    if let Some(window) = &self.win.window {
                         window.set_visible(false);
                     }
                     return;
@@ -3742,7 +3861,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // system's own caption does: a frame reads the window's state again
                 // (milestone 643).
                 #[cfg(windows)]
-                if self.title_bar_on {
+                if self.win.title_bar_on {
                     self.request_redraw();
                 }
                 // Back from the system's settings, perhaps with motion reduced: what the
@@ -3758,10 +3877,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A turn of the phone turns the camera's preview with it (milestone 798).
                 #[cfg(all(android, feature = "camera"))]
                 crate::camera::display_changed();
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.resize(size.width, size.height);
-                }
-                if let Some(window) = &self.window {
+                self.resize_surface(size.width, size.height);
+                if let Some(window) = &self.win.window {
                     window.request_redraw();
                 }
                 #[cfg(desktop)]
@@ -3773,7 +3890,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             WindowEvent::Moved(_) => self.window_placed(),
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.scale = scale_factor as f32;
+                self.win.scale = scale_factor as f32;
                 // On Android this is how winit reports every configuration change, and the
                 // manifests declare the font size, the night setting and the language as
                 // changes the application follows in place (milestone 755): what the platform
@@ -3781,17 +3898,14 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 #[cfg(android)]
                 self.refresh_platform_settings();
                 // Reconfigure the surface to the current physical size.
-                if let Some(window) = &self.window {
-                    let size = window.inner_size();
-                    if let Some(renderer) = self.renderer.as_mut() {
-                        renderer.resize(size.width, size.height);
-                    }
+                if let Some(size) = self.win.window.as_ref().map(|w| w.inner_size()) {
+                    self.resize_surface(size.width, size.height);
                 }
                 self.request_redraw();
             }
 
             WindowEvent::Occluded(occluded) => {
-                self.occluded = occluded;
+                self.win.occluded = occluded;
                 if !occluded {
                     self.request_redraw();
                 }
@@ -3829,7 +3943,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
             // The mouse left the window: nothing in it is under the pointer any more.
             WindowEvent::CursorLeft { .. } => {
-                self.hover.left();
+                self.win.hover.left();
                 self.follow_hover_cards(false);
                 self.sync_hover();
                 self.sync_regions(false);
@@ -3900,7 +4014,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     event_loop,
                     PointerEvent {
                         kind: PointerKind::Down,
-                        position: self.cursor,
+                        position: self.win.cursor,
                         touch: false,
                     },
                 )
@@ -3914,7 +4028,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 event_loop,
                 PointerEvent {
                     kind: PointerKind::Up,
-                    position: self.cursor,
+                    position: self.win.cursor,
                     touch: false,
                 },
             ),
@@ -3937,7 +4051,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                self.runtime.forget_restored_scroll();
+                self.win.runtime.forget_restored_scroll();
                 let (mut dx, mut dy) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => (x * SCROLL_SPEED, y * SCROLL_SPEED),
                     // Physical delta → logical.
@@ -3991,7 +4105,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                             // meantime, since `self.renderer` was still `None` then.
                             // Catching up here, against the size right now, is what
                             // makes that race harmless either way.
-                            if let Some(window) = &self.window {
+                            if let Some(window) = &self.win.window {
                                 let size = window.inner_size();
                                 renderer.resize(size.width.max(1), size.height.max(1));
                             }
@@ -4012,11 +4126,12 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A bar whose field is no longer the focused one is over: a field focused
                 // again later must not find it open.
                 if self
+                    .win
                     .runtime
                     .selection_toolbar
-                    .is_some_and(|mark| self.runtime.input.focused != Some(mark.id))
+                    .is_some_and(|mark| self.win.runtime.input.focused != Some(mark.id))
                 {
-                    self.runtime.selection_toolbar = None;
+                    self.win.runtime.selection_toolbar = None;
                 }
                 // Occluded window: rendering is suspended, resuming on Occluded(false) — but
                 // a request of DevTools' is answered all the same: the window it asks about
@@ -4028,18 +4143,19 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 };
                 #[cfg(not(debug_assertions))]
                 let devtools_waiting = false;
-                if self.occluded && !devtools_waiting {
+                if self.win.occluded && !devtools_waiting {
                     return;
                 }
                 let size = self
+                    .win
                     .window
                     .as_ref()
                     .map(|w| w.inner_size())
                     .unwrap_or_default();
                 // Minimised, or zero-sized: nothing to draw, which avoids GPU errors.
                 if size.width == 0 || size.height == 0 {
-                    self.last_frame = None; // no dt jump when it is restored
-                                            // DevTools is answered from the last frame laid out.
+                    self.win.last_frame = None; // no dt jump when it is restored
+                                                // DevTools is answered from the last frame laid out.
                     #[cfg(debug_assertions)]
                     self.answer_devtools();
                     return;
@@ -4051,9 +4167,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
 
                 // A logical size change — a resize OR a density change — notifies the
                 // app before the view, so it can react to the breakpoint in its logic.
-                if self.last_size != Some((width, height)) {
-                    self.last_size = Some((width, height));
-                    self.build_dirty = true;
+                if self.win.last_size != Some((width, height)) {
+                    self.win.last_size = Some((width, height));
+                    self.win.build_dirty = true;
                     self.app.on_resize(width, height);
                 }
 
@@ -4065,37 +4181,37 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // the bars hidden, and so on.
                 let raw = self.compute_insets(size.width, size.height, scale);
                 let phys = (size.width, size.height);
-                let mut baseline = match self.inset_baseline {
+                let mut baseline = match self.win.inset_baseline {
                     Some((b, s)) if s == phys => b,
                     _ => {
-                        self.inset_baseline = Some((raw, phys));
+                        self.win.inset_baseline = Some((raw, phys));
                         raw
                     }
                 };
                 if raw.bottom < baseline.bottom {
                     baseline = raw;
-                    self.inset_baseline = Some((raw, phys));
+                    self.win.inset_baseline = Some((raw, phys));
                 }
-                let insets = match &self.simulated {
+                let insets = match &self.win.simulated {
                     // A simulated device's bars and keyboard are the profile's.
                     Some(simulated) => simulated.insets(),
                     None => WindowInsets::from_baseline(baseline, raw),
                 };
                 // A keyboard on its way in or out: the next frame reads the insets again,
                 // nothing else telling the shell when they have moved (milestone 750).
-                if let Some(until) = self.keyboard_settle {
+                if let Some(until) = self.win.keyboard_settle {
                     if Instant::now() < until {
                         self.request_redraw();
                     } else {
-                        self.keyboard_settle = None;
+                        self.win.keyboard_settle = None;
                     }
                 }
-                if self.last_insets != insets {
-                    if insets.view_insets.bottom > self.last_insets.view_insets.bottom {
-                        self.reveal_after_keyboard = true;
+                if self.win.last_insets != insets {
+                    if insets.view_insets.bottom > self.win.last_insets.view_insets.bottom {
+                        self.win.reveal_after_keyboard = true;
                     }
-                    self.last_insets = insets;
-                    self.build_dirty = true;
+                    self.win.last_insets = insets;
+                    self.win.build_dirty = true;
                     self.app.on_insets(insets);
                 }
 
@@ -4104,15 +4220,17 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A frame that waited for decoration's rate takes its whole step, so that a
                 // spinner turns at the same speed at any rate (milestone 783).
                 let longest = self
+                    .win
                     .decoration_period
                     .map_or(0.05, |period| (1.5 * period).max(0.05));
                 let dt = self
+                    .win
                     .last_frame
                     .map(|prev| (now - prev).as_secs_f32().min(longest))
                     .unwrap_or(0.0);
-                self.last_frame = Some(now);
+                self.win.last_frame = Some(now);
                 // This frame draws the decoration too: its next one is decided at the end.
-                self.decoration_due = None;
+                self.win.decoration_due = None;
                 // **Animated time**, at the speed the application set for debugging
                 // (milestone 778): every animation below is moved by this one step, so one
                 // multiplication slows or speeds them all. Input and timers keep the wall
@@ -4120,8 +4238,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let dt = frus_widgets::dilate_frame_time(dt);
 
                 // A continuous clock, in seconds, for the time-driven animations.
-                self.elapsed += dt;
-                self.runtime.time = self.elapsed;
+                self.win.elapsed += dt;
+                self.win.runtime.time = self.win.elapsed;
 
                 // The caret's blink (milestone 513), on the wall clock: the animation
                 // clock above is clamped per frame and stands still between frames, and a
@@ -4133,11 +4251,21 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 } else {
                     None
                 };
-                self.caret.observe(caret_now, caret);
-                self.runtime.caret_hidden = self.caret.hidden(caret_now);
+                self.win.caret.observe(caret_now, caret);
+                self.win.runtime.caret_hidden = self.win.caret.hidden(caret_now);
 
                 // The application advances its own animations: navigation, gesture.
-                let mut app_animating = self.app.tick(dt);
+                //
+                // With more than one window drawing, each frame advances them by the time
+                // since any window last did, not by its own window's step: two windows would
+                // otherwise move them twice as fast (milestone 827).
+                let app_dt = match self.app_clock.replace(now) {
+                    Some(last) if !self.parked.is_empty() => {
+                        frus_widgets::dilate_frame_time((now - last).as_secs_f32().min(longest))
+                    }
+                    _ => dt,
+                };
+                let mut app_animating = self.app.tick(app_dt);
 
                 // And the framework advances the **theme**, which is its own work: it
                 // resolves the application's themes against the brightness the platform
@@ -4163,7 +4291,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // they may change while it is running.
                 install_ambient(&self.app, &self.platform.locales);
 
-                let theme_moved = self.themes.advance(
+                let theme_moved = self.win.themes.advance(
                     &self.app,
                     self.brightness(),
                     settings.high_contrast,
@@ -4172,8 +4300,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 );
                 // A theme that moved is a rebuild — the view is a pure function of
                 // `(state, theme, size)` — and a fade still running is another frame.
-                app_animating |= theme_moved | self.themes.animating();
-                let theme = self.themes.displayed(&self.app);
+                app_animating |= theme_moved | self.win.themes.animating();
+                let theme = self.win.themes.displayed(&self.app);
 
                 // **The surface, in force for the whole frame** — not just for `view`.
                 // A size becomes a number in three places: while the widgets are built,
@@ -4199,7 +4327,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // The user's motion setting reaches the runtime before anything is
                 // advanced with it, and it is read every frame: a settings screen with a
                 // *reduce motion* switch changes it while the application is running.
-                self.runtime.still = settings.disable_animations;
+                self.win.runtime.still = settings.disable_animations;
                 // And where the pointer stands in relation to a bar, from the previous
                 // frame's registry — the only one there is at this point in the frame.
                 //
@@ -4207,12 +4335,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // out entirely still answers here, and comes back for the reach. On a
                 // touch platform nothing draws a bar in the first place, so the registry
                 // is empty and a lingering finger position says nothing.
-                self.runtime.scrollbar_hovered = self
+                self.win.runtime.scrollbar_hovered = self
+                    .win
                     .ui
                     .as_ref()
-                    .and_then(|ui| ui.scrollbar_near(self.cursor))
+                    .and_then(|ui| ui.scrollbar_near(self.win.cursor))
                     .map(|bar| bar.id);
-                self.runtime.scrollbar_dragged = match self.drag {
+                self.win.runtime.scrollbar_dragged = match self.win.drag {
                     Some(Drag::Scrollbar { id, .. }) => Some(id),
                     _ => None,
                 };
@@ -4249,14 +4378,14 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let prefs = frus_widgets::__take_prefs_change();
                 self.note_rebuild(frus_widgets::take_rebuild(), prefs || arrived);
                 let need_build = frame_needs_build(
-                    self.build_dirty,
+                    self.win.build_dirty,
                     app_animating,
-                    std::mem::replace(&mut self.app_was_animating, app_animating),
-                    self.tree.is_none() || self.runtime.switching(),
+                    std::mem::replace(&mut self.win.app_was_animating, app_animating),
+                    self.win.tree.is_none() || self.win.runtime.switching(),
                 );
                 // Only components changed: the tree this frame lays out is the one kept, with
                 // those components built again in it (milestone 822).
-                let marked = !need_build && self.components_dirty && self.tree.is_some();
+                let marked = !need_build && self.win.components_dirty && self.win.tree.is_some();
                 if need_build || marked {
                     // No scope of its own: the surface above is already installed, and
                     // covers the layout and the paint that follow as well.
@@ -4266,21 +4395,26 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // no identities at all inside a deferred subtree — and everything in an
                     // `AppBar` would silently never mount, never fade in and never fade out.
                     let build_start = timed.then(Instant::now);
-                    let tree = match self.tree.take() {
+                    let tree = match self.win.tree.take() {
                         Some(kept) if marked => {
-                            rebuild_marked(kept.as_ref(), &theme, &self.runtime);
+                            rebuild_marked(kept.as_ref(), &theme, &self.win.runtime);
                             kept
                         }
                         // The last tree lives until the new one is in its place.
                         last => {
-                            let tree = build_view(&self.app, &theme, &self.runtime);
+                            let tree = build_window_view(
+                                &self.app,
+                                self.win.id.as_deref(),
+                                &theme,
+                                &self.win.runtime,
+                            );
                             drop(last);
                             tree
                         }
                     };
                     // What restoration handed back for the widgets this build registered:
                     // in place before the layout, so a restored page opens where it was.
-                    self.runtime.apply_restored();
+                    self.win.runtime.apply_restored();
                     if let Some(at) = build_start {
                         let took = at.elapsed();
                         self.frame_costs.build = Some(took.as_secs_f32() * 1000.0);
@@ -4292,6 +4426,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // Leaving: snapshot the widgets present at N-1 but absent at N,
                     // so they can be faded out.
                     let leaving: std::collections::HashSet<u64> = self
+                        .win
                         .runtime
                         .mounted
                         .iter()
@@ -4299,7 +4434,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         .map(|id| id.as_u64())
                         .collect();
                     if !leaving.is_empty() {
-                        if let Some(ui) = &self.ui {
+                        if let Some(ui) = &self.win.ui {
                             let captured: Vec<_> = ui
                                 .scene()
                                 .primitives()
@@ -4308,23 +4443,27 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                                 .cloned()
                                 .collect();
                             if !captured.is_empty() {
-                                self.runtime
+                                self.win
+                                    .runtime
                                     .leaving
-                                    .insert(self.leaving_counter, (captured, 1.0));
-                                self.leaving_counter = self.leaving_counter.wrapping_add(1);
+                                    .insert(self.win.leaving_counter, (captured, 1.0));
+                                self.win.leaving_counter = self.win.leaving_counter.wrapping_add(1);
                             }
                         }
                     }
 
                     // Mounting: new widgets start out fading in.
                     for &id in &ids {
-                        if self.runtime.mounted.insert(id) {
-                            self.runtime.anims.entry(id).or_default().opacity = 0.0;
+                        if self.win.runtime.mounted.insert(id) {
+                            self.win.runtime.anims.entry(id).or_default().opacity = 0.0;
                         }
                     }
-                    self.runtime.mounted.retain(|id| present.contains(id));
+                    self.win.runtime.mounted.retain(|id| present.contains(id));
 
-                    self.tree = Some(tree);
+                    self.win.tree = Some(tree);
+                    // With more than one window, the timers this one's components asked for
+                    // are kept as its own (milestone 827).
+                    self.share_intervals();
                     // What the build asked for may be a timer — a component's
                     // `use_interval` — and it is the build that says so, which is later than
                     // the message that changed it. Diffing here starts and stops it now, not
@@ -4335,10 +4474,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // cache and its repaint boundaries. Entries from a stale generation
                     // no longer *hit*, giving a full repaint this frame and reuse on the
                     // interaction-only frames that follow.
-                    self.runtime.paint_cache.borrow_mut().bump_generation();
+                    self.win.runtime.paint_cache.borrow_mut().bump_generation();
                 }
-                self.build_dirty = false;
-                self.components_dirty = false;
+                self.win.build_dirty = false;
+                self.win.components_dirty = false;
 
                 // Focus requests (`Command::focus`), resolved against the tree just
                 // (re)built.
@@ -4371,6 +4510,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // static `RepaintBoundary` subtree is replayed without repainting while
                 // its geometry and the interaction state hold still).
                 let tree = self
+                    .win
                     .tree
                     .as_deref()
                     .expect("the view was built at least once");
@@ -4378,6 +4518,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // Scroll and pan inertia; the bounds and viewports come from the
                 // previous frame.
                 let scroll_regions = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.scroll_regions().to_vec())
@@ -4385,11 +4526,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // The refresh areas of the frame, with the `refreshing` flag each was
                 // built with: that flag is what tells a spinning indicator when to stop.
                 let refresh_areas = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.refresh_areas().to_vec())
                     .unwrap_or_default();
                 let dismissables = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.dismissables().to_vec())
@@ -4398,40 +4541,42 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // longer borrowed.
                 let mut dismissed: Vec<A::Message> = Vec::new();
                 let sheet_areas = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.sheets().to_vec())
                     .unwrap_or_default();
                 let interactive_bounds = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.interactive_bounds())
                     .unwrap_or_default();
 
                 // What the last layout moved to keep a reader in place (milestone 717).
-                self.runtime.apply_scroll_corrections();
+                self.win.runtime.apply_scroll_corrections();
                 // A paged view that has been asked for another page glides across to
                 // it. Done before the springs are stepped, so the request is honoured
                 // in the frame it arrives rather than the one after.
-                self.runtime.sync_pages(&scroll_regions);
+                self.win.runtime.sync_pages(&scroll_regions);
                 // And a bar whose selected item has moved out of its window slides back
                 // to it. Same moment, same reason: the request is honoured in the frame
                 // it arrives rather than the one after.
-                self.runtime.sync_visible(&scroll_regions);
+                self.win.runtime.sync_visible(&scroll_regions);
                 // And the scroll requests an application has just returned. Same moment
                 // and the same reason, with one addition: a region that has only just
                 // appeared is not in the registry above, which was built last frame, so
                 // what does not resolve here is tried again below against this frame's.
-                let requests = std::mem::take(&mut self.pending_scroll);
+                let requests = std::mem::take(&mut self.win.pending_scroll);
                 let (retry, scrolled) =
-                    apply_scroll_requests(&mut self.runtime, tree, requests, &scroll_regions);
-                self.retry_scroll = retry;
+                    apply_scroll_requests(&mut self.win.runtime, tree, requests, &scroll_regions);
+                self.win.retry_scroll = retry;
                 // And the sheets it has asked to move, on the same terms: before the sheets
                 // are stepped, so an animated request starts in the frame it arrives in.
-                let requests = std::mem::take(&mut self.pending_sheet);
+                let requests = std::mem::take(&mut self.win.pending_sheet);
                 let (retry, sheeted) =
-                    apply_sheet_requests(&mut self.runtime, tree, requests, &sheet_areas);
-                self.retry_sheet = retry;
+                    apply_sheet_requests(&mut self.win.runtime, tree, requests, &sheet_areas);
+                self.win.retry_sheet = retry;
 
                 // Every family is stepped, in this order, whatever an earlier one answered; each
                 // answer is kept by name, so that frame statistics can say which kept the frames
@@ -4439,28 +4584,37 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let moving: [(&str, bool); 25] = [
                     ("scrolled", scrolled),
                     ("sheeted", sheeted),
-                    ("anims", self.runtime.advance(dt)),
-                    ("leaving", self.runtime.advance_leaving(dt)),
-                    ("switchers", self.runtime.advance_switchers(tree, dt)),
-                    ("values", self.runtime.advance_values(tree, dt)),
-                    ("colors", self.runtime.advance_colors(tree, dt)),
-                    ("sizes", self.runtime.advance_sizes(tree, dt)),
-                    ("radii", self.runtime.advance_radii(tree, dt)),
-                    ("paddings", self.runtime.advance_paddings(tree, dt)),
-                    ("offsets", self.runtime.advance_offsets(tree, dt)),
-                    ("pins", self.runtime.advance_pins(tree, dt)),
-                    ("fractions", self.runtime.advance_fractions(tree, dt)),
-                    ("text_styles", self.runtime.advance_text_styles(tree, dt)),
-                    ("transforms", self.runtime.advance_transforms(tree, dt)),
-                    ("scroll", self.runtime.advance_scroll(&scroll_regions, dt)),
-                    ("glow", self.runtime.advance_glow(dt)),
-                    ("refresh", self.runtime.advance_refresh(&refresh_areas, dt)),
+                    ("anims", self.win.runtime.advance(dt)),
+                    ("leaving", self.win.runtime.advance_leaving(dt)),
+                    ("switchers", self.win.runtime.advance_switchers(tree, dt)),
+                    ("values", self.win.runtime.advance_values(tree, dt)),
+                    ("colors", self.win.runtime.advance_colors(tree, dt)),
+                    ("sizes", self.win.runtime.advance_sizes(tree, dt)),
+                    ("radii", self.win.runtime.advance_radii(tree, dt)),
+                    ("paddings", self.win.runtime.advance_paddings(tree, dt)),
+                    ("offsets", self.win.runtime.advance_offsets(tree, dt)),
+                    ("pins", self.win.runtime.advance_pins(tree, dt)),
+                    ("fractions", self.win.runtime.advance_fractions(tree, dt)),
+                    (
+                        "text_styles",
+                        self.win.runtime.advance_text_styles(tree, dt),
+                    ),
+                    ("transforms", self.win.runtime.advance_transforms(tree, dt)),
+                    (
+                        "scroll",
+                        self.win.runtime.advance_scroll(&scroll_regions, dt),
+                    ),
+                    ("glow", self.win.runtime.advance_glow(dt)),
+                    (
+                        "refresh",
+                        self.win.runtime.advance_refresh(&refresh_areas, dt),
+                    ),
                     ("dismiss", {
                         // A dismissed item announces itself only once its gap has
                         // finished closing. The messages are *collected* here and
                         // dispatched below: the retained tree is borrowed for the whole
                         // of this frame, and `dispatch` rebuilds it.
-                        let (moving, done) = self.runtime.advance_dismiss(&dismissables, dt);
+                        let (moving, done) = self.win.runtime.advance_dismiss(&dismissables, dt);
                         dismissed.extend(done.into_iter().filter_map(|(id, direction)| {
                             find_widget(tree, id).and_then(|widget| widget.on_dismissed(direction))
                         }));
@@ -4469,27 +4623,31 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     ("sheets", {
                         // A sheet lowered to nothing says so once it has arrived there,
                         // collected like a dismissal and for the same reason.
-                        let (moving, closed) = self.runtime.advance_sheets(&sheet_areas, dt);
+                        let (moving, closed) = self.win.runtime.advance_sheets(&sheet_areas, dt);
                         dismissed.extend(closed.into_iter().filter_map(|id| {
                             find_widget(tree, id).and_then(|widget| widget.on_sheet_dismissed())
                         }));
                         // A throw that carried a sheet to full height goes on into its
                         // list, under the list's own physics (milestone 520).
                         let mut handed = false;
-                        for (list, velocity) in self.runtime.take_sheet_handovers() {
+                        for (list, velocity) in self.win.runtime.take_sheet_handovers() {
                             if let Some(area) = scroll_regions.iter().find(|a| a.id == list) {
-                                handed |=
-                                    self.runtime
-                                        .fling_scroll(*area, area.physics, (0.0, velocity));
+                                handed |= self.win.runtime.fling_scroll(
+                                    *area,
+                                    area.physics,
+                                    (0.0, velocity),
+                                );
                             }
                         }
                         moving | handed
                     }),
                     (
                         "interactive",
-                        self.runtime.advance_interactive(&interactive_bounds, dt),
+                        self.win
+                            .runtime
+                            .advance_interactive(&interactive_bounds, dt),
                     ),
-                    ("ink", self.runtime.advance_ink(dt)),
+                    ("ink", self.win.runtime.advance_ink(dt)),
                     ("reorder", reorder_animating),
                     ("autoscroll", autoscrolling),
                     ("app", app_animating),
@@ -4519,7 +4677,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     let (ui, nodes) = frus_widgets::build_ui_inspected(
                         tree,
                         Size::new(width, height),
-                        &self.runtime,
+                        &self.win.runtime,
                         &theme,
                     );
                     if std::mem::take(&mut self.inspector_dump) {
@@ -4530,7 +4688,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     if std::mem::take(&mut self.debug.focus_dump) {
                         let focusable: Vec<WidgetId> = ui.focusable_ids().collect();
                         log::info!(target: "frus::inspector", "focus, in tab order:
-{}", dump_focus(&nodes, &focusable, self.runtime.input.focused));
+{}", dump_focus(&nodes, &focusable, self.win.runtime.input.focused));
                     }
                     #[cfg(debug_assertions)]
                     let highlighted = self.devtools_highlight(&nodes).copied();
@@ -4550,7 +4708,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     if self.inspector || self.debug.outlines {
                         frus_widgets::paint_inspector_overlay(
                             &nodes,
-                            self.inspector.then_some(self.cursor),
+                            self.inspector.then_some(self.win.cursor),
                             Size::new(width, height),
                             &theme,
                             &mut scene,
@@ -4573,14 +4731,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // Scene: logical → physical (DPI × density).
                     (ui, scene.scaled(scale))
                 } else {
-                    let ui = build_ui(tree, Size::new(width, height), &self.runtime, &theme);
+                    let ui = build_ui(tree, Size::new(width, height), &self.win.runtime, &theme);
                     // The preview of a column reorder, or a lifted item, on top of the
                     // scene.
-                    let scene = if matches!(self.drag, Some(Drag::Reorder { moved: true, .. })) {
+                    let scene = if matches!(self.win.drag, Some(Drag::Reorder { moved: true, .. }))
+                    {
                         let mut scene = ui.scene().clone();
                         self.paint_reorder_preview(&ui, &theme, &mut scene);
                         scene.scaled(scale)
-                    } else if matches!(self.drag, Some(Drag::Item { moved: true, .. })) {
+                    } else if matches!(self.win.drag, Some(Drag::Item { moved: true, .. })) {
                         let mut scene = ui.scene().clone();
                         self.paint_drag_ghost(&ui, &theme, &mut scene);
                         scene.scaled(scale)
@@ -4601,7 +4760,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     self.devtools.rainbow_frames = self.devtools.rainbow_frames.wrapping_add(1);
                     devtools::paint_rainbow(
                         &scene,
-                        self.runtime.paint_cache.borrow().last_frame_boundaries(),
+                        self.win
+                            .runtime
+                            .paint_cache
+                            .borrow()
+                            .last_frame_boundaries(),
                         self.devtools.rainbow_frames,
                         Size::new(width, height),
                         scale,
@@ -4618,22 +4781,27 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // Laid out: the components the build no longer reached are let go, and the
                 // effects it asked for run. An effect that changed something asks for the
                 // frame that shows it.
-                self.runtime.states.end_frame();
-                publish_restoration(
-                    &self.runtime,
-                    &mut self.restoration_published,
-                    #[cfg(web)]
-                    self.history.index(),
-                );
+                self.win.runtime.states.end_frame();
+                // The main window's interface is what restoration keeps.
+                if self.win.id.is_none() {
+                    publish_restoration(
+                        &self.win.runtime,
+                        &mut self.restoration_published,
+                        #[cfg(web)]
+                        self.history.index(),
+                    );
+                }
                 crate::startup::laid_out(layout_took);
                 #[cfg(web)]
-                crate::web_dev::keep(|| self.runtime.states.snapshot());
+                crate::web_dev::keep(|| self.win.runtime.states.snapshot());
                 if frus_widgets::rebuild_requested() {
                     self.request_redraw();
                 }
                 // A see-through frame starts transparent: the window's background under
                 // everything but the line the system paints (milestone 643).
-                let (scene, clean) = if self.renderer.as_ref().is_some_and(Renderer::sees_through) {
+                let see_through = self.renderer.as_ref().is_some_and(Renderer::sees_through)
+                    && self.win.surface.is_none();
+                let (scene, clean) = if see_through {
                     let line = self.system_line();
                     (
                         backdrop_under(scene, width * scale, height * scale, line),
@@ -4659,9 +4827,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // A simulated device: the application's frame inside the device's screen,
                 // the device around it (milestone 721). The clean copy is framed the same
                 // way: the device is not a debug layer.
-                let framed = |scene: Scene| match (&self.simulated, self.placement()) {
+                let framed = |scene: Scene| match (&self.win.simulated, self.placement()) {
                     (Some(simulated), Some(placement)) => {
-                        let edges = self.last_insets.padding;
+                        let edges = self.win.last_insets.padding;
                         // The status bar's icons read against what the application has
                         // under them, as a device's system decides it.
                         let icons = ui
@@ -4672,13 +4840,13 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                             .resolve(&theme)
                             .status_bar_icons;
                         let window = Size::new(
-                            size.width as f32 / self.scale.max(0.1),
-                            size.height as f32 / self.scale.max(0.1),
+                            size.width as f32 / self.win.scale.max(0.1),
+                            size.height as f32 / self.win.scale.max(0.1),
                         );
                         let framed = simulated.paint(
                             &scene,
                             placement,
-                            self.scale,
+                            self.win.scale,
                             window,
                             icons,
                             self.brightness(),
@@ -4713,12 +4881,20 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let mut device_lost = false;
                 if let Some(renderer) = self.renderer.as_mut() {
                     let render_start = timed.then(Instant::now);
-                    match renderer.render(&scene) {
+                    // Another window's surface, drawn by the same device (milestone 827).
+                    let outcome = match self.win.surface.as_mut() {
+                        Some(surface) => renderer.render_to(surface, &scene),
+                        None => renderer.render(&scene),
+                    };
+                    match outcome {
                         frus_gpu::RenderOutcome::Presented => {
                             crate::startup::presented(render_start.map(|at| at.elapsed()))
                         }
                         frus_gpu::RenderOutcome::NeedsReconfigure => {
-                            renderer.reconfigure();
+                            match self.win.surface.as_mut() {
+                                Some(surface) => renderer.reconfigure_surface(surface),
+                                None => renderer.reconfigure(),
+                            }
                         }
                         frus_gpu::RenderOutcome::DeviceLost => device_lost = true,
                         frus_gpu::RenderOutcome::Skipped => {}
@@ -4727,14 +4903,14 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // what was drawn only until the task ends.
                     #[cfg(web)]
                     if std::mem::take(&mut self.debug.page_screenshot) {
-                        if let Some(window) = self.window.as_ref() {
+                        if let Some(window) = self.win.window.as_ref() {
                             crate::web_dev::send_screenshot(window);
                         }
                     }
                     #[cfg(all(web, debug_assertions))]
                     devtools::answer_screenshots(
                         std::mem::take(&mut self.devtools.screenshots),
-                        self.window.as_deref(),
+                        self.win.window.as_deref(),
                     );
                     if let Some(at) = render_start {
                         self.frame_costs.render = at.elapsed().as_secs_f32() * 1000.0;
@@ -4748,7 +4924,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // start, which draws the interface again (milestone 686, #217).
                 if device_lost {
                     self.renderer_lost = true;
-                    if let Some(window) = self.window.as_ref() {
+                    if let Some(window) = self.win.window.as_ref() {
                         window.request_redraw();
                     }
                 }
@@ -4771,15 +4947,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let wants_animation = widget_asks || loading;
 
                 // Keep the interface, for hit testing. The tree is already retained.
-                self.ui = Some(ui);
+                self.win.ui = Some(ui);
                 // The keyboard took room from the bottom of the window: what the reader is
                 // typing in is brought back above it, by the least scroll that does it, and
                 // by the same glide Tab uses. This frame's layout is the shortened one, so
                 // the viewports asked are the ones left above the keyboard. A frame with
                 // nothing focused, or no region around what is, moves nothing.
-                let revealed = std::mem::take(&mut self.reveal_after_keyboard) && {
-                    let moves = match (self.runtime.input.focused, self.ui.as_ref()) {
-                        (Some(id), Some(ui)) => ui.reveal(id, &self.runtime),
+                let revealed = std::mem::take(&mut self.win.reveal_after_keyboard) && {
+                    let moves = match (self.win.runtime.input.focused, self.win.ui.as_ref()) {
+                        (Some(id), Some(ui)) => ui.reveal(id, &self.win.runtime),
                         // A native view holding the keyboard: its box (milestone 799).
                         #[cfg(all(android, feature = "webview"))]
                         (None, Some(ui)) => self
@@ -4787,7 +4963,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                             .and_then(|view| self.platform_views.widget_of(view))
                             .and_then(|widget| ui.platform_views().iter().find(|p| p.id == widget))
                             .map(|placement| {
-                                ui.reveal_rect(placement.rect, placement.scroll_host, &self.runtime)
+                                ui.reveal_rect(
+                                    placement.rect,
+                                    placement.scroll_host,
+                                    &self.win.runtime,
+                                )
                             })
                             .unwrap_or_default(),
                         _ => Vec::new(),
@@ -4796,11 +4976,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     // On the Web the page may pan for this keyboard instead, and then these
                     // scrolls are taken back (milestone 779).
                     #[cfg(web)]
-                    self.keyboard_reveal.record(&self.runtime, &moves);
+                    self.keyboard_reveal.record(&self.win.runtime, &moves);
                     for (area, offset) in moves {
-                        self.runtime.scroll_ballistic.remove(&area);
-                        self.runtime.scroll_velocity.remove(&area);
-                        self.runtime.scroll_target.insert(area, offset);
+                        self.win.runtime.scroll_ballistic.remove(&area);
+                        self.win.runtime.scroll_velocity.remove(&area);
+                        self.win.runtime.scroll_target.insert(area, offset);
                     }
                     moved
                 };
@@ -4813,14 +4993,18 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // shell: the frame still holds part of it here. A change is shown the way
                 // the reference shows it, on the next frame — the tree is built again,
                 // since a tooltip's bubble is decided while the tree is walked.
-                let rehovered = self.drag.is_none() && {
-                    let hovered = self.ui.as_ref().and_then(|ui| self.hover.target(ui));
-                    let changed = hovered != self.runtime.input.hovered;
-                    self.runtime.input.hovered = hovered;
+                let rehovered = self.win.drag.is_none() && {
+                    let hovered = self
+                        .win
+                        .ui
+                        .as_ref()
+                        .and_then(|ui| self.win.hover.target(ui));
+                    let changed = hovered != self.win.runtime.input.hovered;
+                    self.win.runtime.input.hovered = hovered;
                     changed
                 };
                 if rehovered {
-                    self.build_dirty = true;
+                    self.win.build_dirty = true;
                 }
                 let wants_animation = wants_animation || rehovered || revealed;
 
@@ -4828,6 +5012,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // frame's regions: a page change is worth reporting the moment it
                 // reads as one, not a frame later.
                 let paged = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.scroll_regions().to_vec())
@@ -4836,8 +5021,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // drawn where it now rests; the runtime keeps it there before anything reads
                 // the offset back — the reports below, a press, the next frame's springs.
                 // Without it the row was drawn right once and pressed wrong (milestone 533).
-                self.runtime.keep_scroll_in_range(&paged);
-                let changes = self.runtime.page_changes(&paged);
+                self.win.runtime.keep_scroll_in_range(&paged);
+                let changes = self.win.runtime.page_changes(&paged);
                 // A wheel ticks as each value passes its middle (milestone 810).
                 if changes
                     .iter()
@@ -4856,23 +5041,24 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // tried once against **this** frame's, which is where a region that has
                 // only just appeared turns up. This is the last chance they get.
                 let (_, moved_late) = apply_scroll_requests(
-                    &mut self.runtime,
+                    &mut self.win.runtime,
                     tree,
-                    std::mem::take(&mut self.retry_scroll),
+                    std::mem::take(&mut self.win.retry_scroll),
                     &paged,
                 );
                 // The same for the sheet requests: a sheet shown by the very message that
                 // asked it to move is in this frame's sheets and not the last one's.
                 let (_, sheeted_late) = {
                     let sheets = self
+                        .win
                         .ui
                         .as_ref()
                         .map(|ui| ui.sheets().to_vec())
                         .unwrap_or_default();
                     apply_sheet_requests(
-                        &mut self.runtime,
+                        &mut self.win.runtime,
                         tree,
-                        std::mem::take(&mut self.retry_sheet),
+                        std::mem::take(&mut self.win.retry_sheet),
                         &sheets,
                     )
                 };
@@ -4884,7 +5070,8 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let scrolled: Vec<A::Message> = {
                     let grain =
                         |id| find_widget(tree, id).map_or(0.0, |widget| widget.scroll_grain());
-                    self.runtime
+                    self.win
+                        .runtime
                         .scroll_changes(&paged, grain)
                         .into_iter()
                         .filter_map(|(id, position)| {
@@ -4921,9 +5108,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 #[cfg(any(desktop, web, android))]
                 {
                     let said = self
+                        .win
                         .ui
                         .as_ref()
-                        .and_then(|ui| self.live_regions.changes(ui.semantics()));
+                        .and_then(|ui| self.win.live_regions.changes(ui.semantics()));
                     if let Some(said) = said {
                         self.set_announcement(said);
                     }
@@ -4936,16 +5124,26 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 let (scale, origin) = (
                     f64::from(self.total_scale()),
                     self.placement().map_or((0.0, 0.0), |at| {
-                        let os = f64::from(self.scale);
+                        let os = f64::from(self.win.scale);
                         (f64::from(at.screen.x) * os, f64::from(at.screen.y) * os)
                     }),
                 );
                 #[cfg(desktop)]
-                if let Some(a11y) = self.a11y.as_mut() {
-                    let focus = self.runtime.input.focused;
-                    let title = self.app.title();
-                    if let Some(ui) = self.ui.as_ref() {
-                        a11y.update(ui.semantics(), focus, &title, &self.announce, scale, origin);
+                if let Some(a11y) = self.win.a11y.as_mut() {
+                    let focus = self.win.runtime.input.focused;
+                    let title = match self.win.id {
+                        Some(_) => self.win.title.clone(),
+                        None => self.app.title(),
+                    };
+                    if let Some(ui) = self.win.ui.as_ref() {
+                        a11y.update(
+                            ui.semantics(),
+                            focus,
+                            &title,
+                            &self.win.announce,
+                            scale,
+                            origin,
+                        );
                     }
                 }
                 // The field being edited gets its element (milestone 711) — before the
@@ -4957,12 +5155,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // Publish the frame's semantic tree to the DOM bridge (#18). The page's
                 // coordinates are CSS pixels, the layout's own: no scale to carry.
                 #[cfg(web)]
-                if let Some(a11y) = self.a11y.as_mut() {
-                    let focus = self.runtime.input.focused;
+                if let Some(a11y) = self.win.a11y.as_mut() {
+                    let focus = self.win.runtime.input.focused;
                     let editing = self.web_editor.as_ref().and_then(|editor| editor.editing());
-                    let title = self.app.title();
-                    if let Some(ui) = self.ui.as_ref() {
-                        a11y.update(ui.semantics(), focus, editing, &title, &self.announce);
+                    let title = match self.win.id {
+                        Some(_) => self.win.title.clone(),
+                        None => self.app.title(),
+                    };
+                    if let Some(ui) = self.win.ui.as_ref() {
+                        a11y.update(ui.semantics(), focus, editing, &title, &self.win.announce);
                     }
                 }
 
@@ -4998,17 +5199,17 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     animating || wants_animation,
                     decoration_asks,
                     self.app.decorative_frame_rate(),
-                    self.last_frame.unwrap_or_else(Instant::now),
+                    self.win.last_frame.unwrap_or_else(Instant::now),
                 ) {
                     crate::pacing::NextFrame::Now => {
-                        self.decoration_period = None;
+                        self.win.decoration_period = None;
                         self.request_redraw();
                     }
                     crate::pacing::NextFrame::At(at, period) => {
-                        self.decoration_due = Some(at);
-                        self.decoration_period = Some(period);
+                        self.win.decoration_due = Some(at);
+                        self.win.decoration_period = Some(period);
                     }
-                    crate::pacing::NextFrame::Idle => self.decoration_period = None,
+                    crate::pacing::NextFrame::Idle => self.win.decoration_period = None,
                 }
                 if let Some(start) = frame_start {
                     use crate::frame_stats::Why;
@@ -5219,7 +5420,7 @@ impl<A: Application> App<A> {
         let mut over = on_top_of(scene);
         let costs = self.debug.last_costs.as_ref().map(|(costs, _)| costs);
         // Below the status bar, where the system draws its own.
-        let top = self.last_insets.padding.top * scale;
+        let top = self.win.last_insets.padding.top * scale;
         paint_performance(
             &mut over,
             costs,
@@ -5471,7 +5672,8 @@ impl<A: Application> App<A> {
         let see_through = self.renderer.as_ref().is_some_and(Renderer::sees_through);
         // The old renderer — its surface on this window among it — goes first.
         self.renderer = None;
-        let Some(window) = self.window.clone() else {
+        // The renderer's own surface is the main window's, whichever window found it lost.
+        let Some(window) = self.main_window() else {
             return;
         };
         let size = window.inner_size();
@@ -5485,7 +5687,11 @@ impl<A: Application> App<A> {
                 pollster::block_on(Renderer::new(window.clone(), width, height))
             };
             match made {
-                Ok(renderer) => self.renderer = Some(renderer),
+                Ok(renderer) => {
+                    self.renderer = Some(renderer);
+                    // The other windows' surfaces were the old device's (milestone 827).
+                    self.remake_surfaces();
+                }
                 Err(err) => {
                     log::error!("the GPU device was lost, and no new one could be made: {err:#}")
                 }
@@ -5511,7 +5717,7 @@ impl<A: Application> App<A> {
                 }
             });
         }
-        self.build_dirty = true;
+        self.win.build_dirty = true;
         window.request_redraw();
     }
 
@@ -5573,7 +5779,7 @@ impl<A: Application> App<A> {
                 }
                 // A simulated device's keyboard held up, to see a screen under it without a
                 // field to focus (milestone 722).
-                "keyboard" => match self.simulated.as_mut() {
+                "keyboard" => match self.win.simulated.as_mut() {
                     Some(simulated) => {
                         simulated.keyboard_held = !simulated.keyboard_held;
                         log::info!(
@@ -5589,7 +5795,7 @@ impl<A: Application> App<A> {
                     ),
                 },
                 // A simulated device turned on its side and back (milestone 722).
-                "rotate" => match self.simulated.as_mut() {
+                "rotate" => match self.win.simulated.as_mut() {
                     Some(simulated) => {
                         simulated.orientation = match simulated.orientation {
                             frus_widgets::Orientation::Portrait => {
@@ -5610,7 +5816,7 @@ impl<A: Application> App<A> {
                         // writes it on the canvas and the page is turned on its side too
                         // (milestone 724).
                         #[cfg(desktop)]
-                        if let Some(window) = &self.window {
+                        if let Some(window) = &self.win.window {
                             let size = window.inner_size();
                             let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(
                                 size.height,
@@ -5650,7 +5856,7 @@ impl<A: Application> App<A> {
                     log::warn!(target: "frus::dev", "frus run asked for `{command}`, which this frus does not know")
                 }
             }
-            self.build_dirty = true;
+            self.win.build_dirty = true;
         }
     }
 
@@ -5663,8 +5869,8 @@ impl<A: Application> App<A> {
     /// it paints none (milestone 643).
     fn system_line(&self) -> f32 {
         // The line the content was told: the one its row covers.
-        match self.title_bar {
-            Some(line) if self.title_bar_on && line.system_paints => {
+        match self.win.title_bar {
+            Some(line) if self.win.title_bar_on && line.system_paints => {
                 line.height * self.total_scale()
             }
             _ => 0.0,
@@ -5677,16 +5883,16 @@ impl<A: Application> App<A> {
     /// the device's own size is the application's, and its density is the device's.
     fn total_scale(&self) -> f32 {
         if let Some(placement) = self.placement() {
-            return (self.scale * placement.zoom).max(0.01);
+            return (self.win.scale * placement.zoom).max(0.01);
         }
-        (self.scale * self.app.density()).max(0.1)
+        (self.win.scale * self.app.density()).max(0.1)
     }
 
     /// Where the simulated device sits in the window; `None` when there is none.
     fn placement(&self) -> Option<crate::simulated::Placement> {
-        let simulated = self.simulated.as_ref()?;
-        let size = self.window.as_ref()?.inner_size();
-        let scale = self.scale.max(0.1);
+        let simulated = self.win.simulated.as_ref()?;
+        let size = self.win.window.as_ref()?.inner_size();
+        let scale = self.win.scale.max(0.1);
         Some(simulated.place(Size::new(
             size.width as f32 / scale,
             size.height as f32 / scale,
@@ -5696,7 +5902,7 @@ impl<A: Application> App<A> {
     /// The application's logical point under a physical position in the window.
     fn to_logical(&self, x: f64, y: f64) -> Point {
         if let Some(placement) = self.placement() {
-            let scale = self.scale.max(0.1);
+            let scale = self.win.scale.max(0.1);
             return crate::simulated::Simulated::to_screen(
                 placement,
                 Point::new(x as f32 / scale, y as f32 / scale),
@@ -5709,7 +5915,7 @@ impl<A: Application> App<A> {
     /// The application's logical size for a window of `width` by `height` physical pixels:
     /// the simulated device's screen when there is one.
     fn logical_size(&self, width: u32, height: u32) -> (f32, f32) {
-        if let Some(simulated) = &self.simulated {
+        if let Some(simulated) = &self.win.simulated {
             let screen = simulated.screen_size();
             return (screen.width, screen.height);
         }
@@ -5734,9 +5940,9 @@ impl<A: Application> App<A> {
     /// answer to the user, which is what an application that has no settings screen means.
     fn media_query(&self, width: f32, height: f32) -> MediaQuery {
         // A simulated device reports its own density, as the device would.
-        let (ratio, density) = match &self.simulated {
+        let (ratio, density) = match &self.win.simulated {
             Some(simulated) => (simulated.profile.pixel_ratio, 1.0),
-            None => (self.scale, self.app.density()),
+            None => (self.win.scale, self.app.density()),
         };
         MediaQuery::new(Size::new(width, height))
             .with_device_pixel_ratio(ratio)
@@ -5748,8 +5954,8 @@ impl<A: Application> App<A> {
                     .accessibility
                     .with_overrides(self.app.accessibility()),
             )
-            .with_insets(self.last_insets)
-            .with_title_bar(self.title_bar)
+            .with_insets(self.win.last_insets)
+            .with_title_bar(self.win.title_bar)
     }
 
     /// **Shares the window's title bar line with the content** when the frame asks for it,
@@ -5758,7 +5964,7 @@ impl<A: Application> App<A> {
     #[cfg(windows)]
     fn sync_title_bar(&mut self) {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let Some(window) = self.window.clone() else {
+        let Some(window) = self.win.window.clone() else {
             return;
         };
         let hwnd = match window.window_handle().map(|h| h.as_raw()) {
@@ -5768,9 +5974,11 @@ impl<A: Application> App<A> {
             _ => return,
         };
         // A simulated device has no title bar to share: the window keeps the system's.
-        let wants =
-            self.simulated.is_none() && self.ui.as_ref().is_some_and(|ui| ui.wants_title_bar());
-        if wants != self.title_bar_on {
+        // Only the main window shares its line (milestone 827).
+        let wants = self.win.id.is_none()
+            && self.win.simulated.is_none()
+            && self.win.ui.as_ref().is_some_and(|ui| ui.wants_title_bar());
+        if wants != self.win.title_bar_on {
             // SAFETY: the window is alive and was made on this thread.
             unsafe {
                 if wants {
@@ -5781,13 +5989,13 @@ impl<A: Application> App<A> {
                     crate::title_bar::disable(hwnd);
                 }
             }
-            self.title_bar_on = wants;
+            self.win.title_bar_on = wants;
         }
-        let next = if self.title_bar_on {
+        let next = if self.win.title_bar_on {
             let scale = self.total_scale();
             let band = crate::title_bar::height() as f32 / scale;
             // What the content has on the line is its own; the rest moves the window.
-            if let Some(ui) = &self.ui {
+            if let Some(ui) = &self.win.ui {
                 let to_px = |r: frus_widgets::Rect| windows_sys::Win32::Foundation::RECT {
                     left: (r.x * scale).floor() as i32,
                     top: (r.y * scale).floor() as i32,
@@ -5862,30 +6070,31 @@ impl<A: Application> App<A> {
         } else {
             None
         };
-        if next != self.title_bar {
+        if next != self.win.title_bar {
             log::debug!(
                 target: "frus::title_bar",
                 "the line: {:?}",
                 next.map(|line| (line.height, line.buttons, line.active, line.system_paints))
             );
-            self.title_bar = next;
-            self.build_dirty = true;
+            self.win.title_bar = next;
+            self.win.build_dirty = true;
             self.request_redraw();
         }
     }
 
     /// The current layout direction; RTL flips both the layout and the gestures.
     fn is_rtl(&self) -> bool {
-        self.themes.displayed(&self.app).direction.is_rtl()
+        self.win.themes.displayed(&self.app).direction.is_rtl()
     }
 
     /// The window's **logical** width, in px, for the edge thresholds.
     fn logical_width(&self) -> f32 {
-        if let Some(simulated) = &self.simulated {
+        if let Some(simulated) = &self.win.simulated {
             return simulated.screen_size().width;
         }
         let scale = self.total_scale();
-        self.window
+        self.win
+            .window
             .as_ref()
             .map(|w| w.inner_size().width as f32 / scale)
             .unwrap_or(1.0)
@@ -5989,11 +6198,13 @@ impl<A: Application> App<A> {
         // Over an interactive viewport the wheel **zooms**, anchored at the
         // pointer and bounded by the widget's min and max scales.
         if let Some((id, viewport)) = self
+            .win
             .ui
             .as_ref()
-            .and_then(|ui| ui.interactive_at(self.cursor))
+            .and_then(|ui| ui.interactive_at(self.win.cursor))
         {
             let (min, max) = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -6002,11 +6213,11 @@ impl<A: Application> App<A> {
             // Wheel up (`dy > 0`) zooms in, in gentle steps of about 1.1× a notch.
             let factor = (1.0 + dy * 0.1 / SCROLL_SPEED).clamp(0.2, 5.0);
             // Zooming cuts off a fling in progress.
-            self.runtime.interactive_velocity.remove(&id);
-            let view = self.runtime.interactive.entry(id).or_default();
+            self.win.runtime.interactive_velocity.remove(&id);
+            let view = self.win.runtime.interactive.entry(id).or_default();
             // Zoom anchored at the pointer, then bounded to the frame.
             *view = view
-                .zoom_at(factor, self.cursor, min, max)
+                .zoom_at(factor, self.win.cursor, min, max)
                 .clamped(viewport);
             self.request_redraw();
             return;
@@ -6015,9 +6226,9 @@ impl<A: Application> App<A> {
         // the same way: an area with everything already in sight takes no offset,
         // and the notch belongs to whatever is behind it.
         let hit = {
-            let scroll = &self.runtime.scroll;
-            self.ui.as_ref().and_then(|ui| {
-                ui.scroll_chain(self.cursor).find(|area| {
+            let scroll = &self.win.runtime.scroll;
+            self.win.ui.as_ref().and_then(|ui| {
+                ui.scroll_chain(self.win.cursor).find(|area| {
                     area.accepts_user_offset(scroll.get(&area.id).copied().unwrap_or((0.0, 0.0)))
                 })
             })
@@ -6036,21 +6247,31 @@ impl<A: Application> App<A> {
             };
             // A notch of the wheel is a new intent: it takes over from the
             // momentum of the last gesture.
-            self.runtime.stop_scroll_fling(id);
-            let current = self.runtime.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
+            self.win.runtime.stop_scroll_fling(id);
+            let current = self
+                .win
+                .runtime
+                .scroll
+                .get(&id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
             // A screen delta into offsets: the content moves opposite the number,
             // and a reversed axis counts from the other end. One function, so a
             // reversed area is right at every one of the places this happens.
             let (ddx, ddy) = area.offset_delta((dx, dy));
-            let target = self.runtime.scroll_target.entry(id).or_insert(current);
+            let target = self.win.runtime.scroll_target.entry(id).or_insert(current);
             let (wanted_x, wanted_y) = (target.0 + ddx, target.1 + ddy);
             target.0 = wanted_x.clamp(-over, area.max_x + over);
             target.1 = wanted_y.clamp(-over, area.max_y + over);
             let refused = (wanted_x - target.0, wanted_y - target.1);
-            self.runtime.scroll_velocity.entry(id).or_insert((0.0, 0.0));
+            self.win
+                .runtime
+                .scroll_velocity
+                .entry(id)
+                .or_insert((0.0, 0.0));
             // A notch that asks to go past the end deserves the same
             // acknowledgement a finger gets: the wheel is a gesture too.
-            let cursor = self.cursor;
+            let cursor = self.win.cursor;
             for (refused, vertical, extent) in [
                 (refused.0, false, area.viewport.width),
                 (refused.1, true, area.viewport.height),
@@ -6060,19 +6281,26 @@ impl<A: Application> App<A> {
                 }
                 let edge = area.refused_edge(vertical, refused);
                 let (offset, cross) = frus_widgets::glow_cross_axis(area.viewport, edge, cursor);
-                self.runtime
-                    .glow_pull(id, area.overscroll, edge, refused, extent, offset, cross);
+                self.win.runtime.glow_pull(
+                    id,
+                    area.overscroll,
+                    edge,
+                    refused,
+                    extent,
+                    offset,
+                    cross,
+                );
                 // A wheel has no "lift off", so the pull is released at once
                 // and simply fades — otherwise it would hang until the hold
                 // timer expired.
-                self.runtime.glow_scroll_end(id);
+                self.win.runtime.glow_scroll_end(id);
             }
             self.request_redraw();
         }
     }
 
     fn request_redraw(&self) {
-        if let Some(window) = &self.window {
+        if let Some(window) = &self.win.window {
             window.request_redraw();
         }
     }
@@ -6087,7 +6315,7 @@ impl<A: Application> App<A> {
         event_loop: &ActiveEventLoop,
     ) -> Option<crate::window_memory::Placement> {
         if !self.app.remember_window()
-            || self.simulated.is_some()
+            || self.win.simulated.is_some()
             || crate::dev::restore_window().is_some()
         {
             return None;
@@ -6109,7 +6337,7 @@ impl<A: Application> App<A> {
         window: &Window,
         remembered: Option<crate::window_memory::Placement>,
     ) {
-        if !self.app.remember_window() || self.simulated.is_some() {
+        if !self.app.remember_window() || self.win.simulated.is_some() {
             return;
         }
         let Some(path) = crate::window_memory::path() else {
@@ -6123,7 +6351,7 @@ impl<A: Application> App<A> {
             })
             .or(remembered);
         if let Some(placement) = placement {
-            self.window_memory = Some((path, crate::window_memory::Tracker::new(placement)));
+            self.win.window_memory = Some((path, crate::window_memory::Tracker::new(placement)));
         }
     }
 
@@ -6132,17 +6360,17 @@ impl<A: Application> App<A> {
     /// knows it is maximized, and the screen's bounds were taken for the window's own.
     #[cfg(desktop)]
     fn window_placed(&mut self) {
-        self.window_moved = true;
+        self.win.window_moved = true;
     }
 
     /// Notes the window's placement, if it moved or changed size since it was last noted.
     #[cfg(desktop)]
     fn note_window(&mut self) {
-        if !std::mem::take(&mut self.window_moved) {
+        if !std::mem::take(&mut self.win.window_moved) {
             return;
         }
         let (Some(window), Some((_, tracker))) =
-            (self.window.as_ref(), self.window_memory.as_mut())
+            (self.win.window.as_ref(), self.win.window_memory.as_mut())
         else {
             return;
         };
@@ -6161,9 +6389,9 @@ impl<A: Application> App<A> {
     #[cfg(desktop)]
     fn keep_window(&mut self) {
         // The last word: what it is now, unless it is minimized.
-        self.window_moved = true;
+        self.win.window_moved = true;
         self.note_window();
-        if let Some((path, tracker)) = &self.window_memory {
+        if let Some((path, tracker)) = &self.win.window_memory {
             if let Err(err) = crate::window_memory::save(path, &tracker.placement()) {
                 log::warn!(
                     "the window's place could not be kept in {}: {err}",
@@ -6176,7 +6404,7 @@ impl<A: Application> App<A> {
     /// Where the system's cursor is, read from the system: while it runs a drag of files
     /// the window hears no pointer movement. `None` where it cannot be read.
     fn system_cursor(&self) -> Option<Point> {
-        let window = self.window.as_ref()?;
+        let window = self.win.window.as_ref()?;
         let physical = crate::file_drop::cursor_in(window, 1.0)?;
         Some(self.to_logical(physical.x as f64, physical.y as f64))
     }
@@ -6184,7 +6412,8 @@ impl<A: Application> App<A> {
     /// One file of a drag from outside the application, held over the window or dropped
     /// on it, the cursor at `at` when that is known.
     fn file_event(&mut self, path: std::path::PathBuf, dropping: bool, at: Option<Point>) {
-        self.file_drag
+        self.win
+            .file_drag
             .get_or_insert_with(Default::default)
             .add(path, dropping);
         self.files_moved(at);
@@ -6193,29 +6422,29 @@ impl<A: Application> App<A> {
     /// Files held over the window, the cursor at `at` when that is known: the target
     /// they would land on lights up, as one does under an item carried from inside.
     fn files_moved(&mut self, at: Option<Point>) {
-        let Some(drag) = self.file_drag.as_ref() else {
+        let Some(drag) = self.win.file_drag.as_ref() else {
             return;
         };
-        let over = match (self.ui.as_ref(), self.tree.as_ref()) {
+        let over = match (self.win.ui.as_ref(), self.win.tree.as_ref()) {
             (Some(ui), Some(tree)) => {
-                crate::file_drop::target(ui, tree.as_ref(), &drag.paths, at, self.cursor)
+                crate::file_drop::target(ui, tree.as_ref(), &drag.paths, at, self.win.cursor)
             }
             _ => None,
         };
         if drag.over != over {
-            if let Some(drag) = self.file_drag.as_mut() {
+            if let Some(drag) = self.win.file_drag.as_mut() {
                 drag.over = over;
             }
-            self.runtime.drag_over = over;
+            self.win.runtime.drag_over = over;
             self.request_redraw();
         }
     }
 
     /// The files were taken away again without being dropped.
     fn files_left(&mut self) {
-        if let Some(drag) = self.file_drag.take() {
+        if let Some(drag) = self.win.file_drag.take() {
             if drag.over.is_some() {
-                self.runtime.drag_over = None;
+                self.win.runtime.drag_over = None;
                 self.request_redraw();
             }
         }
@@ -6224,17 +6453,18 @@ impl<A: Application> App<A> {
     /// Hands dropped files to the target they landed on, all together: the system names
     /// them one event at a time, and this runs once the loop has had every one.
     fn deliver_dropped_files(&mut self) {
-        if !self.file_drag.as_ref().is_some_and(|drag| drag.dropped) {
+        if !self.win.file_drag.as_ref().is_some_and(|drag| drag.dropped) {
             return;
         }
-        let Some(drag) = self.file_drag.take() else {
+        let Some(drag) = self.win.file_drag.take() else {
             return;
         };
         if drag.over.is_some() {
-            self.runtime.drag_over = None;
+            self.win.runtime.drag_over = None;
         }
         let message = drag.over.and_then(|id| {
-            self.tree
+            self.win
+                .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
                 .and_then(|widget| widget.on_files_dropped(drag.paths.clone()))
@@ -6272,25 +6502,27 @@ impl<A: Application> App<A> {
         let kind = event.kind;
         // The raw events first, against the frame the pointer is over: a listener hears the
         // press before anything it leads to rebuilds the tree (milestone 586).
-        self.cursor = event.position;
+        self.win.cursor = event.position;
         self.route_listeners(kind, event.touch);
         self.route_pointer_event(event);
-        self.pointer_held = match kind {
+        self.win.pointer_held = match kind {
             PointerKind::Down => true,
             PointerKind::Up | PointerKind::Cancel => false,
-            PointerKind::Move => self.pointer_held,
+            PointerKind::Move => self.win.pointer_held,
         };
         self.sync_regions(kind == PointerKind::Move);
     }
 
     /// Routes one pointer event: see [`pointer_event`](Self::pointer_event).
     fn route_pointer_event(&mut self, event: PointerEvent) {
-        self.cursor = event.position;
-        self.hover.event(event.kind, event.position, event.touch);
+        self.win.cursor = event.position;
+        self.win
+            .hover
+            .event(event.kind, event.position, event.touch);
         self.follow_hover_cards(event.touch);
         // Whether the gesture under way could still end as a tap, before this event moves
         // it on: the press is shared with it until it cannot (milestone 534).
-        let could_tap = gesture_was_a_tap(self.drag.as_ref());
+        let could_tap = gesture_was_a_tap(self.win.drag.as_ref());
         match event.kind {
             PointerKind::Down => {
                 // What is under the pointer **now**: a finger has no move before its
@@ -6300,22 +6532,24 @@ impl<A: Application> App<A> {
                 self.note_input(false);
                 self.pointer_down(event.touch);
                 let (long_press, lift) = hold_candidates(
-                    self.drag.as_ref(),
-                    self.ui.as_ref(),
-                    self.tree.as_deref(),
-                    self.cursor,
+                    self.win.drag.as_ref(),
+                    self.win.ui.as_ref(),
+                    self.win.tree.as_deref(),
+                    self.win.cursor,
                 );
-                self.long_press_msg = long_press;
-                self.pending_lift = lift;
-                let interested = self.long_press_msg.is_some()
-                    || self.pending_lift.is_some()
-                    || self.pending_reorder.is_some()
-                    || self.pending_word.is_some()
-                    || self.pending_region_hold;
-                self.press.down(self.cursor, Instant::now(), interested);
+                self.win.long_press_msg = long_press;
+                self.win.pending_lift = lift;
+                let interested = self.win.long_press_msg.is_some()
+                    || self.win.pending_lift.is_some()
+                    || self.win.pending_reorder.is_some()
+                    || self.win.pending_word.is_some()
+                    || self.win.pending_region_hold;
+                self.win
+                    .press
+                    .down(self.win.cursor, Instant::now(), interested);
             }
             PointerKind::Move => {
-                self.press.moved(self.cursor);
+                self.win.press.moved(self.win.cursor);
                 self.pointer_move();
                 // The inspector follows the pointer to highlight, so it redraws even
                 // over inert widgets, which have no hover animation.
@@ -6326,67 +6560,69 @@ impl<A: Application> App<A> {
             PointerKind::Up => {
                 // The recogniser is always told, but a lifted item owes a drop: the
                 // long press that started it must not also eat its ending.
-                let swallow = self.press.up();
-                self.pending_lift = None;
-                self.pending_reorder = None;
-                self.pending_word = None;
-                self.pending_region_hold = false;
+                let swallow = self.win.press.up();
+                self.win.pending_lift = None;
+                self.win.pending_reorder = None;
+                self.win.pending_word = None;
+                self.win.pending_region_hold = false;
                 // A row lifted by the hold owes its drop for the same reason a lifted
                 // item does: the release is what says where it goes.
                 if swallow
                     && !matches!(
-                        self.drag,
+                        self.win.drag,
                         Some(Drag::Item { moved: true, .. } | Drag::Reorder { moved: true, .. })
                     )
                 {
                     // The long press evicted the tap, so the release is swallowed.
-                    self.drag = None;
-                    self.pending_tap_focus = None;
-                    self.pending_field_press = None;
-                    self.runtime.input.pressed = None;
+                    self.win.drag = None;
+                    self.win.pending_tap_focus = None;
+                    self.win.pending_field_press = None;
+                    self.win.runtime.input.pressed = None;
                     self.request_redraw();
                 } else {
                     self.pointer_up();
                 }
             }
             PointerKind::Cancel => {
-                self.press.cancel();
+                self.win.press.cancel();
                 // A cancelled press was no tap: the focus stays (milestone 750), and no caret
                 // is placed (milestone 752).
-                self.pending_tap_focus = None;
-                self.pending_field_press = None;
-                self.pending_lift = None;
-                self.pending_reorder = None;
-                self.pending_word = None;
-                self.pending_region_hold = false;
+                self.win.pending_tap_focus = None;
+                self.win.pending_field_press = None;
+                self.win.pending_lift = None;
+                self.win.pending_reorder = None;
+                self.win.pending_word = None;
+                self.win.pending_region_hold = false;
                 // A cancelled gesture still owes the offset back, or the region
                 // would stay frozen under a finger that is no longer there.
-                if let Some(Drag::Dismiss { item, .. }) = self.drag {
+                if let Some(Drag::Dismiss { item, .. }) = self.win.drag {
                     // A cancelled swipe asks for nothing: it goes back, and never dismisses
                     // or performs an action, however far it had already travelled.
-                    self.runtime.swipe_release(&item, 0.0, 0.0, true);
+                    self.win.runtime.swipe_release(&item, 0.0, 0.0, true);
                 }
                 // A value a cancelled drag held settles back, and says nothing.
-                if let Some(Drag::Gesture { id, .. }) = self.drag {
-                    self.runtime.release_value(id);
+                if let Some(Drag::Gesture { id, .. }) = self.win.drag {
+                    self.win.runtime.release_value(id);
                 }
-                if let Some(Drag::Scroll { id, .. }) = self.drag {
-                    self.runtime.release_scroll(id);
-                    self.runtime.glow_scroll_end(id);
+                if let Some(Drag::Scroll { id, .. }) = self.win.drag {
+                    self.win.runtime.release_scroll(id);
+                    self.win.runtime.glow_scroll_end(id);
                     // A cancelled gesture asks for nothing: the indicator slides back
                     // rather than promising a refresh nobody requested.
                     if let Some(host) = self.refresh_host_of(id) {
-                        self.runtime.refresh_cancel(host);
+                        self.win.runtime.refresh_cancel(host);
                     }
                 }
                 // A sheet under a cancelled finger settles from where it was left.
-                let sheet = match self.drag {
+                let sheet = match self.win.drag {
                     Some(Drag::Sheet { id, available, .. }) => self
+                        .win
                         .ui
                         .as_ref()
                         .and_then(|ui| ui.sheet(id))
                         .map(|sheet| (sheet.id, sheet.spec.clone(), available)),
                     Some(Drag::Scroll { id, .. }) => self
+                        .win
                         .ui
                         .as_ref()
                         .and_then(|ui| ui.sheet_holding(id))
@@ -6394,20 +6630,22 @@ impl<A: Application> App<A> {
                     _ => None,
                 };
                 if let Some((id, spec, available)) = sheet {
-                    self.runtime.sheet_release(id, &spec, available, 0.0, None);
+                    self.win
+                        .runtime
+                        .sheet_release(id, &spec, available, 0.0, None);
                 }
-                self.drag = None;
-                self.runtime.input.pressed = None;
+                self.win.drag = None;
+                self.win.runtime.input.pressed = None;
                 self.request_redraw();
             }
         }
         // A press a gesture has taken, or one whose pointer has gone, is let go of — after
         // the routing, which is what reads it (milestone 534).
         if settle_press(
-            &mut self.runtime.input,
+            &mut self.win.runtime.input,
             event.kind,
             could_tap,
-            self.drag.as_ref(),
+            self.win.drag.as_ref(),
             event.touch,
         ) {
             self.request_redraw();
@@ -6441,7 +6679,7 @@ impl<A: Application> App<A> {
     /// before it, and the next turn reads whatever that let through. A hold is decided a
     /// turn late, which on a device is a frame.
     fn decide_hold(&mut self) -> bool {
-        if !self.press.poll(self.previous_turn_began) {
+        if !self.win.press.poll(self.previous_turn_began) {
             return false;
         }
         self.hold_deadline_reached();
@@ -6455,17 +6693,17 @@ impl<A: Application> App<A> {
         // from the same gesture, which is never what anyone meant. **The lift
         // wins** — it changes what the rest of the gesture means, and the message
         // would be acting on something the finger is still holding.
-        let lifting = self.pending_lift.is_some() || self.pending_reorder.is_some();
+        let lifting = self.win.pending_lift.is_some() || self.win.pending_reorder.is_some();
         // A hold in a text field selects the word under the finger (milestone 511),
         // and is that — not also the long press of whatever the field sits in.
-        let word = self.pending_word.take();
+        let word = self.win.pending_word.take();
         // A hold on words in a selection area selects the word, unless something held asked
         // for the hold first: a lift, a field, a widget's own long press.
-        let region = std::mem::take(&mut self.pending_region_hold)
+        let region = std::mem::take(&mut self.win.pending_region_hold)
             && !lifting
             && word.is_none()
-            && self.long_press_msg.is_none();
-        if let Some(message) = self.long_press_msg.take() {
+            && self.win.long_press_msg.is_none();
+        if let Some(message) = self.win.long_press_msg.take() {
             if !lifting && word.is_none() {
                 self.dispatch(message);
             }
@@ -6473,9 +6711,9 @@ impl<A: Application> App<A> {
         if let Some(id) = word {
             // A finger held on a field: the focus and the caret it put off are placed now,
             // and the field takes the gesture from the scroll it was sharing (milestone 752).
-            if self.pending_field_press.is_some() {
-                if let Some(Drag::Scroll { id: area, .. }) = self.drag.take() {
-                    self.runtime.release_scroll(area);
+            if self.win.pending_field_press.is_some() {
+                if let Some(Drag::Scroll { id: area, .. }) = self.win.drag.take() {
+                    self.win.runtime.release_scroll(area);
                 }
                 self.place_field_press();
             }
@@ -6485,22 +6723,22 @@ impl<A: Application> App<A> {
         if region && self.select_region_word_held() {
             self.long_press_feedback();
             // The page under the finger stops being scrolled by it: the hold was a selection.
-            if let Some(Drag::Scroll { id, .. }) = self.drag {
-                self.runtime.release_scroll(id);
+            if let Some(Drag::Scroll { id, .. }) = self.win.drag {
+                self.win.runtime.release_scroll(id);
             }
         }
-        let lift = self.pending_lift.take();
-        let reorder = self.pending_reorder.take();
+        let lift = self.win.pending_lift.take();
+        let reorder = self.win.pending_reorder.take();
         // The scroll hands the gesture over to what the hold lifted.
         if lift.is_some() || reorder.is_some() {
-            if let Some(Drag::Scroll { id, .. }) = self.drag {
-                self.runtime.release_scroll(id);
+            if let Some(Drag::Scroll { id, .. }) = self.win.drag {
+                self.win.runtime.release_scroll(id);
             }
         }
-        self.drag = drag_after_hold(self.drag.take(), lift, reorder, self.cursor);
-        if matches!(self.drag, Some(Drag::Reorder { .. })) {
-            self.reorder_x = self.cursor.x;
-            self.reorder_y = self.cursor.y;
+        self.win.drag = drag_after_hold(self.win.drag.take(), lift, reorder, self.win.cursor);
+        if matches!(self.win.drag, Some(Drag::Reorder { .. })) {
+            self.win.reorder_x = self.win.cursor.x;
+            self.win.reorder_y = self.win.cursor.y;
         }
         self.request_redraw();
     }
@@ -6508,7 +6746,7 @@ impl<A: Application> App<A> {
     /// A long press selected text: the system's feedback for it — Android's long-press
     /// vibration — unless the application's theme turned it off (milestone 777).
     fn long_press_feedback(&self) {
-        let theme = self.themes.displayed(&self.app);
+        let theme = self.win.themes.displayed(&self.app);
         crate::haptics::gesture_feedback(
             &theme,
             crate::haptics::long_press_feedback(crate::haptics::system_platform()),
@@ -6518,7 +6756,7 @@ impl<A: Application> App<A> {
     /// A wheel's value passed its middle: the platform's tick, unless the application's theme
     /// turned feedback off (milestone 810).
     fn wheel_tick_feedback(&self) {
-        let theme = self.themes.displayed(&self.app);
+        let theme = self.win.themes.displayed(&self.app);
         crate::haptics::gesture_feedback(
             &theme,
             crate::haptics::wheel_tick_feedback(crate::haptics::system_platform()),
@@ -6529,21 +6767,25 @@ impl<A: Application> App<A> {
     /// live-reload poll, the caret's next turn, the next look at where files being
     /// dragged over the window are — and otherwise wait outright.
     fn idle_control_flow(&self) -> ControlFlow {
-        let press = self.press.deadline();
+        let press = self.win.press.deadline();
         let reload = self.reload.as_ref().map(|w| w.deadline());
         // Twice a second while a field has the caret and the window is in front, and never
         // otherwise (milestone 513).
         let caret = (self.lifecycle == Lifecycle::Resumed)
-            .then(|| self.caret.next_toggle(Instant::now()))
+            .then(|| self.win.caret.next_toggle(Instant::now()))
             .flatten();
         // A first tap that may still become a double tap is sent when its wait is over.
-        let tap = self.pending_tap.as_ref().map(|p| p.at + DOUBLE_TAP_TIMEOUT);
+        let tap = self
+            .win
+            .pending_tap
+            .as_ref()
+            .map(|p| p.at + DOUBLE_TAP_TIMEOUT);
         // Files held over the window, where the system's cursor can be read: nothing else
         // says when they move from one target to another (milestone 695).
-        let files =
-            (cfg!(windows) && self.file_drag.is_some()).then(|| Instant::now() + FILE_DRAG_POLL);
+        let files = (cfg!(windows) && self.win.file_drag.is_some())
+            .then(|| Instant::now() + FILE_DRAG_POLL);
         // The next frame of decoration, when nothing else moves (milestone 783).
-        let decoration = self.decoration_due;
+        let decoration = self.win.decoration_due;
         match [press, reload, caret, tap, files, decoration]
             .into_iter()
             .flatten()
@@ -6559,14 +6801,20 @@ impl<A: Application> App<A> {
     /// typing, which has no caret to blink.
     fn caret_signature(&self) -> Option<crate::caret::Signature> {
         use std::hash::{Hash, Hasher};
-        let field = self.runtime.input.focused?;
-        let widget = find_widget(self.tree.as_ref()?.as_ref(), field)?;
+        let field = self.win.runtime.input.focused?;
+        let widget = find_widget(self.win.tree.as_ref()?.as_ref(), field)?;
         let text = widget.text_value()?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         Some(crate::caret::Signature {
             field,
-            edit: self.runtime.edits.get(&field).copied().unwrap_or_default(),
+            edit: self
+                .win
+                .runtime
+                .edits
+                .get(&field)
+                .copied()
+                .unwrap_or_default(),
             value: hasher.finish(),
         })
     }
@@ -6574,7 +6822,7 @@ impl<A: Application> App<A> {
     /// Pointer movement, mouse or finger: continues a drag under way, and otherwise
     /// updates the hover.
     fn pointer_move(&mut self) {
-        if self.drag.is_some() {
+        if self.win.drag.is_some() {
             self.handle_drag();
             return;
         }
@@ -6589,10 +6837,11 @@ impl<A: Application> App<A> {
     /// came onto or left one, or a finger touched outside an open one: a card's delay starts
     /// in that frame (milestone 809).
     fn follow_hover_cards(&mut self, touch: bool) {
-        let pointer = self.hover.at();
-        self.runtime.input.pointer = pointer;
-        self.runtime.input.pointer_touch = touch;
+        let pointer = self.win.hover.at();
+        self.win.runtime.input.pointer = pointer;
+        self.win.runtime.input.pointer_touch = touch;
         if self
+            .win
             .ui
             .as_ref()
             .is_some_and(|ui| ui.hover_cards_changed(pointer, touch))
@@ -6607,9 +6856,13 @@ impl<A: Application> App<A> {
     /// an id is a position in the tree, and the same position on the next screen is a
     /// different widget (milestone 505).
     fn sync_hover(&mut self) -> Option<WidgetId> {
-        let hovered = self.ui.as_ref().and_then(|ui| self.hover.target(ui));
-        if hovered != self.runtime.input.hovered {
-            self.runtime.input.hovered = hovered;
+        let hovered = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| self.win.hover.target(ui));
+        if hovered != self.win.runtime.input.hovered {
+            self.win.runtime.input.hovered = hovered;
             self.request_redraw();
         }
         hovered
@@ -6633,25 +6886,29 @@ impl<A: Application> App<A> {
     /// it lifts, wherever it goes; a mouse moving with nothing held, to those under it.
     fn route_listeners(&mut self, kind: PointerKind, touch: bool) {
         use frus_widgets::ListenerEventKind as Raw;
-        let at = self.cursor;
+        let at = self.win.cursor;
         let heard: Vec<(WidgetId, Rect, Raw)> = match kind {
             PointerKind::Down => {
-                self.captured = self
+                self.win.captured = self
+                    .win
                     .ui
                     .as_ref()
                     .map(|ui| ui.pointer_listeners_at(at))
                     .unwrap_or_default();
-                self.captured
+                self.win
+                    .captured
                     .iter()
                     .map(|(id, rect)| (*id, *rect, Raw::Down))
                     .collect()
             }
-            PointerKind::Move if self.pointer_held => self
+            PointerKind::Move if self.win.pointer_held => self
+                .win
                 .captured
                 .iter()
                 .map(|(id, rect)| (*id, *rect, Raw::Move))
                 .collect(),
             PointerKind::Move if !touch => self
+                .win
                 .ui
                 .as_ref()
                 .map(|ui| ui.pointer_listeners_at(at))
@@ -6666,7 +6923,7 @@ impl<A: Application> App<A> {
                 } else {
                     Raw::Cancel
                 };
-                std::mem::take(&mut self.captured)
+                std::mem::take(&mut self.win.captured)
                     .into_iter()
                     .map(|(id, rect)| (id, rect, raw))
                     .collect()
@@ -6680,7 +6937,8 @@ impl<A: Application> App<A> {
                     local: Point::new(at.x - rect.x, at.y - rect.y),
                     touch,
                 };
-                self.tree
+                self.win
+                    .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), id))
                     .map(|widget| widget.on_pointer_event(event))
@@ -6697,8 +6955,8 @@ impl<A: Application> App<A> {
     /// left, innermost first, an enter for each it has come into, outermost first, and — when
     /// the pointer `moved` with nothing held — a move for each it is still in.
     fn sync_regions(&mut self, moved: bool) {
-        let point = self.hover.at();
-        let now: Vec<(WidgetId, Rect)> = match (point, self.ui.as_ref()) {
+        let point = self.win.hover.at();
+        let now: Vec<(WidgetId, Rect)> = match (point, self.win.ui.as_ref()) {
             (Some(point), Some(ui)) => ui
                 .hover_regions_at(point)
                 .into_iter()
@@ -6706,9 +6964,9 @@ impl<A: Application> App<A> {
                 .collect(),
             _ => Vec::new(),
         };
-        let at = point.unwrap_or(self.cursor);
+        let at = point.unwrap_or(self.win.cursor);
         let local = |rect: Rect| Point::new(at.x - rect.x, at.y - rect.y);
-        let before = std::mem::replace(&mut self.entered, now.clone());
+        let before = std::mem::replace(&mut self.win.entered, now.clone());
         let mut events = Vec::new();
         for (id, rect) in &before {
             if !now.iter().any(|(n, _)| n == id) {
@@ -6728,7 +6986,7 @@ impl<A: Application> App<A> {
                         local: local(*rect),
                     },
                 ));
-            } else if moved && !self.pointer_held {
+            } else if moved && !self.win.pointer_held {
                 events.push((
                     *id,
                     frus_widgets::HoverEvent::Move {
@@ -6740,7 +6998,8 @@ impl<A: Application> App<A> {
         let messages: Vec<_> = events
             .into_iter()
             .filter_map(|(id, event)| {
-                self.tree
+                self.win
+                    .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), id))
                     .and_then(|widget| widget.on_hover_event(event))
@@ -6759,14 +7018,15 @@ impl<A: Application> App<A> {
     fn region_cursor(&self, requested: Option<UiCursor>) -> UiCursor {
         requested
             .or_else(|| {
-                let point = self.hover.at()?;
-                let (id, _) = self.ui.as_ref()?.focus_hit(point)?;
-                let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+                let point = self.win.hover.at()?;
+                let (id, _) = self.win.ui.as_ref()?.focus_hit(point)?;
+                let widget = find_widget(self.win.tree.as_ref()?.as_ref(), id)?;
                 is_text_field(widget).then_some(UiCursor::Text)
             })
             .or_else(|| {
-                self.hover.at().and_then(|point| {
-                    self.ui
+                self.win.hover.at().and_then(|point| {
+                    self.win
+                        .ui
                         .as_ref()?
                         .hover_regions_at(point)
                         .into_iter()
@@ -6781,17 +7041,17 @@ impl<A: Application> App<A> {
     /// `frus_widgets::Cursor` into winit's.
     fn update_cursor_icon(&mut self, hovered: Option<WidgetId>) {
         let requested = hovered.and_then(|id| {
-            let rect = self.ui.as_ref()?.widget_rect(id)?;
-            let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+            let rect = self.win.ui.as_ref()?.widget_rect(id)?;
+            let widget = find_widget(self.win.tree.as_ref()?.as_ref(), id)?;
             widget.cursor_icon(
-                self.cursor.x - rect.x,
-                self.cursor.y - rect.y,
+                self.win.cursor.x - rect.x,
+                self.win.cursor.y - rect.y,
                 rect.width,
                 rect.height,
             )
         });
         let shown = self.region_cursor(requested);
-        if let Some(window) = &self.window {
+        if let Some(window) = &self.win.window {
             window.set_cursor_visible(shown != UiCursor::None);
             window.set_cursor(cursor_icon(shown));
         }
@@ -6799,49 +7059,50 @@ impl<A: Application> App<A> {
         // while it hovers an interactive sub-region, that is, while cursor_icon answered.
         // A change repaints — the status hash includes hover_cursor — so the halo
         // follows the pointer or goes away.
-        let hover_cursor = requested.map(|_| self.cursor);
-        if hover_cursor != self.runtime.input.hover_cursor {
-            self.runtime.input.hover_cursor = hover_cursor;
+        let hover_cursor = requested.map(|_| self.win.cursor);
+        if hover_cursor != self.win.runtime.input.hover_cursor {
+            self.win.runtime.input.hover_cursor = hover_cursor;
             self.request_redraw();
         }
     }
 
-    /// A pointer press, mouse or finger, at `self.cursor`. `touch` enables finger
+    /// A pointer press, mouse or finger, at `self.win.cursor`. `touch` enables finger
     /// scrolling when no other gesture captures the press.
     fn pointer_down(&mut self, touch: bool) {
-        self.pointer_touch = touch;
+        self.win.pointer_touch = touch;
         // The user acts: restored offsets still waiting for their content stay where they
         // are drawn, rather than move under the finger once the content arrives (milestone
         // 768).
-        self.runtime.forget_restored_scroll();
-        self.pending_tap_focus = None;
-        self.pending_field_press = None;
+        self.win.runtime.forget_restored_scroll();
+        self.win.pending_tap_focus = None;
+        self.win.pending_field_press = None;
         // A first tap still waiting for its second is a tap after all if this press is not
         // that second one: somewhere else, or too late.
         self.poll_pending_tap(Instant::now());
-        if let Some(pending) = self.pending_tap.as_ref() {
-            let here = self.ui.as_ref().and_then(|ui| ui.hit(self.cursor));
+        if let Some(pending) = self.win.pending_tap.as_ref() {
+            let here = self.win.ui.as_ref().and_then(|ui| ui.hit(self.win.cursor));
             let (dx, dy) = (
-                self.cursor.x - pending.position.x,
-                self.cursor.y - pending.position.y,
+                self.win.cursor.x - pending.position.x,
+                self.win.cursor.y - pending.position.y,
             );
             if here != Some(pending.id) || dx.hypot(dy) > DOUBLE_TAP_SLOP {
                 self.flush_pending_tap();
             }
         }
-        self.pending_word = None;
-        self.pending_region_hold = false;
+        self.win.pending_word = None;
+        self.win.pending_region_hold = false;
         // A press **on the bar** comes first: the bar is drawn over everything, the handles
         // included, and the desktop menu hangs from the selection's top, over its handles
         // (milestone 618). It acts on the focused field, so nothing here may touch the
         // focus, the selection or the handles: it is only recorded, and `pointer_up`
         // resolves it to the button's action.
         if self
+            .win
             .ui
             .as_ref()
-            .is_some_and(|ui| ui.toolbar_contains(self.cursor))
+            .is_some_and(|ui| ui.toolbar_contains(self.win.cursor))
         {
-            press_at(&mut self.runtime, self.ui.as_ref(), self.cursor);
+            press_at(&mut self.win.runtime, self.win.ui.as_ref(), self.win.cursor);
             self.request_redraw();
             return;
         }
@@ -6851,65 +7112,70 @@ impl<A: Application> App<A> {
         // A selection area's handle likewise: a press on one widens or narrows the selection
         // rather than putting it away.
         if let Some(drag) = self.grab_region_handle() {
-            self.drag = Some(drag);
-            if let Some(selection) = self.runtime.region.as_mut() {
+            self.win.drag = Some(drag);
+            if let Some(selection) = self.win.runtime.region.as_mut() {
                 selection.bar = false;
             }
             self.request_redraw();
             return;
         }
         if let Some(drag) = self.grab_selection_handle() {
-            self.drag = Some(drag);
+            self.win.drag = Some(drag);
             // The bar is put away while a handle is dragged, and comes back when it is let
             // go (`pointer_up`): a bar that followed a moving selection would flicker.
-            self.runtime.selection_toolbar = None;
+            self.win.runtime.selection_toolbar = None;
             self.request_redraw();
             return;
         }
-        if self.runtime.selection_handles.take().is_some() {
+        if self.win.runtime.selection_handles.take().is_some() {
             self.request_redraw();
         }
         self.hide_selection_toolbar();
         // A selection an area holds goes with any press: the one that begins another puts a
         // new one in its place, below.
-        if self.runtime.region.take().is_some() {
+        if self.win.runtime.region.take().is_some() {
             self.request_redraw();
         }
         // 0) The back gesture: a press on the **leading edge** — left under LTR,
         // right under RTL — if the app allows it. It takes the pages back, so it starts on
         // them and not on what is above them: the window's menu bar, whose first word sits
         // in the edge, or an overlay — the menu it opens, a dialog (milestone 642).
-        let above_the_pages = self.ui.as_ref().is_some_and(|ui| {
-            ui.over_overlay(self.cursor)
+        let above_the_pages = self.win.ui.as_ref().is_some_and(|ui| {
+            ui.over_overlay(self.win.cursor)
                 || ui
                     .title_bar_row()
-                    .is_some_and(|row| row.contains(self.cursor))
+                    .is_some_and(|row| row.contains(self.win.cursor))
         });
         let on_back_edge = !above_the_pages
             && if self.is_rtl() {
-                self.cursor.x > self.logical_width() - BACK_EDGE
+                self.win.cursor.x > self.logical_width() - BACK_EDGE
             } else {
-                self.cursor.x < BACK_EDGE
+                self.win.cursor.x < BACK_EDGE
             };
         if on_back_edge && self.app.can_go_back() {
-            self.drag = Some(Drag::Back {
-                start_x: self.cursor.x,
+            self.win.drag = Some(Drag::Back {
+                start_x: self.win.cursor.x,
             });
             self.begin_gesture();
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             self.app.back_gesture(0.0);
             self.request_redraw();
             return;
         }
 
         // 1) Is this a scrollbar drag?
-        if let Some(bar) = self.ui.as_ref().and_then(|ui| ui.scrollbar_at(self.cursor)) {
+        if let Some(bar) = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.scrollbar_at(self.win.cursor))
+        {
             let (along, thumb_start) = if bar.vertical {
-                (self.cursor.y, bar.thumb.y)
+                (self.win.cursor.y, bar.thumb.y)
             } else {
-                (self.cursor.x, bar.thumb.x)
+                (self.win.cursor.x, bar.thumb.x)
             };
-            self.drag = Some(Drag::Scrollbar {
+            self.win.drag = Some(Drag::Scrollbar {
                 id: bar.id,
                 vertical: bar.vertical,
                 grab: along - thumb_start,
@@ -6924,9 +7190,15 @@ impl<A: Application> App<A> {
         }
 
         // 1b) Is this a draggable widget, a Slider for instance?
-        if let Some((id, rect)) = self.ui.as_ref().and_then(|ui| ui.draggable_at(self.cursor)) {
-            let (x, rtl) = (self.cursor.x, self.is_rtl());
+        if let Some((id, rect)) = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.draggable_at(self.win.cursor))
+        {
+            let (x, rtl) = (self.win.cursor.x, self.is_rtl());
             let track = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -6934,7 +7206,7 @@ impl<A: Application> App<A> {
             let active = track.engages(rect, x, rtl);
             let thumbs = matches!(track.mode, frus_widgets::DragMode::Thumbs { .. });
             let thumb = track.pick_thumb(rect, x, 0.0, rtl);
-            self.drag = Some(Drag::Widget {
+            self.win.drag = Some(Drag::Widget {
                 id,
                 rect,
                 last_x: x,
@@ -6971,35 +7243,40 @@ impl<A: Application> App<A> {
         // A row that asked for a **hold** takes nothing now. The press is left to
         // whatever else wants it, which inside a list is the scroll, and the deadline
         // below decides between them: a finger that stays put was never scrolling.
-        if let Some((id, from, hold)) = self.reorderable_at(self.cursor) {
+        if let Some((id, from, hold)) = self.reorderable_at(self.win.cursor) {
             if hold {
-                self.pending_reorder = Some((id, from, self.cursor));
+                self.win.pending_reorder = Some((id, from, self.win.cursor));
             } else {
-                self.drag = Some(Drag::Reorder {
+                self.win.drag = Some(Drag::Reorder {
                     id,
                     from,
-                    start: self.cursor,
+                    start: self.win.cursor,
                     moved: false,
                     carried: None,
                 });
-                self.reorder_x = self.cursor.x; // starts glued to the pointer, with no jerk
-                self.reorder_y = self.cursor.y; // likewise for the vertical insertion line
+                self.win.reorder_x = self.win.cursor.x; // starts glued to the pointer, with no jerk
+                self.win.reorder_y = self.win.cursor.y; // likewise for the vertical insertion line
             }
         }
 
-        if press_at(&mut self.runtime, self.ui.as_ref(), self.cursor) {
+        if press_at(&mut self.win.runtime, self.win.ui.as_ref(), self.win.cursor) {
             self.request_redraw();
         }
         // 2) Focus and caret placement, and the start of a text selection.
-        let previously_focused = self.runtime.input.focused;
-        let focus = self.ui.as_ref().and_then(|ui| ui.focus_hit(self.cursor));
+        let previously_focused = self.win.runtime.input.focused;
+        let focus = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.focus_hit(self.win.cursor));
         // A press outside the focused widget tells it so, before the focus moves
         // (milestone 660).
         if let Some(held) = previously_focused {
             let inside = focus.is_some_and(|(id, _)| id == held);
             let outside = (!inside)
                 .then(|| {
-                    self.tree
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), held))
                         .and_then(|widget| widget.on_tap_outside())
@@ -7015,12 +7292,12 @@ impl<A: Application> App<A> {
         // word — places them. A mouse press is the click, and a mouse drag selects.
         if touch && self.takes_caret(focus) {
             if let Some((id, rect)) = focus {
-                self.pending_field_press = Some(FieldPress {
+                self.win.pending_field_press = Some(FieldPress {
                     focus: (id, rect),
                     previously_focused,
-                    at: self.cursor,
+                    at: self.win.cursor,
                 });
-                self.pending_word = Some(id);
+                self.win.pending_word = Some(id);
             }
         } else {
             self.settle_press_focus(focus, previously_focused, touch);
@@ -7029,9 +7306,9 @@ impl<A: Application> App<A> {
         // 2b) Words in a selection area, with nothing else having a claim on the press: a
         // selection begins, and may be dragged across the texts of the area. A finger is
         // left to scroll, and a finger that stays put selects the word instead (milestone 576).
-        if self.drag.is_none() && focus.is_none() {
+        if self.win.drag.is_none() && focus.is_none() {
             if touch {
-                self.pending_region_hold = self.region_press_target().is_some();
+                self.win.pending_region_hold = self.region_press_target().is_some();
             } else {
                 self.begin_region_selection();
             }
@@ -7040,15 +7317,15 @@ impl<A: Application> App<A> {
         // 3) Touch: when nothing captured the gesture — no scrollbar, no widget, no
         // text selection — prepare a finger scroll on the area under the finger. A
         // release without movement, under TOUCH_SLOP, stays a tap.
-        if touch && self.drag.is_none() {
+        if touch && self.win.drag.is_none() {
             // The innermost area that would actually take a finger. An area whose content
             // fits refuses the offset outright — the reference takes its drag recognisers
             // away for exactly this — so it neither swallows the press nor lights an edge,
             // and the page behind it, or a dismissible row under it, gets its turn.
             let landed = {
-                let scroll = &self.runtime.scroll;
-                self.ui.as_ref().and_then(|ui| {
-                    ui.scroll_chain(self.cursor).find(|area| {
+                let scroll = &self.win.runtime.scroll;
+                self.win.ui.as_ref().and_then(|ui| {
+                    ui.scroll_chain(self.win.cursor).find(|area| {
                         area.accepts_user_offset(
                             scroll.get(&area.id).copied().unwrap_or((0.0, 0.0)),
                         )
@@ -7060,52 +7337,55 @@ impl<A: Application> App<A> {
                 // is rather than sliding under the finger, and hands the next
                 // release whatever momentum the platform lets a swipe build on.
                 let physics = area.physics;
-                let carried = self.runtime.catch_scroll_fling(area.id, physics);
+                let carried = self.win.runtime.catch_scroll_fling(area.id, physics);
                 // The offset belongs to the finger until it lifts.
-                self.runtime.hold_scroll(area.id);
+                self.win.runtime.hold_scroll(area.id);
                 // And so does the sheet it sits in, if one is still settling: the finger
                 // may be about to move it, and a sheet sliding away under a finger that
                 // has caught its list is a sheet that ignored the catch.
                 if let Some(sheet) = self
+                    .win
                     .ui
                     .as_ref()
                     .and_then(|ui| ui.sheet_holding(area.id))
                     .map(|sheet| sheet.id)
                 {
-                    self.runtime.sheet_hold(sheet);
+                    self.win.runtime.sheet_hold(sheet);
                 }
-                self.drag = Some(Drag::Scroll {
+                self.win.drag = Some(Drag::Scroll {
                     id: area.id,
-                    last: self.cursor,
+                    last: self.win.cursor,
                     moved: false,
                     carried,
                     dismiss: self
+                        .win
                         .ui
                         .as_ref()
-                        .and_then(|ui| ui.dismissable_at(self.cursor)),
+                        .and_then(|ui| ui.dismissable_at(self.win.cursor)),
                     axis: None,
                     pan: self.pan_target(),
                 });
                 self.begin_gesture();
                 // A fling on a scroll area is read the way its scroll behaviour reads one
                 // (milestone 616), as the reference's scrollable builds its recognizer.
-                self.gesture_velocity = area.velocity_tracker();
+                self.win.gesture_velocity = area.velocity_tracker();
             }
         }
 
         // 3a) A sheet's panel with nothing under the finger that scrolls: the finger moves
         // the sheet itself. A pointer too — on a desktop there is no other way to raise one.
-        if self.drag.is_none() {
+        if self.win.drag.is_none() {
             if let Some((id, available)) = self
+                .win
                 .ui
                 .as_ref()
-                .and_then(|ui| ui.sheet_at(self.cursor))
+                .and_then(|ui| ui.sheet_at(self.win.cursor))
                 .map(|sheet| (sheet.id, sheet.available))
             {
-                self.runtime.sheet_hold(id);
-                self.drag = Some(Drag::Sheet {
+                self.win.runtime.sheet_hold(id);
+                self.win.drag = Some(Drag::Sheet {
                     id,
-                    last: self.cursor,
+                    last: self.win.cursor,
                     moved: false,
                     available,
                 });
@@ -7116,15 +7396,16 @@ impl<A: Application> App<A> {
         // 3b) A dismissible item with nothing scrollable under it: there is no gesture to
         // arbitrate against, so the swipe is prepared directly. It still waits for the
         // threshold, or a tap on the row would start sliding it.
-        if self.drag.is_none() {
+        if self.win.drag.is_none() {
             if let Some(item) = self
+                .win
                 .ui
                 .as_ref()
-                .and_then(|ui| ui.dismissable_at(self.cursor))
+                .and_then(|ui| ui.dismissable_at(self.win.cursor))
             {
-                self.drag = Some(Drag::Dismiss {
+                self.win.drag = Some(Drag::Dismiss {
                     item,
-                    last: self.cursor,
+                    last: self.win.cursor,
                     moved: false,
                 });
                 self.begin_gesture();
@@ -7136,23 +7417,25 @@ impl<A: Application> App<A> {
         // list would silently stop that list scrolling, and a list that does not scroll
         // is a worse bug than an item that does not lift. With a pointer there is no
         // touch scroll to lose to, so it lifts everywhere.
-        if self.drag.is_none() {
+        if self.win.drag.is_none() {
             if let Some(source) = self
+                .win
                 .ui
                 .as_ref()
-                .and_then(|ui| ui.drag_source_at(self.cursor))
+                .and_then(|ui| ui.drag_source_at(self.win.cursor))
                 .filter(|source| {
                     // One that asked for a hold waits for the deadline instead.
                     !self
+                        .win
                         .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), source.id))
                         .is_some_and(|widget| widget.drag_needs_long_press())
                 })
             {
-                self.drag = Some(Drag::Item {
+                self.win.drag = Some(Drag::Item {
                     source,
-                    start: self.cursor,
+                    start: self.win.cursor,
                     moved: false,
                     over: None,
                 });
@@ -7162,13 +7445,13 @@ impl<A: Application> App<A> {
 
         // 3d) A detector that takes a drag, with no scroll under it to share the gesture with
         // (milestone 582): prepared, and engaged past the slop, so a tap still goes through.
-        if self.drag.is_none() {
+        if self.win.drag.is_none() {
             if let Some((id, axis)) = self.pan_target() {
-                self.drag = Some(Drag::Gesture {
+                self.win.drag = Some(Drag::Gesture {
                     id,
                     axis,
-                    start: self.cursor,
-                    last: self.cursor,
+                    start: self.win.cursor,
+                    last: self.win.cursor,
                     moved: false,
                 });
                 self.begin_gesture();
@@ -7178,17 +7461,18 @@ impl<A: Application> App<A> {
         // 4) An interactive viewport (`InteractiveViewer`) under the pointer: prepare a
         // **pan**, with mouse or finger. Like the touch scroll it engages only past the
         // threshold, so a tap goes through to the child, a button for instance.
-        if self.drag.is_none() {
+        if self.win.drag.is_none() {
             if let Some((id, viewport)) = self
+                .win
                 .ui
                 .as_ref()
-                .and_then(|ui| ui.interactive_at(self.cursor))
+                .and_then(|ui| ui.interactive_at(self.win.cursor))
             {
                 // The press stops a fling in progress: we take the content back in hand.
-                self.runtime.interactive_velocity.remove(&id);
-                self.drag = Some(Drag::Pan {
+                self.win.runtime.interactive_velocity.remove(&id);
+                self.win.drag = Some(Drag::Pan {
                     id,
-                    last: self.cursor,
+                    last: self.win.cursor,
                     moved: false,
                     viewport,
                 });
@@ -7215,14 +7499,15 @@ impl<A: Application> App<A> {
         let decided = match previously_focused {
             Some(held) if target != Some(held) && !self.takes_caret(focus) => {
                 let policy = self
+                    .win
                     .ui
                     .as_ref()
                     .map_or(frus_widgets::TapOutside::Unfocus, |ui| ui.tap_outside(held));
                 let after = focus_after_tap_outside(held, target, policy);
                 if touch {
-                    self.pending_tap_focus = Some(PendingFocus {
+                    self.win.pending_tap_focus = Some(PendingFocus {
                         target: after,
-                        at: self.cursor,
+                        at: self.win.cursor,
                     });
                     previously_focused
                 } else {
@@ -7231,19 +7516,24 @@ impl<A: Application> App<A> {
             }
             _ => target,
         };
-        self.runtime.input.focused = decided;
+        self.win.runtime.input.focused = decided;
         // A press that left the focus where it was places no caret in the widget it hit.
         let placed = focus.filter(|(id, _)| decided == Some(*id));
         if let Some((id, rect)) = placed {
-            let local_x = self.cursor.x - rect.x;
+            let local_x = self.win.cursor.x - rect.x;
             // The retained vertical scroll, in a multi-line field, is part of the
             // content coordinate: we add it so the click lands on the right line.
-            let local_y =
-                self.cursor.y - rect.y + self.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
+            let local_y = self.win.cursor.y - rect.y
+                + self.win.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
             // The scroll shown just before this click, computed from the current caret
             // when the field was already focused, and 0 otherwise.
             let scroll_cursor = if previously_focused == Some(id) {
-                self.runtime.edits.get(&id).map(|e| e.cursor).unwrap_or(0)
+                self.win
+                    .runtime
+                    .edits
+                    .get(&id)
+                    .map(|e| e.cursor)
+                    .unwrap_or(0)
             } else {
                 0
             };
@@ -7251,16 +7541,17 @@ impl<A: Application> App<A> {
             // focusables — buttons, checkboxes — keep focus but must NOT capture the
             // click, which would otherwise be swallowed on release as the end of a drag.
             let cursor = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
                 .and_then(|widget| widget.cursor_at(local_x, local_y, rect.width, scroll_cursor));
             if let Some(at) = cursor {
                 // Placing the caret with the mouse forgets the vertical goal column.
-                self.goal_x = None;
+                self.win.goal_x = None;
                 // On the side of its boundary that was pressed: beside a change of
                 // direction, or past the end of a wrapped line, that is where it is drawn.
-                self.runtime.edits.insert(
+                self.win.runtime.edits.insert(
                     id,
                     Edit {
                         cursor: at.offset,
@@ -7269,14 +7560,14 @@ impl<A: Application> App<A> {
                         affinity: at.affinity,
                     },
                 );
-                self.drag = Some(Drag::TextSelect { id, rect });
+                self.win.drag = Some(Drag::TextSelect { id, rect });
                 // A finger that stays put selects the word instead (milestone 511).
                 if touch {
-                    self.pending_word = Some(id);
+                    self.win.pending_word = Some(id);
                 }
                 // The caret moved, so the run of typing ends here: typing at one place,
                 // then at another, then Ctrl+Z should take back only the second.
-                self.runtime.close_edit_run(id);
+                self.win.runtime.close_edit_run(id);
                 // Tapping in a field **reopens** the keyboard, even one the app already
                 // considers shown but which the system back closed — see
                 // `request_soft_input`.
@@ -7285,19 +7576,20 @@ impl<A: Application> App<A> {
                 // A double click selects the word under the pointer: a second press soon
                 // after the first, close to it and in the same field. Timed by the clock the
                 // gestures keep, which in a driven test is the frames run (milestone 747).
-                let (now, here) = (self.click_clock(), self.cursor);
-                let double = self.last_click.is_some_and(|(then, there, field)| {
+                let (now, here) = (self.click_clock(), self.win.cursor);
+                let double = self.win.last_click.is_some_and(|(then, there, field)| {
                     field == id && self.is_double_click(then, there, now, here)
                 });
-                self.last_click = Some((now, here, id));
+                self.win.last_click = Some((now, here, id));
                 if double {
                     if let Some((start, end)) = self
+                        .win
                         .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                         .and_then(|widget| widget.word_at(at.offset))
                     {
-                        self.runtime.edits.insert(
+                        self.win.runtime.edits.insert(
                             id,
                             Edit {
                                 affinity: Default::default(),
@@ -7306,7 +7598,7 @@ impl<A: Application> App<A> {
                                 composing: None,
                             },
                         );
-                        self.drag = None;
+                        self.win.drag = None;
                     }
                 }
             }
@@ -7317,14 +7609,14 @@ impl<A: Application> App<A> {
     /// it put off are placed now, where it came down (milestone 752). `false` when there
     /// was none.
     fn place_field_press(&mut self) -> bool {
-        let Some(press) = self.pending_field_press.take() else {
+        let Some(press) = self.win.pending_field_press.take() else {
             return false;
         };
-        let lifted_at = std::mem::replace(&mut self.cursor, press.at);
+        let lifted_at = std::mem::replace(&mut self.win.cursor, press.at);
         self.settle_press_focus(Some(press.focus), press.previously_focused, true);
-        self.cursor = lifted_at;
+        self.win.cursor = lifted_at;
         // The hold that selects a word has been served, or the finger has lifted.
-        self.pending_word = None;
+        self.win.pending_word = None;
         self.request_redraw();
         true
     }
@@ -7335,13 +7627,15 @@ impl<A: Application> App<A> {
         let Some((id, rect)) = hit else {
             return false;
         };
-        let local_y = self.cursor.y - rect.y + self.runtime.scroll.get(&id).map_or(0.0, |s| s.1);
-        self.tree
+        let local_y =
+            self.win.cursor.y - rect.y + self.win.runtime.scroll.get(&id).map_or(0.0, |s| s.1);
+        self.win
+            .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
             .is_some_and(|widget| {
                 widget
-                    .cursor_at(self.cursor.x - rect.x, local_y, rect.width, 0)
+                    .cursor_at(self.win.cursor.x - rect.x, local_y, rect.width, 0)
                     .is_some()
             })
     }
@@ -7352,40 +7646,40 @@ impl<A: Application> App<A> {
     /// [`Widget::positional_click`]. Local coordinates are the pointer minus the widget's
     /// corner.
     fn positional_click_on(&self, id: WidgetId) -> Option<A::Message> {
-        let rect = self.ui.as_ref()?.widget_rect(id)?;
-        let widget = find_widget(self.tree.as_ref()?.as_ref(), id)?;
+        let rect = self.win.ui.as_ref()?.widget_rect(id)?;
+        let widget = find_widget(self.win.tree.as_ref()?.as_ref(), id)?;
         widget.positional_click(
-            self.cursor.x - rect.x,
-            self.cursor.y - rect.y,
+            self.win.cursor.x - rect.x,
+            self.win.cursor.y - rect.y,
             rect.width,
             rect.height,
         )
     }
 
     fn pointer_up(&mut self) {
-        let ended = self.drag.take();
+        let ended = self.win.drag.take();
         // A finger that came down outside the focused widget and lifted as a tap: the focus
         // goes where the widget's `tap_outside` said (milestone 750).
-        if let Some(pending) = self.pending_tap_focus.take() {
-            let still =
-                (self.cursor.x - pending.at.x).hypot(self.cursor.y - pending.at.y) <= TOUCH_SLOP;
+        if let Some(pending) = self.win.pending_tap_focus.take() {
+            let still = (self.win.cursor.x - pending.at.x).hypot(self.win.cursor.y - pending.at.y)
+                <= TOUCH_SLOP;
             if still && (ended.is_none() || gesture_was_a_tap(ended.as_ref())) {
-                self.runtime.input.focused = pending.target;
+                self.win.runtime.input.focused = pending.target;
                 self.request_redraw();
             }
         }
         // A finger that came down on a field and lifted as a tap: the focus goes to the
         // field and the caret where the finger was (milestone 752). One that scrolled
         // places nothing.
-        if let Some(press) = self.pending_field_press.as_ref() {
-            let still =
-                (self.cursor.x - press.at.x).hypot(self.cursor.y - press.at.y) <= TOUCH_SLOP;
+        if let Some(press) = self.win.pending_field_press.as_ref() {
+            let still = (self.win.cursor.x - press.at.x).hypot(self.win.cursor.y - press.at.y)
+                <= TOUCH_SLOP;
             if still && (ended.is_none() || gesture_was_a_tap(ended.as_ref())) {
                 self.place_field_press();
                 // A tap, not the start of a selection: nothing is left to drag.
-                self.drag = None;
+                self.win.drag = None;
             } else {
-                self.pending_field_press = None;
+                self.win.pending_field_press = None;
             }
         }
         if let Some(Drag::Back { .. }) = ended {
@@ -7393,7 +7687,7 @@ impl<A: Application> App<A> {
             // in **fractions of the screen** per second, not pixels.
             let sign = if self.is_rtl() { -1.0 } else { 1.0 };
             let velocity = sign * self.gesture_estimate().velocity.x / self.logical_width();
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             self.app.back_gesture_end(velocity);
             self.request_redraw();
             return;
@@ -7404,21 +7698,21 @@ impl<A: Application> App<A> {
         // An open row of actions closes at any tap (milestone 810). A tap on one of its
         // actions still performs it; a tap on the row itself only closes it.
         if was_tap || ended.is_none() {
-            let open = self.runtime.open_swipe_rows();
+            let open = self.win.runtime.open_swipe_rows();
             if !open.is_empty() {
-                let cursor = self.cursor;
-                let on_a_row = self.ui.as_ref().is_some_and(|ui| {
+                let cursor = self.win.cursor;
+                let on_a_row = self.win.ui.as_ref().is_some_and(|ui| {
                     ui.dismissables().iter().any(|item| {
                         open.contains(&item.id) && item.rect.contains(cursor) && {
                             let strip = frus_widgets::revealed_strip(
                                 item.rect,
-                                self.runtime.swipe_progress(item.id),
+                                self.win.runtime.swipe_progress(item.id),
                             );
                             !strip.contains(cursor)
                         }
                     })
                 });
-                self.runtime.close_swipe_rows();
+                self.win.runtime.close_swipe_rows();
                 self.request_redraw();
                 if on_a_row {
                     return;
@@ -7441,11 +7735,11 @@ impl<A: Application> App<A> {
             let rtl = self.is_rtl();
             if matches!(track.mode, frus_widgets::DragMode::Thumbs { .. }) {
                 if let Some(thumb) = thumb {
-                    let at = track.fraction(rect, self.cursor.x, rtl);
+                    let at = track.fraction(rect, self.win.cursor.x, rtl);
                     self.thumb_drag(id, thumb, frus_widgets::ThumbDrag::End, at);
                 }
             } else {
-                let released = track.released_at(rect, press_x, self.cursor.x, rtl);
+                let released = track.released_at(rect, press_x, self.win.cursor.x, rtl);
                 self.dispatch_drag_edge(id, Edge::End, released);
             }
         }
@@ -7459,7 +7753,7 @@ impl<A: Application> App<A> {
         }
         // A handle of a selection area let go: its bar comes back over what is selected now.
         if let Some(Drag::RegionHandle { .. }) = ended {
-            if let Some(selection) = self.runtime.region.as_mut() {
+            if let Some(selection) = self.win.runtime.region.as_mut() {
                 selection.bar = true;
             }
         }
@@ -7474,7 +7768,7 @@ impl<A: Application> App<A> {
         }) = &ended
         {
             let target = self.reorder_drop_target(*id, *from, *carried);
-            let tree = self.tree.as_ref();
+            let tree = self.win.tree.as_ref();
             let base = target
                 .and_then(|tid| tree.and_then(|t| find_widget(t.as_ref(), tid)))
                 .and_then(|widget| widget.reorder_index());
@@ -7485,6 +7779,7 @@ impl<A: Application> App<A> {
             let to = match (base, target) {
                 (Some(base), Some(tid)) => {
                     let after = self
+                        .win
                         .ui
                         .as_ref()
                         .and_then(|ui| ui.widget_rect(tid))
@@ -7539,7 +7834,7 @@ impl<A: Application> App<A> {
                 } else {
                     (estimate.velocity.y, estimate.velocity.x)
                 };
-                self.runtime.swipe_release(item, along, across, false);
+                self.win.runtime.swipe_release(item, along, across, false);
                 self.request_redraw();
                 return;
             }
@@ -7560,15 +7855,21 @@ impl<A: Application> App<A> {
             };
             // Thrown by its handle, a sheet with one list in it carries that list on at the
             // top, as the reference's does: there its whole content is the list.
-            let sheet = self.ui.as_ref().and_then(|ui| ui.sheet(*id)).map(|sheet| {
-                let list = match sheet.areas.as_slice() {
-                    [only] => Some(*only),
-                    _ => None,
-                };
-                (sheet.spec.clone(), list)
-            });
+            let sheet = self
+                .win
+                .ui
+                .as_ref()
+                .and_then(|ui| ui.sheet(*id))
+                .map(|sheet| {
+                    let list = match sheet.areas.as_slice() {
+                        [only] => Some(*only),
+                        _ => None,
+                    };
+                    (sheet.spec.clone(), list)
+                });
             if let Some((spec, list)) = sheet {
-                self.runtime
+                self.win
+                    .runtime
                     .sheet_release(*id, &spec, *available, velocity, list);
             }
             if *moved {
@@ -7586,15 +7887,17 @@ impl<A: Application> App<A> {
             // The drop, then the source's own answer. In that order: an application
             // that reacts to both should see the thing arrive before it is told the
             // journey is over.
-            self.runtime.drag_over = None;
+            self.win.runtime.drag_over = None;
             let accepted = over.is_some();
             let dropped = over.and_then(|id| {
-                self.tree
+                self.win
+                    .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), id))
                     .and_then(|widget| widget.on_drop(source.payload))
             });
             let ended_msg = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), source.id))
@@ -7608,13 +7911,14 @@ impl<A: Application> App<A> {
         if let Some(Drag::Item { .. }) = &ended {
             // Lifted but never moved: nothing was dropped, and the click below still
             // has its say.
-            self.runtime.drag_over = None;
+            self.win.runtime.drag_over = None;
         }
         // Set when a sheet takes the release of a list inside it, which then does not
         // fling as well (milestone 515).
         let mut sheet_took = false;
         if let Some(Drag::Scroll { id, .. }) = &ended {
             let sheet = self
+                .win
                 .ui
                 .as_ref()
                 .and_then(|ui| ui.sheet_holding(*id))
@@ -7631,8 +7935,8 @@ impl<A: Application> App<A> {
                     }) => -self.fling_velocity(self.gesture_estimate()).1 + carried.1,
                     _ => 0.0,
                 };
-                let offset = self.runtime.scroll.get(id).map_or(0.0, |o| o.1);
-                let size = self.runtime.sheet_size(sheet.id, &sheet.spec);
+                let offset = self.win.runtime.scroll.get(id).map_or(0.0, |o| o.1);
+                let size = self.win.runtime.sheet_size(sheet.id, &sheet.spec);
                 sheet_took = velocity != 0.0
                     && frus_widgets::sheet_takes_release(
                         velocity,
@@ -7643,7 +7947,7 @@ impl<A: Application> App<A> {
                     );
                 // Whoever takes it, the sheet is let go of: settled by the throw, or
                 // from where it is — which is a stop, whenever the list keeps the throw.
-                self.runtime.sheet_release(
+                self.win.runtime.sheet_release(
                     sheet.id,
                     &sheet.spec,
                     sheet.available,
@@ -7654,9 +7958,9 @@ impl<A: Application> App<A> {
         }
         if let Some(Drag::Scroll { id, .. }) = &ended {
             // The finger gives the offset back before anything is flung at it.
-            self.runtime.release_scroll(*id);
+            self.win.runtime.release_scroll(*id);
             // A pull held against an edge now fades at the "let go" rate.
-            self.runtime.glow_scroll_end(*id);
+            self.win.runtime.glow_scroll_end(*id);
             // And a pull-to-refresh gesture is answered: releasing it armed is the
             // whole point of the gesture, so the message goes out now rather than
             // after the indicator has finished settling.
@@ -7677,7 +7981,7 @@ impl<A: Application> App<A> {
             let velocity = self.fling_velocity(estimate);
             // Through the same conversion the drag went through, so the release carries
             // on the way the finger was going — on a reversed axis too.
-            let velocity = match self.ui.as_ref().and_then(|u| u.scroll_region(*id)) {
+            let velocity = match self.win.ui.as_ref().and_then(|u| u.scroll_region(*id)) {
                 Some(area) => area.offset_delta(velocity),
                 None => (-velocity.0, -velocity.1),
             };
@@ -7728,7 +8032,7 @@ impl<A: Application> App<A> {
             let estimate = self.gesture_estimate();
             let velocity = self.fling_velocity(estimate);
             if velocity.0.hypot(velocity.1) > PAN_FLING_MIN {
-                self.runtime.interactive_velocity.insert(*id, velocity);
+                self.win.runtime.interactive_velocity.insert(*id, velocity);
             }
         }
         if ended.is_some() && !was_tap {
@@ -7736,19 +8040,22 @@ impl<A: Application> App<A> {
             return;
         }
         // A click only counts when press and release land on the same widget.
-        let released = self.ui.as_ref().and_then(|ui| ui.hit(self.cursor));
+        let released = self.win.ui.as_ref().and_then(|ui| ui.hit(self.win.cursor));
         // A built-in button of the selection bar sends no message: the shell performs its
         // action on the field the bar is open on (milestone 568).
-        let bar_action = match (self.runtime.input.pressed, released) {
-            (Some(pressed), Some(released)) if pressed == released => {
-                self.ui.as_ref().and_then(|ui| ui.edit_action_for(pressed))
-            }
+        let bar_action = match (self.win.runtime.input.pressed, released) {
+            (Some(pressed), Some(released)) if pressed == released => self
+                .win
+                .ui
+                .as_ref()
+                .and_then(|ui| ui.edit_action_for(pressed)),
             _ => None,
         };
         let on_bar = self
+            .win
             .ui
             .as_ref()
-            .is_some_and(|ui| ui.toolbar_contains(self.cursor));
+            .is_some_and(|ui| ui.toolbar_contains(self.win.cursor));
         // A field answers no tap of its own, so it is no hit target and `released` never
         // names it: its clickable suffix is asked through the focusable the press landed
         // on, when the release lands on it too. It wins over a tappable parent, the way
@@ -7756,14 +8063,15 @@ impl<A: Application> App<A> {
         let field_positional = if bar_action.is_some() {
             None
         } else {
-            self.ui
+            self.win
+                .ui
                 .as_ref()
-                .and_then(|ui| ui.focus_hit(self.cursor))
+                .and_then(|ui| ui.focus_hit(self.win.cursor))
                 .map(|(id, _)| id)
-                .filter(|id| self.runtime.input.focused == Some(*id))
+                .filter(|id| self.win.runtime.input.focused == Some(*id))
                 .and_then(|id| self.positional_click_on(id))
         };
-        let (message, announce) = match (self.runtime.input.pressed, released) {
+        let (message, announce) = match (self.win.runtime.input.pressed, released) {
             (Some(_), Some(_)) if bar_action.is_some() => (None, None),
             _ if field_positional.is_some() => (field_positional, None),
             (Some(pressed), Some(released)) if pressed == released => {
@@ -7771,10 +8079,11 @@ impl<A: Application> App<A> {
                 // priority over `on_click`.
                 let positional = self.positional_click_on(released);
                 let message =
-                    positional.or_else(|| self.ui.as_ref().and_then(|ui| ui.msg_for(pressed)));
+                    positional.or_else(|| self.win.ui.as_ref().and_then(|ui| ui.msg_for(pressed)));
                 // The spoken announcement of the effect — a sort, a selection — read off
                 // the clicked widget before `dispatch` rebuilds the tree.
                 let announce = self
+                    .win
                     .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), pressed))
@@ -7784,7 +8093,7 @@ impl<A: Application> App<A> {
             _ => (None, None),
         };
         // Something that takes a double tap: this tap is its second, or a first that waits.
-        let message = match (self.runtime.input.pressed, released) {
+        let message = match (self.win.runtime.input.pressed, released) {
             (Some(pressed), Some(released)) if pressed == released && bar_action.is_none() => {
                 self.double_tap(pressed, message)
             }
@@ -7793,18 +8102,18 @@ impl<A: Application> App<A> {
         // The tap completed on the widget it started on: its ink finishes growing and
         // fades. Anything else leaves the splash unconfirmed, and `advance_ink` sweeps
         // it away quickly — the finger slid off, and the ink says so.
-        if let (Some(pressed), Some(released)) = (self.runtime.input.pressed, released) {
+        if let (Some(pressed), Some(released)) = (self.win.runtime.input.pressed, released) {
             if pressed == released {
-                self.runtime.ink_confirm(pressed);
+                self.win.runtime.ink_confirm(pressed);
             }
         }
-        self.runtime.input.pressed = None;
+        self.win.runtime.input.pressed = None;
         if let Some(action) = bar_action {
             self.perform_edit_action(action);
         } else if on_bar && message.is_some() {
             // An item of the application's own: it has sent its message, and the bar is
             // done with.
-            self.runtime.selection_handles = None;
+            self.win.runtime.selection_handles = None;
             self.hide_selection_toolbar();
         }
         if let Some(message) = message {
@@ -7821,6 +8130,7 @@ impl<A: Application> App<A> {
     /// first, which waits for [`DOUBLE_TAP_TIMEOUT`] before it is a tap (milestone 581).
     fn double_tap(&mut self, id: WidgetId, message: Option<A::Message>) -> Option<A::Message> {
         let Some(double) = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -7829,24 +8139,24 @@ impl<A: Application> App<A> {
             return message;
         };
         let now = Instant::now();
-        let second = self.pending_tap.as_ref().is_some_and(|pending| {
+        let second = self.win.pending_tap.as_ref().is_some_and(|pending| {
             let (dx, dy) = (
-                self.cursor.x - pending.position.x,
-                self.cursor.y - pending.position.y,
+                self.win.cursor.x - pending.position.x,
+                self.win.cursor.y - pending.position.y,
             );
             pending.id == id
                 && now.duration_since(pending.at) <= DOUBLE_TAP_TIMEOUT
                 && dx.hypot(dy) <= DOUBLE_TAP_SLOP
         });
         if second {
-            self.pending_tap = None;
+            self.win.pending_tap = None;
             return Some(double);
         }
         self.flush_pending_tap();
-        self.pending_tap = Some(PendingTap {
+        self.win.pending_tap = Some(PendingTap {
             id,
             at: now,
-            position: self.cursor,
+            position: self.win.cursor,
             single: message,
         });
         None
@@ -7854,7 +8164,12 @@ impl<A: Application> App<A> {
 
     /// Sends the waiting first tap's own message, if one is waiting.
     fn flush_pending_tap(&mut self) {
-        if let Some(message) = self.pending_tap.take().and_then(|pending| pending.single) {
+        if let Some(message) = self
+            .win
+            .pending_tap
+            .take()
+            .and_then(|pending| pending.single)
+        {
             self.dispatch(message);
             self.request_redraw();
         }
@@ -7863,6 +8178,7 @@ impl<A: Application> App<A> {
     /// The waiting first tap, sent if its wait is over by `now`. Whether one was.
     fn poll_pending_tap(&mut self, now: Instant) -> bool {
         let due = self
+            .win
             .pending_tap
             .as_ref()
             .is_some_and(|pending| now.duration_since(pending.at) >= DOUBLE_TAP_TIMEOUT);
@@ -7878,7 +8194,7 @@ impl<A: Application> App<A> {
     /// has no bridge yet.
     #[cfg(any(desktop, web, android))]
     fn set_announcement(&mut self, message: String) {
-        self.announce = message;
+        self.win.announce = message;
     }
     #[cfg(not(any(desktop, web, android)))]
     fn set_announcement(&mut self, _message: String) {}
@@ -7890,7 +8206,7 @@ impl<A: Application> App<A> {
     /// becomes a candidate trigger. The focus ring is drawn on the following frame
     /// (`request_redraw` when focus moved).
     fn reconcile_focus(&mut self) {
-        let present: std::collections::HashSet<WidgetId> = match self.ui.as_ref() {
+        let present: std::collections::HashSet<WidgetId> = match self.win.ui.as_ref() {
             Some(ui) => ui.focusable_ids().collect(),
             None => return,
         };
@@ -7898,27 +8214,28 @@ impl<A: Application> App<A> {
         // focus it takes it from is recorded below as any move is, so it goes back there
         // when this one goes: a submenu closing hands it back to its row.
         let autofocus: Vec<WidgetId> = self
+            .win
             .ui
             .as_ref()
             .map(|ui| ui.autofocus_ids().collect())
             .unwrap_or_default();
         let appeared = autofocus
             .iter()
-            .find(|id| !self.autofocused.contains(id))
+            .find(|id| !self.win.autofocused.contains(id))
             .copied();
-        self.autofocused = autofocus.into_iter().collect();
+        self.win.autofocused = autofocus.into_iter().collect();
         if let Some(id) = appeared {
-            self.runtime.input.focused = Some(id);
+            self.win.runtime.input.focused = Some(id);
         }
-        let before = self.runtime.input.focused;
+        let before = self.win.runtime.input.focused;
         let after = resolve_focus(
             before,
             &present,
-            &mut self.focus_history,
-            &mut self.prev_focus,
+            &mut self.win.focus_history,
+            &mut self.win.prev_focus,
         );
         if after != before || appeared.is_some() {
-            self.runtime.input.focused = after;
+            self.win.runtime.input.focused = after;
             self.request_redraw();
         }
     }
@@ -7926,14 +8243,15 @@ impl<A: Application> App<A> {
     /// Tells the widgets **where the focus went** since they were last told (milestone 660):
     /// each one whose subtree it left or entered, through `Widget::on_focus_change`.
     fn report_focus(&mut self) {
-        let now = self.runtime.input.focused;
+        let now = self.win.runtime.input.focused;
         // Nothing moved, nothing to say — and no walk of the tree, which is the point: the
         // answer would be empty anyway.
-        if now == self.focus_reported {
+        if now == self.win.focus_reported {
             return;
         }
-        let before = std::mem::replace(&mut self.focus_reported, now);
+        let before = std::mem::replace(&mut self.win.focus_reported, now);
         let messages = self
+            .win
             .tree
             .as_ref()
             .map(|tree| focus_changes(tree.as_ref(), before, now))
@@ -7946,11 +8264,18 @@ impl<A: Application> App<A> {
     /// Takes what was asked of the next build: the whole tree when something outside the
     /// components asked or `outside` says so, the components marked when only they did.
     fn note_rebuild(&mut self, asked: frus_widgets::Rebuild, outside: bool) {
-        match asked {
-            _ if outside => self.build_dirty = true,
-            frus_widgets::Rebuild::Tree => self.build_dirty = true,
-            frus_widgets::Rebuild::Components => self.components_dirty = true,
-            frus_widgets::Rebuild::Nothing => {}
+        let (tree, components) = match asked {
+            _ if outside => (true, false),
+            frus_widgets::Rebuild::Tree => (true, false),
+            frus_widgets::Rebuild::Components => (false, true),
+            frus_widgets::Rebuild::Nothing => (false, false),
+        };
+        self.win.build_dirty |= tree;
+        self.win.components_dirty |= components;
+        // What was asked was asked once, of whichever window drew first: the components it
+        // marked may be in any of them (milestone 827).
+        if tree || components {
+            self.mark_other_windows(tree, components);
         }
     }
 
@@ -7962,7 +8287,13 @@ impl<A: Application> App<A> {
         // only changed components' own state, which marked them (milestone 822). A handler
         // that asked for nothing gets the whole tree built, as it always did.
         if self.app.messages_rebuild_view() || !frus_widgets::rebuild_requested() {
-            self.build_dirty = true;
+            self.win.build_dirty = true;
+            // The state every window is built from changed (milestone 827).
+            self.mark_other_windows(true, false);
+        } else {
+            // Components were marked, in whichever window they are: each draws again, and the
+            // first to draw takes the request for all (milestone 827).
+            self.mark_other_windows(false, false);
         }
         self.run_command(command);
         let asked = self.app.effects();
@@ -8006,9 +8337,9 @@ impl<A: Application> App<A> {
             self.dev = crate::dev::address()
                 .as_deref()
                 .and_then(crate::dev::DevChannel::connect);
-            crate::dev_commands::set_window(self.window.clone());
+            crate::dev_commands::set_window(self.win.window.clone());
             if let Some(states) = crate::dev::restored_states() {
-                self.runtime.states.restore_from(&states);
+                self.win.runtime.states.restore_from(&states);
             }
         }
         // On Android the extra only says that `frus run` is listening, and it listens to the log.
@@ -8028,7 +8359,7 @@ impl<A: Application> App<A> {
                     .as_ref()
                     .and_then(|app| app.internal_data_path());
                 if let Some(states) = storage.as_deref().and_then(crate::dev::restored_states) {
-                    self.runtime.states.restore_from(&states);
+                    self.win.runtime.states.restore_from(&states);
                 }
                 if let Some(dir) = storage {
                     crate::dev_commands::poll_commands(dir);
@@ -8051,7 +8382,7 @@ impl<A: Application> App<A> {
             return;
         };
         #[cfg(desktop)]
-        let window = self.window.as_ref().and_then(|window| {
+        let window = self.win.window.as_ref().and_then(|window| {
             let at = window.outer_position().ok()?;
             let size = window.inner_size();
             Some([at.x, at.y, size.width as i32, size.height as i32])
@@ -8062,7 +8393,7 @@ impl<A: Application> App<A> {
             self.dev = None;
             return;
         }
-        let states = &self.runtime.states;
+        let states = &self.win.runtime.states;
         dev.save_if_asked(|| states.snapshot());
     }
 
@@ -8083,7 +8414,7 @@ impl<A: Application> App<A> {
             if let Some(location) = crate::link::location_of_link(&link) {
                 let command = self.app.open_location(&location);
                 self.run_command(command);
-                self.build_dirty = true;
+                self.win.build_dirty = true;
                 self.request_redraw();
             }
         }
@@ -8096,7 +8427,7 @@ impl<A: Application> App<A> {
         for shared in crate::received_share::take() {
             let command = self.app.on_share(shared);
             self.run_command(command);
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             self.request_redraw();
         }
     }
@@ -8111,7 +8442,7 @@ impl<A: Application> App<A> {
         self.history.opened(location.clone(), index);
         // What the tab kept for this entry of its history, the last time the page was here
         // (milestone 753): a reload, or a tab the browser discarded and opened again.
-        if self.runtime.restoration.is_enabled() {
+        if self.win.runtime.restoration.is_enabled() {
             if let Some(bytes) = crate::restoration::load(self.history.index()) {
                 // Said as Android says it, so a developer can tell a restored page from a
                 // fresh one in the console (milestone 821).
@@ -8120,7 +8451,7 @@ impl<A: Application> App<A> {
                     bytes.len(),
                     self.history.index()
                 );
-                self.runtime.restoration.restore(&bytes);
+                self.win.runtime.restoration.restore(&bytes);
             }
         }
         crate::address::listen(window.clone(), strategy, base.clone());
@@ -8147,7 +8478,7 @@ impl<A: Application> App<A> {
             if self.history.popped(location.clone(), state) {
                 let command = self.app.open_location(&location);
                 self.run_command(command);
-                self.build_dirty = true;
+                self.win.build_dirty = true;
                 // The move it starts — a page sliding — is ticked by the frames after this
                 // one, which was decided to be still before the address was read.
                 self.request_redraw();
@@ -8182,9 +8513,9 @@ impl<A: Application> App<A> {
     /// 303. See [`crate::runtime`].
     fn run_command(&mut self, command: crate::command::Command<A::Message>) {
         let parts = command.into_parts();
-        self.pending_focus.extend(parts.focus);
-        self.pending_scroll.extend(parts.scrolls);
-        self.pending_sheet.extend(parts.sheets);
+        self.win.pending_focus.extend(parts.focus);
+        self.win.pending_scroll.extend(parts.scrolls);
+        self.win.pending_sheet.extend(parts.sheets);
         for task in parts.tasks {
             let proxy = self.proxy.clone();
             #[cfg(not(web))]
@@ -8221,7 +8552,7 @@ impl<A: Application> App<A> {
                 }
             });
         }
-        if let Some((now, _)) = self.gesture_clock {
+        if let Some((now, _)) = self.win.gesture_clock {
             for (delay, message) in parts.timers {
                 self.driver_timers
                     .push((now + delay.as_secs_f32(), message));
@@ -8265,9 +8596,9 @@ impl<A: Application> App<A> {
         self.sync_tray();
         // And the taskbar button (milestone 708) — only a real window has one.
         #[cfg(all(desktop, feature = "taskbar"))]
-        if let Some(window) = &self.window {
+        if let Some(window) = self.main_window() {
             let wanted = self.app.taskbar();
-            self.taskbar = crate::taskbar::native::apply(window, &self.taskbar, &wanted);
+            self.taskbar = crate::taskbar::native::apply(&window, &self.taskbar, &wanted);
         }
         // And the global shortcuts (milestone 709).
         #[cfg(all(desktop, feature = "global-shortcuts"))]
@@ -8296,7 +8627,7 @@ impl<A: Application> App<A> {
     /// only with a real window, as the tray.
     #[cfg(all(desktop, feature = "global-shortcuts"))]
     fn sync_shortcuts(&mut self) {
-        let Some(window) = self.window.clone() else {
+        let Some(window) = self.main_window() else {
             return;
         };
         let wanted: Vec<String> = self
@@ -8325,7 +8656,7 @@ impl<A: Application> App<A> {
                     self.request_redraw();
                 }
                 crate::shortcuts::ShortcutAction::ShowWindow => {
-                    if let Some(window) = &self.window {
+                    if let Some(window) = self.main_window() {
                         window.set_visible(true);
                         window.set_minimized(false);
                         window.focus_window();
@@ -8347,11 +8678,12 @@ impl<A: Application> App<A> {
             // The system's tray belongs to a real window, on the thread it was made on: the
             // windowless driver tests run through has neither, and on macOS the menus may
             // only be made on the main thread, which a test's is not.
-            Some(_) if self.window.is_none() => {}
+            Some(_) if self.main_window().is_none() => {}
             Some(tray) => {
                 self.tray_keeps_running = tray.keep_running;
                 let shape = tray.shape(&self.app.icon());
-                crate::tray::native::sync(&mut self.tray, shape, self.window.as_ref());
+                let window = self.main_window();
+                crate::tray::native::sync(&mut self.tray, shape, window.as_ref());
             }
         }
     }
@@ -8370,7 +8702,7 @@ impl<A: Application> App<A> {
                     self.request_redraw();
                 }
                 crate::tray::TrayAction::ShowWindow => {
-                    if let Some(window) = &self.window {
+                    if let Some(window) = self.main_window() {
                         window.set_visible(true);
                         window.set_minimized(false);
                         window.focus_window();
@@ -8427,7 +8759,7 @@ impl<A: Application> App<A> {
 
     /// Applies the mouse drag under way.
     fn handle_drag(&mut self) {
-        let Some(mut drag) = self.drag.take() else {
+        let Some(mut drag) = self.win.drag.take() else {
             return;
         };
         // How far this pointer has to travel before a press counts as a drag.
@@ -8444,9 +8776,9 @@ impl<A: Application> App<A> {
                 reverse,
             } => {
                 let along = if *vertical {
-                    self.cursor.y
+                    self.win.cursor.y
                 } else {
-                    self.cursor.x
+                    self.win.cursor.x
                 };
                 let travel = (*track_len - *thumb_len).max(1.0);
                 let thumb_start = (along - *grab).clamp(*track_start, *track_start + travel);
@@ -8455,7 +8787,7 @@ impl<A: Application> App<A> {
                 // position along the track reads backwards.
                 let fraction = if *reverse { 1.0 - fraction } else { fraction };
                 let offset = (fraction * *max).clamp(0.0, *max);
-                let entry = self.runtime.scroll.entry(*id).or_insert((0.0, 0.0));
+                let entry = self.win.runtime.scroll.entry(*id).or_insert((0.0, 0.0));
                 if *vertical {
                     entry.1 = offset;
                 } else {
@@ -8463,8 +8795,8 @@ impl<A: Application> App<A> {
                 }
                 // A precise drag: the target follows the offset and inertia is cut off.
                 let synced = *entry;
-                self.runtime.scroll_target.insert(*id, synced);
-                self.runtime.scroll_velocity.remove(&*id);
+                self.win.runtime.scroll_target.insert(*id, synced);
+                self.win.runtime.scroll_velocity.remove(&*id);
             }
             Drag::RegionSelect { area, .. } => {
                 let area = *area;
@@ -8477,12 +8809,19 @@ impl<A: Application> App<A> {
                 self.drag_region_handle(area, handle, grab);
             }
             Drag::TextSelect { id, rect } => {
-                let local_x = self.cursor.x - rect.x;
-                let local_y = self.cursor.y - rect.y
-                    + self.runtime.scroll.get(id).map(|s| s.1).unwrap_or(0.0);
+                let local_x = self.win.cursor.x - rect.x;
+                let local_y = self.win.cursor.y - rect.y
+                    + self.win.runtime.scroll.get(id).map(|s| s.1).unwrap_or(0.0);
                 // The field is focused during the drag, so scroll from the current caret.
-                let scroll_cursor = self.runtime.edits.get(id).map(|e| e.cursor).unwrap_or(0);
+                let scroll_cursor = self
+                    .win
+                    .runtime
+                    .edits
+                    .get(id)
+                    .map(|e| e.cursor)
+                    .unwrap_or(0);
                 let cursor = self
+                    .win
                     .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), *id))
@@ -8490,7 +8829,7 @@ impl<A: Application> App<A> {
                         widget.cursor_at(local_x, local_y, rect.width, scroll_cursor)
                     });
                 if let Some(at) = cursor {
-                    let edit = self.runtime.edits.entry(*id).or_default();
+                    let edit = self.win.runtime.edits.entry(*id).or_default();
                     if edit.anchor.is_none() {
                         edit.anchor = Some(edit.cursor);
                     }
@@ -8506,19 +8845,20 @@ impl<A: Application> App<A> {
             } => {
                 // The text position the handle stands for, carried with the finger, and
                 // the retained vertical scroll folded in as for a press.
-                let local_x = self.cursor.x - rect.x + grab.x;
-                let local_y = self.cursor.y - rect.y
+                let local_x = self.win.cursor.x - rect.x + grab.x;
+                let local_y = self.win.cursor.y - rect.y
                     + grab.y
-                    + self.runtime.scroll.get(id).map(|s| s.1).unwrap_or(0.0);
-                let edit = self.runtime.edits.get(id).copied().unwrap_or_default();
+                    + self.win.runtime.scroll.get(id).map(|s| s.1).unwrap_or(0.0);
+                let edit = self.win.runtime.edits.get(id).copied().unwrap_or_default();
                 let moved = self
+                    .win
                     .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), *id))
                     .and_then(|widget| widget.cursor_at(local_x, local_y, rect.width, edit.cursor))
                     .and_then(|to| crate::selection::drag(edit, *handle, to.offset));
                 if let Some(moved) = moved {
-                    self.runtime.edits.insert(*id, moved);
+                    self.win.runtime.edits.insert(*id, moved);
                 }
             }
             Drag::Widget {
@@ -8530,18 +8870,18 @@ impl<A: Application> App<A> {
                 active,
                 thumb,
             } => {
-                let dx = self.cursor.x - *last_x;
-                *last_x = self.cursor.x;
+                let dx = self.win.cursor.x - *last_x;
+                *last_x = self.win.cursor.x;
                 if matches!(track.mode, frus_widgets::DragMode::Thumbs { .. }) {
                     let rtl = self.is_rtl();
-                    let at = track.fraction(*rect, self.cursor.x, rtl);
+                    let at = track.fraction(*rect, self.win.cursor.x, rtl);
                     match *thumb {
                         Some(picked) => {
                             self.thumb_drag(*id, picked, frus_widgets::ThumbDrag::Move, at);
                         }
                         // A press on both thumbs: the first movement says which.
                         None => {
-                            let moved = self.cursor.x - *press_x;
+                            let moved = self.win.cursor.x - *press_x;
                             if let Some(picked) = track.pick_thumb(*rect, *press_x, moved, rtl) {
                                 *thumb = Some(picked);
                                 self.thumb_drag(*id, picked, frus_widgets::ThumbDrag::Start, at);
@@ -8550,14 +8890,15 @@ impl<A: Application> App<A> {
                         }
                     }
                 } else if *active {
-                    let value = track.value_at(*rect, *press_x, self.cursor.x, true, self.is_rtl());
+                    let value =
+                        track.value_at(*rect, *press_x, self.win.cursor.x, true, self.is_rtl());
                     self.apply_widget_drag(*id, dx, value);
                 }
             }
             Drag::Reorder { start, moved, .. } => {
                 // Past the threshold this is a real drag, and no longer a sort.
-                let dx = self.cursor.x - start.x;
-                let dy = self.cursor.y - start.y;
+                let dx = self.win.cursor.x - start.x;
+                let dy = self.win.cursor.y - start.y;
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
                     *moved = true;
                 }
@@ -8578,7 +8919,7 @@ impl<A: Application> App<A> {
                     // Past the slop it is a drag and no longer a tap. (The reference's pan
                     // waits for twice this, but its tap has given up at once: a movement in
                     // between is neither. One threshold keeps a press either a tap or a drag.)
-                    let (tx, ty) = (self.cursor.x - start.x, self.cursor.y - start.y);
+                    let (tx, ty) = (self.win.cursor.x - start.x, self.win.cursor.y - start.y);
                     let travelled = match axis {
                         frus_widgets::PanAxis::Free => tx.hypot(ty),
                         frus_widgets::PanAxis::Horizontal => tx.abs(),
@@ -8593,12 +8934,12 @@ impl<A: Application> App<A> {
                 if *moved {
                     let delta = mask_pan(
                         axis,
-                        Point::new(self.cursor.x - last.x, self.cursor.y - last.y),
+                        Point::new(self.win.cursor.x - last.x, self.win.cursor.y - last.y),
                     );
-                    *last = self.cursor;
+                    *last = self.win.cursor;
                     self.track_gesture();
                     if delta.x != 0.0 || delta.y != 0.0 {
-                        let local = self.pan_local(id, self.cursor);
+                        let local = self.pan_local(id, self.win.cursor);
                         self.send_pan(id, frus_widgets::PanEvent::Update { local, delta });
                     }
                 }
@@ -8609,16 +8950,16 @@ impl<A: Application> App<A> {
                 moved,
                 viewport,
             } => {
-                let dx = self.cursor.x - last.x;
-                let dy = self.cursor.y - last.y;
+                let dx = self.win.cursor.x - last.x;
+                let dy = self.win.cursor.y - last.y;
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
                     *moved = true;
                 }
                 if *moved {
-                    let view = self.runtime.interactive.entry(*id).or_default();
+                    let view = self.win.runtime.interactive.entry(*id).or_default();
                     // The finger pushes the content, bounded to the frame.
                     *view = view.pan(dx, dy).clamped(*viewport);
-                    *last = self.cursor;
+                    *last = self.win.cursor;
                     self.track_gesture();
                 }
             }
@@ -8628,8 +8969,8 @@ impl<A: Application> App<A> {
                 moved,
                 over,
             } => {
-                let dx = self.cursor.x - start.x;
-                let dy = self.cursor.y - start.y;
+                let dx = self.win.cursor.x - start.x;
+                let dy = self.win.cursor.y - start.y;
                 // Under the threshold nothing is lifted: the press may still be a click
                 // on whatever the draggable wraps.
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
@@ -8643,11 +8984,13 @@ impl<A: Application> App<A> {
                 // before the finger lifts rather than after.
                 let payload = source.payload;
                 let candidate = self
+                    .win
                     .ui
                     .as_ref()
-                    .and_then(|ui| ui.drop_zone_at(self.cursor))
+                    .and_then(|ui| ui.drop_zone_at(self.win.cursor))
                     .filter(|zone| {
-                        self.tree
+                        self.win
+                            .tree
                             .as_ref()
                             .and_then(|tree| find_widget(tree.as_ref(), zone.id))
                             .is_some_and(|widget| widget.accepts_drag(payload))
@@ -8655,7 +8998,7 @@ impl<A: Application> App<A> {
                     .map(|zone| zone.id);
                 if *over != candidate {
                     *over = candidate;
-                    self.runtime.drag_over = candidate;
+                    self.win.runtime.drag_over = candidate;
                 }
                 self.request_redraw();
             }
@@ -8668,8 +9011,8 @@ impl<A: Application> App<A> {
                 axis,
                 pan,
             } => {
-                let dx = self.cursor.x - last.x;
-                let dy = self.cursor.y - last.y;
+                let dx = self.win.cursor.x - last.x;
+                let dy = self.win.cursor.y - last.y;
                 // Under the threshold we do not scroll yet; the gesture may be a tap.
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
                     *moved = true;
@@ -8690,6 +9033,7 @@ impl<A: Application> App<A> {
                             frus_widgets::PanAxis::Vertical => down,
                             frus_widgets::PanAxis::Free => {
                                 let chain: Vec<_> = self
+                                    .win
                                     .ui
                                     .as_ref()
                                     .map(|ui| ui.scroll_chain(*last).collect())
@@ -8701,9 +9045,9 @@ impl<A: Application> App<A> {
                         };
                         if wins {
                             // The scroll gives its offset back untouched: it never moved.
-                            self.runtime.release_scroll(*id);
+                            self.win.runtime.release_scroll(*id);
                             let start = *last;
-                            self.drag = Some(Drag::Gesture {
+                            self.win.drag = Some(Drag::Gesture {
                                 id: target,
                                 axis: pan_axis,
                                 start,
@@ -8722,8 +9066,8 @@ impl<A: Application> App<A> {
                         };
                         if along {
                             // The list gives the offset back untouched: it never moved.
-                            self.runtime.release_scroll(*id);
-                            self.drag = Some(Drag::Dismiss {
+                            self.win.runtime.release_scroll(*id);
+                            self.win.drag = Some(Drag::Dismiss {
                                 item,
                                 last: *last,
                                 moved: true,
@@ -8742,6 +9086,7 @@ impl<A: Application> App<A> {
                     // without the second, a strip of chips that only slides across stops
                     // the page behind it from scrolling at all.
                     let chain: Vec<_> = self
+                        .win
                         .ui
                         .as_ref()
                         .map(|ui| ui.scroll_chain(*last).collect())
@@ -8752,10 +9097,10 @@ impl<A: Application> App<A> {
                             // The area under the finger lost: it gives its offset back
                             // untouched, since it never moved. The winner is caught and
                             // held exactly as the press would have done to it.
-                            self.runtime.release_scroll(*id);
+                            self.win.runtime.release_scroll(*id);
                             let physics = area.physics;
-                            *carried = self.runtime.catch_scroll_fling(area.id, physics);
-                            self.runtime.hold_scroll(area.id);
+                            *carried = self.win.runtime.catch_scroll_fling(area.id, physics);
+                            self.win.runtime.hold_scroll(area.id);
                             *id = area.id;
                         }
                         *axis = Some(claim_axis(
@@ -8770,6 +9115,7 @@ impl<A: Application> App<A> {
                     // The scroll has begun: an area that puts the keyboard away on a drag
                     // lets the focus go now (milestone 750).
                     let on_drag = self
+                        .win
                         .ui
                         .as_ref()
                         .and_then(|ui| ui.scroll_region(*id))
@@ -8777,8 +9123,8 @@ impl<A: Application> App<A> {
                             area.keyboard_dismiss == frus_widgets::KeyboardDismissBehavior::OnDrag
                         });
                     if on_drag {
-                        self.pending_tap_focus = None;
-                        if self.runtime.input.focused.take().is_some() {
+                        self.win.pending_tap_focus = None;
+                        if self.win.runtime.input.focused.take().is_some() {
                             self.request_redraw();
                         }
                     }
@@ -8797,6 +9143,7 @@ impl<A: Application> App<A> {
                     // drag, and what the list is left with goes through its physics below
                     // exactly as a movement of its own would.
                     let sheet = self
+                        .win
                         .ui
                         .as_ref()
                         .filter(|ui| ui.scroll_region(*id).is_some_and(|a| !a.reverse_y))
@@ -8805,8 +9152,8 @@ impl<A: Application> App<A> {
                         .cloned();
                     if let Some(sheet) = sheet {
                         let px = sheet.available;
-                        let offset = self.runtime.scroll.get(id).map_or(0.0, |o| o.1);
-                        let size = self.runtime.sheet_size(sheet.id, &sheet.spec) * px;
+                        let offset = self.win.runtime.scroll.get(id).map_or(0.0, |o| o.1);
+                        let size = self.win.runtime.sheet_size(sheet.id, &sheet.spec) * px;
                         let (grown, listed) = frus_widgets::split_sheet_drag(
                             -dy,
                             offset,
@@ -8815,21 +9162,28 @@ impl<A: Application> App<A> {
                             sheet.spec.max * px,
                         );
                         if grown != 0.0 {
-                            self.runtime
+                            self.win
+                                .runtime
                                 .sheet_drag(sheet.id, &sheet.spec, grown / px, px);
                         }
                         dy = -listed;
                     }
                 }
                 if *moved {
-                    let area = self.ui.as_ref().and_then(|u| u.scroll_region(*id));
+                    let area = self.win.ui.as_ref().and_then(|u| u.scroll_region(*id));
                     // A region gone from the frame moves as the application's behaviour says.
                     let physics = area.map(|a| a.physics).unwrap_or_else(|| {
                         self.app
                             .scroll_behavior()
-                            .scroll_physics(&self.themes.displayed(&self.app))
+                            .scroll_physics(&self.win.themes.displayed(&self.app))
                     });
-                    let cur = self.runtime.scroll.get(id).copied().unwrap_or((0.0, 0.0));
+                    let cur = self
+                        .win
+                        .runtime
+                        .scroll
+                        .get(id)
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
                     // The finger pushes the content, so we follow the delta at once —
                     // but only as far as the physics allows. Past an edge, bouncing
                     // physics resists more and more (the rubber band) while clamping
@@ -8860,7 +9214,7 @@ impl<A: Application> App<A> {
                         if let Some(host) = area.refresh {
                             self.feed_refresh(host, physics, area.viewport.height, cur.1, ny, ry);
                         }
-                        let cursor = self.cursor;
+                        let cursor = self.win.cursor;
                         for (refused, vertical, extent) in [
                             (rx, false, area.viewport.width),
                             (ry, true, area.viewport.height),
@@ -8876,7 +9230,7 @@ impl<A: Application> App<A> {
                             }
                             let (offset, cross) =
                                 frus_widgets::glow_cross_axis(area.viewport, edge, cursor);
-                            self.runtime.glow_pull(
+                            self.win.runtime.glow_pull(
                                 area.id,
                                 area.overscroll,
                                 edge,
@@ -8889,19 +9243,19 @@ impl<A: Application> App<A> {
                         // Content that moves again lets its stretch go, as the
                         // reference's does on any scroll that is not an overscroll.
                         if rx.abs() < 1e-3 && ry.abs() < 1e-3 && (nx, ny) != cur {
-                            self.runtime.stretch_release(area.id);
+                            self.win.runtime.stretch_release(area.id);
                         }
                     }
-                    self.runtime.scroll.insert(*id, (nx, ny));
-                    self.runtime.scroll_target.insert(*id, (nx, ny));
-                    self.runtime.scroll_velocity.remove(id);
-                    *last = self.cursor;
+                    self.win.runtime.scroll.insert(*id, (nx, ny));
+                    self.win.runtime.scroll_target.insert(*id, (nx, ny));
+                    self.win.runtime.scroll_velocity.remove(id);
+                    *last = self.win.cursor;
                     self.track_gesture();
                 }
             }
             Drag::Dismiss { item, last, moved } => {
-                let dx = self.cursor.x - last.x;
-                let dy = self.cursor.y - last.y;
+                let dx = self.win.cursor.x - last.x;
+                let dy = self.win.cursor.y - last.y;
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
                     *moved = true;
                 }
@@ -8911,8 +9265,8 @@ impl<A: Application> App<A> {
                     } else {
                         dy
                     };
-                    self.runtime.swipe_drag(item, delta);
-                    *last = self.cursor;
+                    self.win.runtime.swipe_drag(item, delta);
+                    *last = self.win.cursor;
                     self.track_gesture();
                 }
             }
@@ -8922,23 +9276,25 @@ impl<A: Application> App<A> {
                 moved,
                 available,
             } => {
-                let dx = self.cursor.x - last.x;
-                let dy = self.cursor.y - last.y;
+                let dx = self.win.cursor.x - last.x;
+                let dy = self.win.cursor.y - last.y;
                 if !*moved && (dx * dx + dy * dy) > slop * slop {
                     *moved = true;
                 }
                 if *moved && *available > 0.0 {
                     let spec = self
+                        .win
                         .ui
                         .as_ref()
                         .and_then(|ui| ui.sheet(*id))
                         .map(|sheet| sheet.spec.clone());
                     if let Some(spec) = spec {
                         // Up grows it: the screen's y runs the other way.
-                        self.runtime
+                        self.win
+                            .runtime
                             .sheet_drag(*id, &spec, -dy / *available, *available);
                     }
-                    *last = self.cursor;
+                    *last = self.win.cursor;
                     self.track_gesture();
                 }
             }
@@ -8947,19 +9303,20 @@ impl<A: Application> App<A> {
                 // Under RTL the finger slides **left** from the right edge, so progress
                 // runs the other way.
                 let sign = if self.is_rtl() { -1.0 } else { 1.0 };
-                let progress = (sign * (self.cursor.x - *start_x) / width).clamp(0.0, 1.0);
+                let progress = (sign * (self.win.cursor.x - *start_x) / width).clamp(0.0, 1.0);
                 self.track_gesture();
-                self.build_dirty = true;
+                self.win.build_dirty = true;
                 self.app.back_gesture(progress);
             }
         }
-        self.drag = Some(drag);
+        self.win.drag = Some(drag);
         self.request_redraw();
     }
 
     /// The refresh area a scrollable sits inside, if any.
     fn refresh_host_of(&self, scrollable: WidgetId) -> Option<WidgetId> {
-        self.ui
+        self.win
+            .ui
             .as_ref()
             .and_then(|ui| ui.scroll_region(scrollable))
             .and_then(|area| area.refresh)
@@ -8971,10 +9328,11 @@ impl<A: Application> App<A> {
         let Some(host) = self.refresh_host_of(scrollable) else {
             return;
         };
-        if !self.runtime.refresh_release(host) {
+        if !self.win.runtime.refresh_release(host) {
             return;
         }
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), host))
@@ -9012,7 +9370,7 @@ impl<A: Application> App<A> {
         refused_y: f32,
     ) {
         if after > 0.5 {
-            self.runtime.refresh_cancel(host);
+            self.win.runtime.refresh_cancel(host);
             return;
         }
         let pulled = if physics.allows_overscroll() {
@@ -9021,14 +9379,14 @@ impl<A: Application> App<A> {
             -refused_y
         };
         if pulled.abs() > 1e-3 {
-            self.runtime.refresh_pull(host, pulled, extent);
+            self.win.runtime.refresh_pull(host, pulled, extent);
         }
     }
 
     /// How far the pointer must travel before a press becomes a drag, given what
     /// kind of pointer it is.
     fn hit_slop(&self) -> f32 {
-        if self.pointer_touch {
+        if self.win.pointer_touch {
             TOUCH_SLOP
         } else {
             PRECISE_SLOP
@@ -9038,10 +9396,10 @@ impl<A: Application> App<A> {
     /// Seconds since the drag under way began — the clock the velocity tracker's
     /// samples are stamped with.
     fn gesture_now(&self) -> f32 {
-        match self.gesture_clock {
+        match self.win.gesture_clock {
             // The test driver's clock: the frames it has run, not the wall's.
             Some((now, start)) => now - start,
-            None => (Instant::now() - self.gesture_start).as_secs_f32(),
+            None => (Instant::now() - self.win.gesture_start).as_secs_f32(),
         }
     }
 
@@ -9050,7 +9408,7 @@ impl<A: Application> App<A> {
     /// microseconds apart on the wall, which made every second click of a test a double
     /// click wherever it landed (milestone 747).
     fn click_clock(&self) -> f32 {
-        match self.gesture_clock {
+        match self.win.gesture_clock {
             Some((now, _)) => now,
             None => (Instant::now() - self.clock_origin).as_secs_f32(),
         }
@@ -9060,7 +9418,7 @@ impl<A: Application> App<A> {
     /// at `then`: soon enough after it and close enough to it — a mouse's slop, or a
     /// finger's, which lands less precisely.
     fn is_double_click(&self, then: f32, there: Point, now: f32, here: Point) -> bool {
-        let slop = if self.pointer_touch {
+        let slop = if self.win.pointer_touch {
             DOUBLE_TAP_SLOP
         } else {
             DOUBLE_CLICK_SLOP
@@ -9074,12 +9432,12 @@ impl<A: Application> App<A> {
     /// The tracker is the application's scroll behaviour's; a drag on a scroll area
     /// replaces it with the area's own.
     fn begin_gesture(&mut self) {
-        self.gesture_velocity = self
+        self.win.gesture_velocity = self
             .app
             .scroll_behavior()
-            .velocity_tracker(&self.themes.displayed(&self.app));
-        self.gesture_start = Instant::now();
-        if let Some((now, start)) = self.gesture_clock.as_mut() {
+            .velocity_tracker(&self.win.themes.displayed(&self.app));
+        self.win.gesture_start = Instant::now();
+        if let Some((now, start)) = self.win.gesture_clock.as_mut() {
             *start = *now;
         }
         self.track_gesture();
@@ -9088,12 +9446,13 @@ impl<A: Application> App<A> {
     /// Records where the pointer is now.
     fn track_gesture(&mut self) {
         let now = self.gesture_now();
-        self.gesture_velocity.add_position(now, self.cursor);
+        self.win.gesture_velocity.add_position(now, self.win.cursor);
     }
 
     /// What the gesture tracker makes of the drag as it stands.
     fn gesture_estimate(&self) -> VelocityEstimate {
-        self.gesture_velocity
+        self.win
+            .gesture_velocity
             .estimate(self.gesture_now())
             .unwrap_or(VelocityEstimate::STILL)
     }
@@ -9107,14 +9466,14 @@ impl<A: Application> App<A> {
     /// form, bounds it with the elastic overshoot, and primes the scroll spring with
     /// the finger's momentum.
     fn fling(&mut self, id: WidgetId, velocity: (f32, f32)) {
-        let Some(area) = self.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
+        let Some(area) = self.win.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
             return;
         };
         let physics = area.physics;
         // The physics decides everything from here: whether there is a fling at all,
         // how far it runs, and what happens at the edges. A release too slow to
         // fling still gets a chance to spring an overscroll back.
-        if self.runtime.fling_scroll(area, physics, velocity) {
+        if self.win.runtime.fling_scroll(area, physics, velocity) {
             self.request_redraw();
         }
     }
@@ -9123,8 +9482,9 @@ impl<A: Application> App<A> {
     /// uses the reorderables' registry, which is independent of clicking, and so covers
     /// the Kanban cards and drop zones, which are not clickable.
     fn reorderable_at(&self, point: Point) -> Option<(WidgetId, usize, bool)> {
-        let id = self.ui.as_ref()?.reorderable_at(point)?;
+        let id = self.win.ui.as_ref()?.reorderable_at(point)?;
         let widget = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))?;
@@ -9149,8 +9509,8 @@ impl<A: Application> App<A> {
     /// The row is found by the index the two share, among the reorderables under the
     /// grip's own middle — which is inside its row by construction.
     fn reorder_source(&self, id: WidgetId, from: usize) -> Option<(WidgetId, Rect)> {
-        let ui = self.ui.as_ref()?;
-        let tree = self.tree.as_ref()?;
+        let ui = self.win.ui.as_ref()?;
+        let tree = self.win.tree.as_ref()?;
         let own = ui.widget_rect(id)?;
         let grabbed = find_widget(tree.as_ref(), id)?;
         if grabbed.reorder_droppable() {
@@ -9171,7 +9531,7 @@ impl<A: Application> App<A> {
     /// first carried, moved with the content since — or, before any frame has carried it,
     /// the frame's.
     fn reorder_carried(&self) -> Option<(WidgetId, Rect)> {
-        match &self.drag {
+        match &self.win.drag {
             Some(Drag::Reorder {
                 carried: Some(carried),
                 ..
@@ -9186,7 +9546,7 @@ impl<A: Application> App<A> {
     /// frame is no longer asked — a row carried to an edge is clipped by it, and a row
     /// scrolled out of sight is not in the frame at all.
     fn keep_carried_box(&mut self) {
-        let source = match &self.drag {
+        let source = match &self.win.drag {
             Some(Drag::Reorder {
                 id,
                 from,
@@ -9196,7 +9556,7 @@ impl<A: Application> App<A> {
             }) => self.reorder_source(*id, *from),
             _ => return,
         };
-        if let Some(Drag::Reorder { carried, .. }) = self.drag.as_mut() {
+        if let Some(Drag::Reorder { carried, .. }) = self.win.drag.as_mut() {
             *carried = source;
         }
     }
@@ -9205,8 +9565,8 @@ impl<A: Application> App<A> {
     /// on. It is not always the topmost reorderable: a list row's grip is a source and
     /// not a target, and what is under it is the row the drop is really aimed at.
     fn reorder_target_at(&self, point: Point) -> Option<WidgetId> {
-        let ui = self.ui.as_ref()?;
-        let tree = self.tree.as_ref()?;
+        let ui = self.win.ui.as_ref()?;
+        let tree = self.win.tree.as_ref()?;
         ui.reorderables_at(point)
             .find(|id| find_widget(tree.as_ref(), *id).is_some_and(|w| w.reorder_droppable()))
     }
@@ -9225,10 +9585,10 @@ impl<A: Application> App<A> {
         from: usize,
         carried: Option<(WidgetId, Rect)>,
     ) -> Option<WidgetId> {
-        if let Some(target) = self.reorder_target_at(self.cursor) {
+        if let Some(target) = self.reorder_target_at(self.win.cursor) {
             return Some(target);
         }
-        let tree = self.tree.as_ref()?;
+        let tree = self.win.tree.as_ref()?;
         let Some(ReorderMotion::Slots(axis)) = find_widget(tree.as_ref(), id).map(reorder_motion)
         else {
             return None;
@@ -9239,9 +9599,9 @@ impl<A: Application> App<A> {
             Some((row, _)) => row,
             None => self.reorder_source(id, from)?.0,
         };
-        let slots = reorder_siblings(self.ui.as_ref()?, tree.as_ref(), row);
+        let slots = reorder_siblings(self.win.ui.as_ref()?, tree.as_ref(), row);
         let boxes: Vec<Rect> = slots.iter().map(|(_, rect)| *rect).collect();
-        nearest_reorder_slot(self.cursor, &boxes, axis).map(|index| slots[index].0)
+        nearest_reorder_slot(self.win.cursor, &boxes, axis).map(|index| slots[index].0)
     }
 
     /// What is being **carried** this frame, where it is now: the box the ghost is drawn
@@ -9251,7 +9611,7 @@ impl<A: Application> App<A> {
     /// *item* reaches the edge, and that is the honest moment: a row half off the bottom
     /// is already asking to go further, whatever the finger holding it is over.
     fn carried_rect(&self) -> Option<Rect> {
-        match &self.drag {
+        match &self.win.drag {
             Some(Drag::Reorder {
                 start, moved: true, ..
             }) => {
@@ -9261,7 +9621,7 @@ impl<A: Application> App<A> {
                 let (gx, gy) = ghost_offset(
                     self.dragged_reorder_motion()
                         .unwrap_or(ReorderMotion::Columns),
-                    (self.cursor.x - start.x, self.cursor.y - start.y),
+                    (self.win.cursor.x - start.x, self.win.cursor.y - start.y),
                 );
                 Some(src.translate(gx, gy))
             }
@@ -9273,7 +9633,7 @@ impl<A: Application> App<A> {
             }) => Some(
                 source
                     .rect
-                    .translate(self.cursor.x - start.x, self.cursor.y - start.y),
+                    .translate(self.win.cursor.x - start.x, self.win.cursor.y - start.y),
             ),
             _ => None,
         }
@@ -9292,9 +9652,9 @@ impl<A: Application> App<A> {
             return false;
         };
         let area = {
-            let scroll = &self.runtime.scroll;
-            self.ui.as_ref().and_then(|ui| {
-                ui.scroll_chain(self.cursor).find(|area| {
+            let scroll = &self.win.runtime.scroll;
+            self.win.ui.as_ref().and_then(|ui| {
+                ui.scroll_chain(self.win.cursor).find(|area| {
                     area.accepts_user_offset(scroll.get(&area.id).copied().unwrap_or((0.0, 0.0)))
                 })
             })
@@ -9303,6 +9663,7 @@ impl<A: Application> App<A> {
             return false;
         };
         let offset = self
+            .win
             .runtime
             .scroll
             .get(&area.id)
@@ -9345,17 +9706,17 @@ impl<A: Application> App<A> {
         if next == offset {
             return false;
         }
-        self.runtime.scroll.insert(area.id, next);
+        self.win.runtime.scroll.insert(area.id, next);
         // The target follows, or the inertia the area was resting at would spring the
         // list straight back out from under the row.
-        self.runtime.scroll_target.insert(area.id, next);
-        self.runtime.scroll_velocity.remove(&area.id);
+        self.win.runtime.scroll_target.insert(area.id, next);
+        self.win.runtime.scroll_velocity.remove(&area.id);
         // What is carried stays under the finger. Its ghost is drawn at the box the frame
         // puts it at, offset by how far the finger has moved since the press; the frame now
         // puts that box where the content went, so the press goes there too. Otherwise the
         // ghost rides up with the list, stops hanging over the edge, and the scroll it
         // started starves itself — seen on a phone, milestone 517.
-        if let Some(drag) = self.drag.as_mut() {
+        if let Some(drag) = self.win.drag.as_mut() {
             follow_content(
                 drag,
                 area.offset_delta((next.0 - offset.0, next.1 - offset.1)),
@@ -9368,10 +9729,11 @@ impl<A: Application> App<A> {
     /// keeps the **pointer spring** (`reorder_x` following the pointer) to `Table`'s columns;
     /// the Kanban cards and a list's rows spring their insertion line instead.
     fn dragged_reorder_motion(&self) -> Option<ReorderMotion> {
-        let Some(Drag::Reorder { id, .. }) = self.drag else {
+        let Some(Drag::Reorder { id, .. }) = self.win.drag else {
             return None;
         };
-        self.tree
+        self.win
+            .tree
             .as_ref()
             .and_then(|t| find_widget(t.as_ref(), id))
             .map(reorder_motion)
@@ -9380,19 +9742,19 @@ impl<A: Application> App<A> {
     /// Steps the reorder springs one frame, per gesture — see the frame loop — and says
     /// whether they are still moving.
     fn advance_reorder_springs(&mut self, dt: f32) -> bool {
-        let reorder_motion = matches!(self.drag, Some(Drag::Reorder { moved: true, .. }))
+        let reorder_motion = matches!(self.win.drag, Some(Drag::Reorder { moved: true, .. }))
             .then(|| self.dragged_reorder_motion())
             .flatten();
         match reorder_motion {
             Some(ReorderMotion::Columns) => {
-                self.reorder_x = spring_toward(self.reorder_x, self.cursor.x, dt, 0.07);
-                (self.cursor.x - self.reorder_x).abs() > 0.5
+                self.win.reorder_x = spring_toward(self.win.reorder_x, self.win.cursor.x, dt, 0.07);
+                (self.win.cursor.x - self.win.reorder_x).abs() > 0.5
             }
             Some(ReorderMotion::Slots(ReorderAxis::Vertical)) => {
                 match self.reorder_drop_line(drag_preview::INSERT_THICKNESS) {
                     Some(target) => {
-                        self.reorder_y = spring_toward(self.reorder_y, target.y, dt, 0.07);
-                        (target.y - self.reorder_y).abs() > 0.5
+                        self.win.reorder_y = spring_toward(self.win.reorder_y, target.y, dt, 0.07);
+                        (target.y - self.win.reorder_y).abs() > 0.5
                     }
                     None => false,
                 }
@@ -9400,8 +9762,8 @@ impl<A: Application> App<A> {
             Some(ReorderMotion::Slots(ReorderAxis::Horizontal)) => {
                 match self.reorder_drop_line(drag_preview::INSERT_THICKNESS) {
                     Some(target) => {
-                        self.reorder_x = spring_toward(self.reorder_x, target.x, dt, 0.07);
-                        (target.x - self.reorder_x).abs() > 0.5
+                        self.win.reorder_x = spring_toward(self.win.reorder_x, target.x, dt, 0.07);
+                        (target.x - self.win.reorder_x).abs() > 0.5
                     }
                     None => false,
                 }
@@ -9508,7 +9870,7 @@ impl<A: Application> App<A> {
     fn paint_reorder_preview(&self, ui: &Ui<A::Message>, theme: &Theme, scene: &mut Scene) {
         let Some(Drag::Reorder {
             start, moved: true, ..
-        }) = self.drag
+        }) = self.win.drag
         else {
             return;
         };
@@ -9518,13 +9880,14 @@ impl<A: Application> App<A> {
             return;
         };
         let motion = self
+            .win
             .tree
             .as_ref()
             .and_then(|t| find_widget(t.as_ref(), id))
             .map(reorder_motion)
             .unwrap_or(ReorderMotion::Columns);
-        let dx = self.cursor.x - start.x;
-        let dy = self.cursor.y - start.y;
+        let dx = self.win.cursor.x - start.x;
+        let dy = self.win.cursor.y - start.y;
 
         // The ghost's offset, per motion — see `ghost_offset`.
         let (gx, gy) = ghost_offset(motion, (dx, dy));
@@ -9533,6 +9896,7 @@ impl<A: Application> App<A> {
         // rich card's content, which its children paint (milestone 251), **and** by the
         // vertical reflow, to lift the card out of the preview. Fallback: the card alone.
         let owners: std::collections::HashSet<u64> = self
+            .win
             .tree
             .as_ref()
             .and_then(|t| find_widget(t.as_ref(), id))
@@ -9544,8 +9908,12 @@ impl<A: Application> App<A> {
                 // Reflow the neighbouring columns: the source's gap closes and the drop
                 // slot opens, following the pointer's **smoothed** abscissa — a gentle
                 // inertial slide, while the ghost sticks to the real pointer.
-                let reflowed =
-                    reflow_reorder_columns(scene.primitives(), src, self.reorder_x, id.as_u64());
+                let reflowed = reflow_reorder_columns(
+                    scene.primitives(),
+                    src,
+                    self.win.reorder_x,
+                    id.as_u64(),
+                );
                 scene.clear();
                 for primitive in reflowed {
                     scene.push_primitive(primitive);
@@ -9566,11 +9934,11 @@ impl<A: Application> App<A> {
                     self.reorder_drop_line(drag_preview::INSERT_THICKNESS)
                         .map(|r| match axis {
                             ReorderAxis::Vertical => Rect {
-                                y: self.reorder_y,
+                                y: self.win.reorder_y,
                                 ..r
                             },
                             ReorderAxis::Horizontal => Rect {
-                                x: self.reorder_x,
+                                x: self.win.reorder_x,
                                 ..r
                             },
                         });
@@ -9580,6 +9948,7 @@ impl<A: Application> App<A> {
                 // part of the list: moved with it, the first left its `+` a row above its own
                 // disc on a phone (milestone 517).
                 let movable = self
+                    .win
                     .tree
                     .as_ref()
                     .map(|tree| reorderable_owners(ui, tree.as_ref()))
@@ -9636,11 +10005,12 @@ impl<A: Application> App<A> {
             start,
             moved: true,
             ..
-        }) = &self.drag
+        }) = &self.win.drag
         else {
             return;
         };
         let widget = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), source.id));
@@ -9656,8 +10026,8 @@ impl<A: Application> App<A> {
             })
             .unwrap_or_else(|| std::iter::once(source.id.as_u64()).collect());
         let opacity = widget.map(|w| w.drag_ghost_opacity()).unwrap_or(1.0);
-        let dx = self.cursor.x - start.x;
-        let dy = self.cursor.y - start.y;
+        let dx = self.win.cursor.x - start.x;
+        let dy = self.win.cursor.y - start.y;
 
         // What is left behind, faded in place: the item is being carried, not deleted.
         let original: Vec<Primitive> = scene.primitives().to_vec();
@@ -9688,15 +10058,16 @@ impl<A: Application> App<A> {
     fn reorder_drop_line(&self, thickness: f32) -> Option<Rect> {
         let Some(Drag::Reorder {
             id, from, carried, ..
-        }) = self.drag
+        }) = self.win.drag
         else {
             return None;
         };
         // The reorderable slot — card, row or drop zone — the release would land on: the
         // one under the pointer, or the nearest of the list's own.
         let target = self.reorder_drop_target(id, from, carried)?;
-        let rect = self.ui.as_ref()?.widget_rect(target)?;
+        let rect = self.win.ui.as_ref()?.widget_rect(target)?;
         let axis = match self
+            .win
             .tree
             .as_ref()
             .and_then(|t| find_widget(t.as_ref(), target))
@@ -9721,13 +10092,14 @@ impl<A: Application> App<A> {
     /// the insertion line's counterpart on the **routing** side.
     fn reorder_insert_after(&self, target: WidgetId, rect: Rect) -> bool {
         match self
+            .win
             .tree
             .as_ref()
             .and_then(|t| find_widget(t.as_ref(), target))
             .map(reorder_motion)
         {
             Some(ReorderMotion::Slots(axis)) => {
-                reorder_drop_after(self.cursor, rect, axis, self.is_rtl())
+                reorder_drop_after(self.win.cursor, rect, axis, self.is_rtl())
             }
             _ => false,
         }
@@ -9735,14 +10107,15 @@ impl<A: Application> App<A> {
 
     /// The innermost detector that takes a drag under the pointer, with the way it drags.
     fn pan_target(&self) -> Option<(WidgetId, frus_widgets::PanAxis)> {
-        let (id, _) = self.ui.as_ref()?.pan_at(self.cursor)?;
-        let axis = find_widget(self.tree.as_ref()?.as_ref(), id)?.pan_axis()?;
+        let (id, _) = self.win.ui.as_ref()?.pan_at(self.win.cursor)?;
+        let axis = find_widget(self.win.tree.as_ref()?.as_ref(), id)?.pan_axis()?;
         Some((id, axis))
     }
 
     /// `at`, in the coordinates of the detector `id`.
     fn pan_local(&self, id: WidgetId, at: Point) -> Point {
         let origin = self
+            .win
             .ui
             .as_ref()
             .and_then(|ui| ui.widget_rect(id))
@@ -9753,8 +10126,9 @@ impl<A: Application> App<A> {
     /// Hands one moment of a drag to the detector `id`, and its message to the application.
     fn send_pan(&mut self, id: WidgetId, event: frus_widgets::PanEvent) {
         let rtl = self.is_rtl();
-        let value = self.runtime.value(id);
+        let value = self.win.runtime.value(id);
         let (message, moved, released) = match self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -9765,7 +10139,7 @@ impl<A: Application> App<A> {
                 // means.
                 let moved = widget.pan_value(event, value, rtl);
                 let released = match event {
-                    frus_widgets::PanEvent::End { .. } if self.runtime.value_placed(id) => {
+                    frus_widgets::PanEvent::End { .. } if self.win.runtime.value_placed(id) => {
                         Some(widget.on_value_release(value))
                     }
                     _ => None,
@@ -9775,10 +10149,10 @@ impl<A: Application> App<A> {
             None => (None, None, None),
         };
         if let Some(v) = moved {
-            self.runtime.hold_value(id, v);
+            self.win.runtime.hold_value(id, v);
         }
         if let Some(release) = released {
-            self.runtime.release_value(id);
+            self.win.runtime.release_value(id);
             if let Some(message) = release {
                 self.dispatch(message);
             }
@@ -9798,6 +10172,7 @@ impl<A: Application> App<A> {
     /// somewhere its own final message never mentioned.
     fn dispatch_drag_edge(&mut self, id: WidgetId, edge: Edge, fraction: f32) {
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -9820,9 +10195,10 @@ impl<A: Application> App<A> {
     ) {
         if moment == frus_widgets::ThumbDrag::Start {
             // The widget paints the thumb it took raised and on top.
-            self.runtime.input.thumb = Some((id, thumb));
+            self.win.runtime.input.thumb = Some((id, thumb));
         }
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -9836,6 +10212,7 @@ impl<A: Application> App<A> {
     /// the drag's track says this moment stands for — `None` when it changes nothing.
     fn apply_widget_drag(&mut self, id: WidgetId, dx: f32, value: Option<f32>) {
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -9856,7 +10233,7 @@ impl<A: Application> App<A> {
     fn key_down(&mut self, event: &KeyDown, event_loop: Option<&ActiveEventLoop>) {
         // The user acts: restored offsets still waiting for their content stay where they
         // are drawn (milestone 768).
-        self.runtime.forget_restored_scroll();
+        self.win.runtime.forget_restored_scroll();
         // What the browser typed into the field just before this key comes first: a key it
         // hands on reaches the shell at once, and the letters before it are still waiting for
         // the end of the turn — an arrow would move a caret that has not had them yet, and be
@@ -9911,12 +10288,13 @@ impl<A: Application> App<A> {
         // binding on a bare letter would otherwise make every field under it
         // impossible to type in.
         if let Some(stroke) = self.keystroke(event) {
-            let typing = !stroke.is_command() && self.runtime.input.focused.is_some();
+            let typing = !stroke.is_command() && self.win.runtime.input.focused.is_some();
             if !typing {
                 let msgs = self
+                    .win
                     .ui
                     .as_ref()
-                    .map(|ui| ui.keystroke(stroke, self.runtime.input.focused))
+                    .map(|ui| ui.keystroke(stroke, self.win.runtime.input.focused))
                     .unwrap_or_default();
                 if !msgs.is_empty() {
                     for msg in msgs {
@@ -9932,12 +10310,13 @@ impl<A: Application> App<A> {
         if matches!(event.logical_key, WinitKey::Named(NamedKey::Tab)) {
             let forward = !self.shift;
             let next = self
+                .win
                 .ui
                 .as_ref()
-                .and_then(|ui| ui.focus_next(self.runtime.input.focused, forward));
+                .and_then(|ui| ui.focus_next(self.win.runtime.input.focused, forward));
             if next.is_some() {
-                self.runtime.input.focused = next;
-                self.runtime.region = None;
+                self.win.runtime.input.focused = next;
+                self.win.runtime.region = None;
                 self.reveal_focus();
                 self.request_redraw();
             }
@@ -9955,7 +10334,7 @@ impl<A: Application> App<A> {
             return;
         }
 
-        let Some(focused) = self.runtime.input.focused else {
+        let Some(focused) = self.win.runtime.input.focused else {
             // With nothing focused, a selection an area holds still answers to the
             // clipboard's Copy and to Select all.
             self.region_key(event);
@@ -9978,12 +10357,13 @@ impl<A: Application> App<A> {
         if self.apple_keys && self.meta {
             if let Some(key) = apple_arrow_jump(&event.logical_key, self.shift) {
                 let is_text = self
+                    .win
                     .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), focused))
                     .is_some_and(is_text_field);
                 if is_text {
-                    self.goal_x = None;
+                    self.win.goal_x = None;
                     self.apply_key(focused, key);
                     self.request_redraw();
                     return;
@@ -10030,6 +10410,7 @@ impl<A: Application> App<A> {
                     }
                 };
                 let widget = self
+                    .win
                     .tree
                     .as_ref()
                     .and_then(|tree| find_widget(tree.as_ref(), focused));
@@ -10056,6 +10437,7 @@ impl<A: Application> App<A> {
             }
 
             let is_text = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), focused))
@@ -10064,11 +10446,12 @@ impl<A: Application> App<A> {
                 !is_text || matches!(direction, FocusDirection::Up | FocusDirection::Down);
             if navigates {
                 if let Some(next) = self
+                    .win
                     .ui
                     .as_ref()
                     .and_then(|ui| ui.focus_directional(focused, direction))
                 {
-                    self.runtime.input.focused = Some(next);
+                    self.win.runtime.input.focused = Some(next);
                     self.reveal_focus();
                     self.request_redraw();
                 }
@@ -10096,6 +10479,7 @@ impl<A: Application> App<A> {
                 }
             };
             let handled = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), focused))
@@ -10117,6 +10501,7 @@ impl<A: Application> App<A> {
             WinitKey::Named(NamedKey::Enter) | WinitKey::Named(NamedKey::Space)
         ) {
             let widget = self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), focused))
@@ -10151,7 +10536,7 @@ impl<A: Application> App<A> {
                 ClipCommand::Cut => self.cut_selection(focused),
                 ClipCommand::Paste => {
                     // Answered now, or — on the Web — on a later frame.
-                    if let Some(pasted) = self.clipboard.paste(focused, self.window.as_ref()) {
+                    if let Some(pasted) = self.clipboard.paste(focused, self.win.window.as_ref()) {
                         self.land_paste(pasted);
                     }
                 }
@@ -10164,6 +10549,7 @@ impl<A: Application> App<A> {
         // one, and it is opened on the field that has the focus.
         if opens_selection_bar(&event.logical_key, self.shift)
             && self
+                .win
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), focused))
@@ -10268,19 +10654,20 @@ impl<A: Application> App<A> {
     /// pinned from its first frame.
     fn resolve_pending_focus(&mut self) {
         if self.app.focus_highlight_strategy() != frus_widgets::FocusHighlightStrategy::Automatic {
-            self.note_input(self.runtime.focus_visible);
+            self.note_input(self.win.runtime.focus_visible);
         }
-        if self.pending_focus.is_empty() {
+        if self.win.pending_focus.is_empty() {
             return;
         }
-        let keys = std::mem::take(&mut self.pending_focus);
+        let keys = std::mem::take(&mut self.win.pending_focus);
         let ids: Vec<WidgetId> = self
+            .win
             .tree
             .as_deref()
             .map(|tree| keys.iter().filter_map(|&k| find_by_key(tree, k)).collect())
             .unwrap_or_default();
         if let Some(&id) = ids.last() {
-            self.runtime.input.focused = Some(id);
+            self.win.runtime.input.focused = Some(id);
         }
     }
 
@@ -10291,8 +10678,8 @@ impl<A: Application> App<A> {
     fn note_input(&mut self, keyboard: bool) {
         let shown = self.app.focus_highlight_strategy().mode_after(keyboard)
             == frus_widgets::FocusHighlightMode::Traditional;
-        if shown != self.runtime.focus_visible {
-            self.runtime.focus_visible = shown;
+        if shown != self.win.runtime.focus_visible {
+            self.win.runtime.focus_visible = shown;
             self.request_redraw();
         }
     }
@@ -10308,14 +10695,16 @@ impl<A: Application> App<A> {
         #[cfg(not(android))]
         let system_keyboard = false;
         let keyboard_up =
-            system_keyboard || self.simulated.as_ref().is_some_and(|sim| sim.keyboard);
+            system_keyboard || self.win.simulated.as_ref().is_some_and(|sim| sim.keyboard);
         keyboard_up
             && self
+                .win
                 .runtime
                 .input
                 .focused
                 .and_then(|id| {
-                    self.tree
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                 })
@@ -10353,16 +10742,17 @@ impl<A: Application> App<A> {
         }
         // Then a selection an area holds with its bar, as for a field's.
         if self
+            .win
             .runtime
             .region
             .as_ref()
             .is_some_and(|selection| selection.bar)
         {
-            self.runtime.region = None;
+            self.win.runtime.region = None;
             self.request_redraw();
             return true;
         }
-        if let Some(message) = self.ui.as_ref().and_then(|ui| ui.top_dismiss()) {
+        if let Some(message) = self.win.ui.as_ref().and_then(|ui| ui.top_dismiss()) {
             self.dispatch(message);
             self.request_redraw();
             return true;
@@ -10371,6 +10761,7 @@ impl<A: Application> App<A> {
         // (milestone 799).
         #[cfg(feature = "webview")]
         if let Some(controller) = self
+            .win
             .ui
             .as_ref()
             .and_then(|ui| ui.platform_view_taking_back())
@@ -10383,7 +10774,7 @@ impl<A: Application> App<A> {
             return true;
         }
         if self.app.can_handle_back() {
-            self.build_dirty = true;
+            self.win.build_dirty = true;
             // A pop, not a swipe: no finger is on the page (milestone 622).
             self.app.go_back();
             self.request_redraw();
@@ -10402,24 +10793,25 @@ impl<A: Application> App<A> {
             return;
         }
         // Then a selection an area holds.
-        if self.runtime.region.take().is_some() {
+        if self.win.runtime.region.take().is_some() {
             self.request_redraw();
             return;
         }
         // 1) Walk up the focus path. `Some(None)` means consumed with no message; an
         // outer `None` means the whole path ignored it, so we fall back.
-        let outcome: Option<Option<A::Message>> = self.runtime.input.focused.and_then(|focused| {
-            let tree = self.tree.as_ref()?;
-            let path = find_path(tree.as_ref(), focused);
-            for widget in path.iter().rev() {
-                match widget.on_key(&Key::Escape) {
-                    KeyResponse::Handled(message) => return Some(message),
-                    KeyResponse::Skip => return Some(None),
-                    KeyResponse::Ignored => {}
+        let outcome: Option<Option<A::Message>> =
+            self.win.runtime.input.focused.and_then(|focused| {
+                let tree = self.win.tree.as_ref()?;
+                let path = find_path(tree.as_ref(), focused);
+                for widget in path.iter().rev() {
+                    match widget.on_key(&Key::Escape) {
+                        KeyResponse::Handled(message) => return Some(message),
+                        KeyResponse::Skip => return Some(None),
+                        KeyResponse::Ignored => {}
+                    }
                 }
-            }
-            None
-        });
+                None
+            });
 
         match outcome {
             Some(message) => {
@@ -10430,7 +10822,7 @@ impl<A: Application> App<A> {
             }
             // 2) Nobody on the path, or nothing focused: the topmost overlay.
             None => {
-                if let Some(message) = self.ui.as_ref().and_then(|ui| ui.top_dismiss()) {
+                if let Some(message) = self.win.ui.as_ref().and_then(|ui| ui.top_dismiss()) {
                     self.dispatch(message);
                     self.request_redraw();
                 }
@@ -10445,27 +10837,30 @@ impl<A: Application> App<A> {
     /// navigates focus instead.
     fn move_caret_vertical(&mut self, id: WidgetId, down: bool, page: bool) -> bool {
         let width = self
+            .win
             .ui
             .as_ref()
             .and_then(|ui| ui.widget_rect(id))
             .map(|r| r.width)
             .unwrap_or(0.0);
         let cursor = self
+            .win
             .runtime
             .edits
             .get(&id)
             .map(|e| e.position())
             .unwrap_or_default();
         let moved = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
-            .and_then(|widget| widget.caret_vertical(width, cursor, down, page, self.goal_x));
+            .and_then(|widget| widget.caret_vertical(width, cursor, down, page, self.win.goal_x));
         let Some((new_cursor, goal)) = moved else {
             return false;
         };
         let shift = self.shift;
-        let edit = self.runtime.edits.entry(id).or_default();
+        let edit = self.win.runtime.edits.entry(id).or_default();
         if shift {
             if edit.anchor.is_none() {
                 edit.anchor = Some(edit.cursor);
@@ -10476,7 +10871,7 @@ impl<A: Application> App<A> {
         edit.cursor = new_cursor.offset;
         edit.affinity = new_cursor.affinity;
         // Remember the goal column for the next vertical jump.
-        self.goal_x = Some(goal);
+        self.win.goal_x = Some(goal);
         self.reveal_caret(id, new_cursor);
         self.request_redraw();
         true
@@ -10485,8 +10880,15 @@ impl<A: Application> App<A> {
     /// A hold in field `id` selects the word under the finger — the press has already
     /// put the caret there — and gives the selection its handles (milestone 511).
     fn select_held_word(&mut self, id: WidgetId) {
-        let cursor = self.runtime.edits.get(&id).map(|e| e.cursor).unwrap_or(0);
+        let cursor = self
+            .win
+            .runtime
+            .edits
+            .get(&id)
+            .map(|e| e.cursor)
+            .unwrap_or(0);
         let word = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -10498,7 +10900,7 @@ impl<A: Application> App<A> {
             self.show_selection_toolbar(id);
             return;
         };
-        self.runtime.edits.insert(
+        self.win.runtime.edits.insert(
             id,
             Edit {
                 affinity: Default::default(),
@@ -10507,8 +10909,8 @@ impl<A: Application> App<A> {
                 composing: None,
             },
         );
-        self.runtime.selection_handles = Some(id);
-        self.runtime.close_edit_run(id);
+        self.win.runtime.selection_handles = Some(id);
+        self.win.runtime.close_edit_run(id);
         self.show_selection_toolbar(id);
         #[cfg(android)]
         self.push_ime_context(id);
@@ -10517,16 +10919,16 @@ impl<A: Application> App<A> {
     /// The selection handle under the pointer, taken: a drag that moves its end of the
     /// focused field's selection. `None` when no handle is showing there.
     fn grab_selection_handle(&self) -> Option<Drag> {
-        let id = self.runtime.selection_handles?;
-        if self.runtime.input.focused != Some(id) {
+        let id = self.win.runtime.selection_handles?;
+        if self.win.runtime.input.focused != Some(id) {
             return None;
         }
-        let rect = self.ui.as_ref()?.widget_rect(id)?;
-        let edit = self.runtime.edits.get(&id).copied()?;
-        let scroll_y = self.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
-        let handles = find_widget(self.tree.as_ref()?.as_ref(), id)?
+        let rect = self.win.ui.as_ref()?.widget_rect(id)?;
+        let edit = self.win.runtime.edits.get(&id).copied()?;
+        let scroll_y = self.win.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
+        let handles = find_widget(self.win.tree.as_ref()?.as_ref(), id)?
             .selection_handles(rect.width, &edit, scroll_y)?;
-        let local = Point::new(self.cursor.x - rect.x, self.cursor.y - rect.y);
+        let local = Point::new(self.win.cursor.x - rect.x, self.win.cursor.y - rect.y);
         let handle = crate::selection::grab(&handles, local)?;
         let at = handles[handle.index()].line_center;
         Some(Drag::SelectionHandle {
@@ -10541,14 +10943,15 @@ impl<A: Application> App<A> {
     /// whatever message comes out, a value change or a submission.
     fn apply_key(&mut self, id: WidgetId, key: Key) {
         // Any horizontal move, or any keystroke, forgets the vertical goal column.
-        self.goal_x = None;
+        self.win.goal_x = None;
         // Typing puts a touch selection's handles away, as a press does (milestone 511) —
         // and the bar over it (milestone 568).
-        self.runtime.selection_handles = None;
-        self.runtime.selection_toolbar = None;
-        let was = self.runtime.edits.get(&id).copied().unwrap_or_default();
+        self.win.runtime.selection_handles = None;
+        self.win.runtime.selection_toolbar = None;
+        let was = self.win.runtime.edits.get(&id).copied().unwrap_or_default();
         let mut edit = was;
         let widget = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id));
@@ -10569,6 +10972,7 @@ impl<A: Application> App<A> {
             Key::Left { .. } | Key::Right { .. } | Key::Home { .. } | Key::End { .. }
         );
         let width = self
+            .win
             .ui
             .as_ref()
             .and_then(|ui| ui.widget_rect(id))
@@ -10582,7 +10986,7 @@ impl<A: Application> App<A> {
         } else {
             widget.and_then(|widget| widget.on_edit(&mut edit, &key))
         };
-        self.runtime.edits.insert(id, edit);
+        self.win.runtime.edits.insert(id, edit);
         // In a multi-line field, make the retained scroll follow the caret and reveal it.
         self.reveal_caret(id, edit.position());
         if let Some(message) = message {
@@ -10597,6 +11001,7 @@ impl<A: Application> App<A> {
         // and an Enter submits instead of typing. The value is read again from the tree
         // the dispatch has just rebuilt, so what is recorded is what happened.
         let after = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -10606,12 +11011,13 @@ impl<A: Application> App<A> {
             (Some(before), Some(after)) if before != after => {
                 let kind = EditKind::of(&key, was.selection_range().is_some(), self.composing());
                 let since = self.since_last_edit();
-                self.runtime
+                self.win
+                    .runtime
                     .record_edit(id, EditSnapshot::new(before, was), kind, since);
             }
             // A key that moved only the caret ends the run: what is typed next is a step
             // of its own, or one undo would take back two visits to the field at once.
-            (Some(_), _) => self.runtime.close_edit_run(id),
+            (Some(_), _) => self.win.runtime.close_edit_run(id),
             _ => {}
         }
     }
@@ -10625,15 +11031,15 @@ impl<A: Application> App<A> {
     /// pass: mounts, leaving fades and all.
     fn dispatch_edit(&mut self, message: A::Message) {
         self.dispatch(message);
-        if let Some((width, height)) = self.last_size {
-            let theme = self.themes.displayed(&self.app);
+        if let Some((width, height)) = self.win.last_size {
+            let theme = self.win.themes.displayed(&self.app);
             // A surface of its own, because this build happens between frames rather than
             // inside one — and the same `build_view` as the frame path, because the next
             // key in the burst reads this tree straight away.
-            let tree = self
-                .media_query(width, height)
-                .scope(|| build_view(&self.app, &theme, &self.runtime));
-            self.tree = Some(tree);
+            let tree = self.media_query(width, height).scope(|| {
+                build_window_view(&self.app, self.win.id.as_deref(), &theme, &self.win.runtime)
+            });
+            self.win.tree = Some(tree);
         }
     }
 
@@ -10642,19 +11048,21 @@ impl<A: Application> App<A> {
     fn since_last_edit(&mut self) -> f32 {
         let now = Instant::now();
         let since = self
+            .win
             .last_edit_at
             .map(|then| now.duration_since(then).as_secs_f32())
             .unwrap_or(f32::INFINITY);
-        self.last_edit_at = Some(now);
+        self.win.last_edit_at = Some(now);
         since
     }
 
     /// Whether an input method is in the middle of composing a word.
     fn composing(&self) -> bool {
-        self.runtime
+        self.win
+            .runtime
             .input
             .focused
-            .and_then(|id| self.runtime.edits.get(&id))
+            .and_then(|id| self.win.runtime.edits.get(&id))
             .is_some_and(|edit| edit.composing.is_some())
     }
 
@@ -10663,6 +11071,7 @@ impl<A: Application> App<A> {
     /// nothing and says so.
     fn step_history(&mut self, id: WidgetId, forward: bool) -> bool {
         let value = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -10671,31 +11080,32 @@ impl<A: Application> App<A> {
         let Some(value) = value else {
             return false;
         };
-        let edit = self.runtime.edits.get(&id).copied().unwrap_or_default();
+        let edit = self.win.runtime.edits.get(&id).copied().unwrap_or_default();
         let current = EditSnapshot::new(value, edit);
         let target = if forward {
-            self.runtime.redo_edit(id, current)
+            self.win.runtime.redo_edit(id, current)
         } else {
-            self.runtime.undo_edit(id, current)
+            self.win.runtime.undo_edit(id, current)
         };
         let Some(target) = target else {
             return false;
         };
         let message = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
             .and_then(|widget| widget.replace_value(target.value.clone()));
         // The caret goes back with the text — an undo that restores the value and leaves
         // the caret at the end has done half the job.
-        self.runtime.edits.insert(id, target.edit);
+        self.win.runtime.edits.insert(id, target.edit);
         self.reveal_caret(id, target.edit.position());
         if let Some(message) = message {
             self.dispatch_edit(message);
         }
         // An undo is not a keystroke: what is typed after it starts a run of its own,
         // however quickly it follows.
-        self.last_edit_at = None;
+        self.win.last_edit_at = None;
         true
     }
 
@@ -10711,16 +11121,21 @@ impl<A: Application> App<A> {
     /// cuts. Anything already moving the offset is let go of — the keyboard has just
     /// overruled it.
     fn reveal_focus(&mut self) {
-        let Some(id) = self.runtime.input.focused else {
+        let Some(id) = self.win.runtime.input.focused else {
             return;
         };
-        let Some(moves) = self.ui.as_ref().map(|ui| ui.reveal(id, &self.runtime)) else {
+        let Some(moves) = self
+            .win
+            .ui
+            .as_ref()
+            .map(|ui| ui.reveal(id, &self.win.runtime))
+        else {
             return;
         };
         for (area, offset) in moves {
-            self.runtime.scroll_ballistic.remove(&area);
-            self.runtime.scroll_velocity.remove(&area);
-            self.runtime.scroll_target.insert(area, offset);
+            self.win.runtime.scroll_ballistic.remove(&area);
+            self.win.runtime.scroll_velocity.remove(&area);
+            self.win.runtime.scroll_target.insert(area, offset);
         }
     }
 
@@ -10728,10 +11143,16 @@ impl<A: Application> App<A> {
     /// `runtime.scroll[id]` just enough to keep the caret visible, the way an editor
     /// re-centres as you type. A no-op for a field that does not scroll.
     fn reveal_caret(&mut self, id: WidgetId, cursor: frus_widgets::TextPosition) {
-        let Some(vp) = self.ui.as_ref().and_then(|ui| ui.scrollable_viewport(id)) else {
+        let Some(vp) = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.scrollable_viewport(id))
+        else {
             return;
         };
         let metrics = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -10740,22 +11161,23 @@ impl<A: Application> App<A> {
             return;
         };
         let max_y = (content_h - visible_h).max(0.0);
-        let cur = self.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
+        let cur = self.win.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
         // The scroll window in which the caret stays visible, from "the caret's bottom
         // is visible" to "the caret's top is visible". We bring the current scroll into it.
         let lo = (caret_top + caret_h - visible_h).max(0.0);
         let hi = caret_top;
         let target = cur.clamp(lo.min(hi), lo.max(hi)).clamp(0.0, max_y);
-        self.runtime.scroll.insert(id, (0.0, target));
-        self.runtime.scroll_target.insert(id, (0.0, target));
-        self.runtime.scroll_velocity.remove(&id);
+        self.win.runtime.scroll.insert(id, (0.0, target));
+        self.win.runtime.scroll_target.insert(id, (0.0, target));
+        self.win.runtime.scroll_velocity.remove(&id);
     }
 
     /// Copies field `id`'s selected text to the clipboard. `false` when there was nothing
     /// to copy — no selection, or a field that gives its text to nobody (a masked one).
     fn copy_selection(&mut self, id: WidgetId) -> bool {
-        let edit = self.runtime.edits.get(&id).copied().unwrap_or_default();
+        let edit = self.win.runtime.edits.get(&id).copied().unwrap_or_default();
         let text = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
@@ -10777,14 +11199,14 @@ impl<A: Application> App<A> {
     /// Each text's words come from what it registered with the area, not from the tree: a
     /// list's rows are built for the frame and let go (milestone 741).
     fn region_texts(&self, area: WidgetId) -> Vec<(WidgetId, RegionText)> {
-        let present: Vec<(WidgetId, RegionText)> = match self.ui.as_ref() {
+        let present: Vec<(WidgetId, RegionText)> = match self.win.ui.as_ref() {
             Some(ui) => ui
                 .text_stops_in(area)
                 .map(|stop| (stop.id, std::rc::Rc::clone(&stop.text)))
                 .collect(),
             None => Vec::new(),
         };
-        match &self.region_known {
+        match &self.win.region_known {
             Some((known_area, known)) if *known_area == area => {
                 frus_widgets::merge_text_stops(known, &present)
             }
@@ -10801,14 +11223,15 @@ impl<A: Application> App<A> {
             .iter()
             .map(|(id, text)| (*id, text.words().chars().count()))
             .collect();
-        self.region_known = Some((area, texts));
+        self.win.region_known = Some((area, texts));
         stops
     }
 
     /// The innermost scrolling area under `at`, if any: what a selection begun there scrolls
     /// when it is dragged past the area's edge (milestone 739).
     fn innermost_scroll(&self, at: Point) -> Option<WidgetId> {
-        self.ui
+        self.win
+            .ui
             .as_ref()?
             .scroll_chain(at)
             .next()
@@ -10840,14 +11263,15 @@ impl<A: Application> App<A> {
         let Some(stop) = self.region_press_target() else {
             return;
         };
-        let index = self.region_index(&stop, self.cursor);
-        let (now, here) = (self.click_clock(), self.cursor);
+        let index = self.region_index(&stop, self.win.cursor);
+        let (now, here) = (self.click_clock(), self.win.cursor);
         let double = self
+            .win
             .last_region_click
             .is_some_and(|(then, there)| self.is_double_click(then, there, now, here));
-        self.last_region_click = Some((now, here));
+        self.win.last_region_click = Some((now, here));
         // A new selection is worked out over the texts on screen, not the last one's.
-        self.region_known = None;
+        self.win.region_known = None;
         let word = double.then(|| frus_widgets::word_bounds(stop.text.words(), index));
         let (anchor, extent) = match word {
             Some((start, end)) => (
@@ -10868,9 +11292,9 @@ impl<A: Application> App<A> {
                 (point, point)
             }
         };
-        self.runtime.region = Some(self.region_selection(stop.area, anchor, extent));
+        self.win.runtime.region = Some(self.region_selection(stop.area, anchor, extent));
         // A word is a whole selection: there is nothing to drag out of it.
-        self.drag = word.is_none().then_some(Drag::RegionSelect {
+        self.win.drag = word.is_none().then_some(Drag::RegionSelect {
             area: stop.area,
             scroll: self.innermost_scroll(here),
         });
@@ -10880,8 +11304,9 @@ impl<A: Application> App<A> {
     /// The text of a selection area under the pointer, if a press there is the area's to take:
     /// something that answers a press — a button, a tappable row, a link — keeps it.
     fn region_press_target(&self) -> Option<TextStop> {
-        let ui = self.ui.as_ref()?;
+        let ui = self.win.ui.as_ref()?;
         let claimed = self
+            .win
             .runtime
             .input
             .pressed
@@ -10889,21 +11314,26 @@ impl<A: Application> App<A> {
         if claimed {
             return None;
         }
-        ui.text_stop_at(self.cursor)
+        ui.text_stop_at(self.win.cursor)
     }
 
     /// A finger held on words in a selection area: the word under it is selected and the bar
     /// opens over it. Whether there was a word.
     fn select_region_word_held(&mut self) -> bool {
-        let Some(stop) = self.ui.as_ref().and_then(|ui| ui.text_stop_at(self.cursor)) else {
+        let Some(stop) = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.text_stop_at(self.win.cursor))
+        else {
             return false;
         };
-        let index = self.region_index(&stop, self.cursor);
+        let index = self.region_index(&stop, self.win.cursor);
         let (start, end) = frus_widgets::word_bounds(stop.text.words(), index);
         if start >= end {
             return false;
         }
-        self.region_known = None;
+        self.win.region_known = None;
         let anchor = RegionPoint {
             text: stop.id,
             index: start,
@@ -10912,7 +11342,7 @@ impl<A: Application> App<A> {
             text: stop.id,
             index: end,
         };
-        self.runtime.region = Some(
+        self.win.runtime.region = Some(
             self.region_selection(stop.area, anchor, extent)
                 .with_bar(true),
         );
@@ -10933,8 +11363,8 @@ impl<A: Application> App<A> {
     fn region_handle_slots(
         &self,
     ) -> Option<(WidgetId, [Option<frus_widgets::SelectionHandle>; 2])> {
-        let selection = self.runtime.region.as_ref().filter(|s| s.handles)?;
-        let ui = self.ui.as_ref()?;
+        let selection = self.win.runtime.region.as_ref().filter(|s| s.handles)?;
+        let ui = self.win.ui.as_ref()?;
         let at = |point: RegionPoint, start: bool| {
             let stop = ui
                 .text_stops_in(selection.area)
@@ -10959,12 +11389,12 @@ impl<A: Application> App<A> {
             line_center: Point::new(f32::MAX, f32::MAX),
         };
         let handles = slots.map(|slot| slot.unwrap_or(nowhere));
-        let handle = crate::selection::grab(&handles, self.cursor)?;
+        let handle = crate::selection::grab(&handles, self.win.cursor)?;
         let at = handles[handle.index()].line_center;
         Some(Drag::RegionHandle {
             area,
             handle,
-            grab: Point::new(at.x - self.cursor.x, at.y - self.cursor.y),
+            grab: Point::new(at.x - self.win.cursor.x, at.y - self.win.cursor.y),
             scroll: self.innermost_scroll(at),
         })
     }
@@ -10978,14 +11408,15 @@ impl<A: Application> App<A> {
         handle: crate::selection::Handle,
         grab: Point,
     ) {
-        let Some(selection) = self.runtime.region.as_ref() else {
+        let Some(selection) = self.win.runtime.region.as_ref() else {
             return;
         };
         let (Some(start), Some(end)) = (selection.start, selection.end) else {
             return;
         };
-        let target = Point::new(self.cursor.x + grab.x, self.cursor.y + grab.y);
+        let target = Point::new(self.win.cursor.x + grab.x, self.win.cursor.y + grab.y);
         let Some(stop) = self
+            .win
             .ui
             .as_ref()
             .and_then(|ui| ui.nearest_text_stop(area, target))
@@ -11023,8 +11454,8 @@ impl<A: Application> App<A> {
         let next = RegionSelection::new(area, fixed, moved, &stops).with_bar(true);
         // The bar stays put away until the handle is let go.
         let next = RegionSelection { bar: false, ..next };
-        if self.runtime.region.as_ref() != Some(&next) {
-            self.runtime.region = Some(next);
+        if self.win.runtime.region.as_ref() != Some(&next) {
+            self.win.runtime.region = Some(next);
             self.request_redraw();
         }
     }
@@ -11032,24 +11463,25 @@ impl<A: Application> App<A> {
     /// The pointer has moved during a drag in `area`: the far end of the selection goes to the
     /// text nearest it.
     fn extend_region_selection(&mut self, area: WidgetId) {
-        let Some(anchor) = self.runtime.region.as_ref().map(|region| region.anchor) else {
+        let Some(anchor) = self.win.runtime.region.as_ref().map(|region| region.anchor) else {
             return;
         };
         let Some(stop) = self
+            .win
             .ui
             .as_ref()
-            .and_then(|ui| ui.nearest_text_stop(area, self.cursor))
+            .and_then(|ui| ui.nearest_text_stop(area, self.win.cursor))
         else {
             return;
         };
-        let index = self.region_index(&stop, self.cursor);
+        let index = self.region_index(&stop, self.win.cursor);
         let extent = RegionPoint {
             text: stop.id,
             index,
         };
         let selection = self.region_selection(area, anchor, extent);
-        if self.runtime.region.as_ref() != Some(&selection) {
-            self.runtime.region = Some(selection);
+        if self.win.runtime.region.as_ref() != Some(&selection) {
+            self.win.runtime.region = Some(selection);
             self.request_redraw();
         }
     }
@@ -11062,20 +11494,21 @@ impl<A: Application> App<A> {
     /// Whether it scrolled: the selection's moving end is then found again once the frame is
     /// laid out, by [`Self::follow_autoscrolled_selection`].
     fn autoscroll_selection(&mut self, dt: f32) -> bool {
-        let (target, scroll) = match &self.drag {
-            Some(Drag::RegionSelect { scroll, .. }) => (self.cursor, *scroll),
+        let (target, scroll) = match &self.win.drag {
+            Some(Drag::RegionSelect { scroll, .. }) => (self.win.cursor, *scroll),
             Some(Drag::RegionHandle { grab, scroll, .. }) => (
-                Point::new(self.cursor.x + grab.x, self.cursor.y + grab.y),
+                Point::new(self.win.cursor.x + grab.x, self.win.cursor.y + grab.y),
                 *scroll,
             ),
             _ => return false,
         };
-        let Some(ui) = self.ui.as_ref() else {
+        let Some(ui) = self.win.ui.as_ref() else {
             return false;
         };
         let mut next = scroll.and_then(|id| ui.scroll_region(id));
         while let Some(area) = next {
             let offset = self
+                .win
                 .runtime
                 .scroll
                 .get(&area.id)
@@ -11083,11 +11516,11 @@ impl<A: Application> App<A> {
                 .unwrap_or((0.0, 0.0));
             if area.accepts_user_offset(offset) {
                 if let Some(moved) = selection_autoscroll(&area, offset, target, dt) {
-                    self.runtime.scroll.insert(area.id, moved);
+                    self.win.runtime.scroll.insert(area.id, moved);
                     // The target follows, or a spring at rest would pull the content back.
-                    self.runtime.scroll_target.insert(area.id, moved);
-                    self.runtime.scroll_velocity.remove(&area.id);
-                    self.region_autoscrolled = true;
+                    self.win.runtime.scroll_target.insert(area.id, moved);
+                    self.win.runtime.scroll_velocity.remove(&area.id);
+                    self.win.region_autoscrolled = true;
                     return true;
                 }
             }
@@ -11100,10 +11533,10 @@ impl<A: Application> App<A> {
     /// pointer that has not moved are other words now, and the selection's moving end goes to
     /// them, as it would for a move.
     fn follow_autoscrolled_selection(&mut self) {
-        if !std::mem::take(&mut self.region_autoscrolled) {
+        if !std::mem::take(&mut self.win.region_autoscrolled) {
             return;
         }
-        match self.drag {
+        match self.win.drag {
             Some(Drag::RegionSelect { area, .. }) => self.extend_region_selection(area),
             Some(Drag::RegionHandle {
                 area, handle, grab, ..
@@ -11115,7 +11548,7 @@ impl<A: Application> App<A> {
     /// The words a selection area has selected, as they are copied: one line per text. `None`
     /// when nothing is selected.
     fn region_text(&self) -> Option<String> {
-        let region = self.runtime.region.as_ref()?;
+        let region = self.win.runtime.region.as_ref()?;
         // The texts that scrolled away are copied too: a selection is the words selected,
         // not the ones that happen to show.
         let owned = self.region_texts(region.area);
@@ -11138,7 +11571,7 @@ impl<A: Application> App<A> {
 
     /// Selects every text of the area that holds a selection.
     fn select_all_region(&mut self) {
-        let Some(area) = self.runtime.region.as_ref().map(|region| region.area) else {
+        let Some(area) = self.win.runtime.region.as_ref().map(|region| region.area) else {
             return;
         };
         let stops = self.region_stops(area);
@@ -11154,11 +11587,12 @@ impl<A: Application> App<A> {
             index: last.1,
         };
         let bar = self
+            .win
             .runtime
             .region
             .as_ref()
             .is_some_and(|selection| selection.bar);
-        self.runtime.region = Some(self.region_selection(area, anchor, extent).with_bar(bar));
+        self.win.runtime.region = Some(self.region_selection(area, anchor, extent).with_bar(bar));
         self.request_redraw();
     }
 
@@ -11177,7 +11611,7 @@ impl<A: Application> App<A> {
     /// A key while nothing has the focus: Copy, and Select all, act on a selection an area
     /// holds. Whether the key was one of them.
     fn region_key(&mut self, event: &KeyDown) -> bool {
-        if self.runtime.region.is_none() {
+        if self.win.runtime.region.is_none() {
             return false;
         }
         if let Some(ClipCommand::Copy) =
@@ -11207,7 +11641,7 @@ impl<A: Application> App<A> {
 
     /// Selects all of field `id`'s text.
     fn select_all(&mut self, id: WidgetId) {
-        self.runtime.edits.insert(
+        self.win.runtime.edits.insert(
             id,
             Edit {
                 affinity: Default::default(),
@@ -11218,7 +11652,7 @@ impl<A: Application> App<A> {
         );
         // A selection is a caret move: what is typed over it is a step of its own, not more
         // of whatever was being typed before.
-        self.runtime.close_edit_run(id);
+        self.win.runtime.close_edit_run(id);
         self.request_redraw();
     }
 
@@ -11233,24 +11667,24 @@ impl<A: Application> App<A> {
     /// selection (milestone 618).
     fn show_selection_toolbar_at(&mut self, id: WidgetId, at: Option<Point>) {
         let can_paste = self.clipboard.has_text();
-        self.runtime.selection_toolbar = Some(ToolbarMark { id, can_paste, at });
+        self.win.runtime.selection_toolbar = Some(ToolbarMark { id, can_paste, at });
         self.request_redraw();
     }
 
     /// What Back and Escape do to an open selection bar: put it away, with the handles that
     /// went with it, and say so — `true` — so that the key goes no further.
     fn close_selection_toolbar(&mut self) -> bool {
-        if self.runtime.selection_toolbar.is_none() {
+        if self.win.runtime.selection_toolbar.is_none() {
             return false;
         }
-        self.runtime.selection_handles = None;
+        self.win.runtime.selection_handles = None;
         self.hide_selection_toolbar();
         true
     }
 
     /// Puts the bar away, if one is open.
     fn hide_selection_toolbar(&mut self) {
-        if self.runtime.selection_toolbar.take().is_some() {
+        if self.win.runtime.selection_toolbar.take().is_some() {
             self.request_redraw();
         }
     }
@@ -11263,6 +11697,7 @@ impl<A: Application> App<A> {
         use frus_widgets::EditAction;
         // The bar of a selection area's selection, which acts on the area and not on a field.
         if self
+            .win
             .runtime
             .region
             .as_ref()
@@ -11272,7 +11707,7 @@ impl<A: Application> App<A> {
                 EditAction::Copy => {
                     // As a platform's own selection does after a copy: it is put away.
                     self.copy_region();
-                    self.runtime.region = None;
+                    self.win.runtime.region = None;
                 }
                 EditAction::SelectAll => self.select_all_region(),
                 EditAction::Cut | EditAction::Paste => {}
@@ -11280,7 +11715,7 @@ impl<A: Application> App<A> {
             self.request_redraw();
             return;
         }
-        let Some(id) = self.runtime.selection_toolbar.map(|mark| mark.id) else {
+        let Some(id) = self.win.runtime.selection_toolbar.map(|mark| mark.id) else {
             return;
         };
         match action {
@@ -11288,12 +11723,12 @@ impl<A: Application> App<A> {
                 if self.copy_selection(id) {
                     // As the platforms' own text fields do after a copy: the selection
                     // collapses to its end, and what marked it is put away.
-                    if let Some(edit) = self.runtime.edits.get_mut(&id) {
+                    if let Some(edit) = self.win.runtime.edits.get_mut(&id) {
                         *edit = collapsed_to_end(*edit);
                     }
-                    self.runtime.close_edit_run(id);
+                    self.win.runtime.close_edit_run(id);
                 }
-                self.runtime.selection_handles = None;
+                self.win.runtime.selection_handles = None;
                 self.hide_selection_toolbar();
             }
             EditAction::Cut => {
@@ -11302,10 +11737,10 @@ impl<A: Application> App<A> {
                 self.hide_selection_toolbar();
             }
             EditAction::Paste => {
-                self.runtime.selection_handles = None;
+                self.win.runtime.selection_handles = None;
                 self.hide_selection_toolbar();
                 // Answered now, or — on the Web — on a later frame.
-                if let Some(pasted) = self.clipboard.paste(id, self.window.as_ref()) {
+                if let Some(pasted) = self.clipboard.paste(id, self.win.window.as_ref()) {
                     self.land_paste(pasted);
                 }
             }
@@ -11313,18 +11748,18 @@ impl<A: Application> App<A> {
                 self.select_all(id);
                 // Made with a finger or a right-click, the selection keeps whatever
                 // marked it.
-                if self.runtime.selection_handles.is_some() {
-                    self.runtime.selection_handles = Some(id);
+                if self.win.runtime.selection_handles.is_some() {
+                    self.win.runtime.selection_handles = Some(id);
                 }
                 if select_all_hides_bar(frus_widgets::default_target_platform()) {
                     // On a desktop the menu has done its work, and goes with the handles,
                     // as the reference's `hideToolbar()` takes both (milestone 625).
-                    self.runtime.selection_handles = None;
+                    self.win.runtime.selection_handles = None;
                     self.hide_selection_toolbar();
                 } else {
                     // On a phone the bar stays, with the list its new state calls for,
                     // where it was: a menu a right-click opened stays at the pointer.
-                    let at = self.runtime.selection_toolbar.and_then(|mark| mark.at);
+                    let at = self.win.runtime.selection_toolbar.and_then(|mark| mark.at);
                     self.show_selection_toolbar_at(id, at);
                 }
             }
@@ -11342,16 +11777,18 @@ impl<A: Application> App<A> {
         // one under it that answers, so that a context menu round a coloured surface hears
         // the click the surface stopped (milestone 809).
         let answers = |id: WidgetId| {
-            self.tree
+            self.win
+                .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
-                .and_then(|widget| widget.on_secondary_tap_at(self.cursor))
+                .and_then(|widget| widget.on_secondary_tap_at(self.win.cursor))
         };
-        let secondary = self.ui.as_ref().and_then(|ui| {
-            let top = ui.hit(self.cursor)?;
+        let secondary = self.win.ui.as_ref().and_then(|ui| {
+            let top = ui.hit(self.win.cursor)?;
             answers(top).or_else(|| {
-                let field = ui.focus_hit(self.cursor).is_some_and(|(id, _)| {
-                    self.tree
+                let field = ui.focus_hit(self.win.cursor).is_some_and(|(id, _)| {
+                    self.win
+                        .tree
                         .as_ref()
                         .and_then(|tree| find_widget(tree.as_ref(), id))
                         .is_some_and(|widget| widget.text_value().is_some())
@@ -11359,7 +11796,7 @@ impl<A: Application> App<A> {
                 if field {
                     return None;
                 }
-                ui.hits_at(self.cursor).skip(1).find_map(answers)
+                ui.hits_at(self.win.cursor).skip(1).find_map(answers)
             })
         });
         if let Some(message) = secondary {
@@ -11368,26 +11805,36 @@ impl<A: Application> App<A> {
             self.request_redraw();
             return;
         }
-        let hit = self.ui.as_ref().and_then(|ui| ui.focus_hit(self.cursor));
+        let hit = self
+            .win
+            .ui
+            .as_ref()
+            .and_then(|ui| ui.focus_hit(self.win.cursor));
         let Some((id, rect)) = hit else {
             self.hide_selection_toolbar();
             return;
         };
-        let was_focused = self.runtime.input.focused == Some(id);
-        let scroll_y = self.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
+        let was_focused = self.win.runtime.input.focused == Some(id);
+        let scroll_y = self.win.runtime.scroll.get(&id).map(|s| s.1).unwrap_or(0.0);
         let scroll_cursor = if was_focused {
-            self.runtime.edits.get(&id).map(|e| e.cursor).unwrap_or(0)
+            self.win
+                .runtime
+                .edits
+                .get(&id)
+                .map(|e| e.cursor)
+                .unwrap_or(0)
         } else {
             0
         };
         let cursor = self
+            .win
             .tree
             .as_ref()
             .and_then(|tree| find_widget(tree.as_ref(), id))
             .and_then(|widget| {
                 widget.cursor_at(
-                    self.cursor.x - rect.x,
-                    self.cursor.y - rect.y + scroll_y,
+                    self.win.cursor.x - rect.x,
+                    self.win.cursor.y - rect.y + scroll_y,
                     rect.width,
                     scroll_cursor,
                 )
@@ -11399,16 +11846,17 @@ impl<A: Application> App<A> {
         };
         let inside = was_focused
             && self
+                .win
                 .runtime
                 .edits
                 .get(&id)
                 .and_then(|edit| edit.selection_range())
                 .is_some_and(|(start, end)| at.offset >= start && at.offset <= end);
-        self.runtime.input.focused = Some(id);
-        self.runtime.selection_handles = None;
+        self.win.runtime.input.focused = Some(id);
+        self.win.runtime.selection_handles = None;
         if !inside {
-            self.goal_x = None;
-            self.runtime.edits.insert(
+            self.win.goal_x = None;
+            self.win.runtime.edits.insert(
                 id,
                 Edit {
                     cursor: at.offset,
@@ -11417,15 +11865,15 @@ impl<A: Application> App<A> {
                     affinity: at.affinity,
                 },
             );
-            self.runtime.close_edit_run(id);
+            self.win.runtime.close_edit_run(id);
         }
-        self.show_selection_toolbar_at(id, Some(self.cursor));
+        self.show_selection_toolbar_at(id, Some(self.win.cursor));
     }
 
     /// Types what the clipboard answered into the field that asked for it, if the paste
     /// still lands there — see `clip::Pasted::lands`.
     fn land_paste(&mut self, pasted: clip::Pasted) {
-        if pasted.lands(self.runtime.input.focused) {
+        if pasted.lands(self.win.runtime.input.focused) {
             self.apply_key(pasted.into, Key::Text(pasted.text));
             self.request_redraw();
         }
@@ -13937,7 +14385,7 @@ pub mod testing {
         pub fn new(app: A, width: f32, height: f32) -> Self {
             let mut shell = App::detached(app);
             // Gestures are timed by the frames run, as everything else here is.
-            shell.gesture_clock = Some((0.0, 0.0));
+            shell.win.gesture_clock = Some((0.0, 0.0));
             Self {
                 shell,
                 size: Size::new(width, height),
@@ -13968,13 +14416,17 @@ pub mod testing {
         /// What the application keeps for restoration, as the platform would be handed it
         /// now: `None` when it has not turned restoration on (milestone 753).
         pub fn restoration_data(&self) -> Option<Vec<u8>> {
-            self.shell.runtime.restoration.data(&self.shell.runtime)
+            self.shell
+                .win
+                .runtime
+                .restoration
+                .data(&self.shell.win.runtime)
         }
 
         /// Hands the application what a process before it kept — as the platform does when
         /// it starts one again. Before the first frame. Whether it held anything for it.
         pub fn restore(&mut self, data: &[u8]) -> bool {
-            self.shell.runtime.restoration.restore(data)
+            self.shell.win.runtime.restoration.restore(data)
         }
 
         /// The system's **Back** — Android's back button, the browser's Back — as the shell
@@ -13986,7 +14438,7 @@ pub mod testing {
         /// How the gesture under way will read its fling: its scroll area's behaviour's, on
         /// a drag that landed on one, else the application's (milestone 616).
         pub fn fling_strategy(&self) -> frus_widgets::VelocityStrategy {
-            self.shell.gesture_velocity.strategy()
+            self.shell.win.gesture_velocity.strategy()
         }
 
         /// Where what is carried is drawn this frame — a reorder's ghost or a lifted item —
@@ -14004,14 +14456,21 @@ pub mod testing {
         /// Every scroll region of the last frame, as its viewport and its offset.
         pub fn offsets(&self) -> Vec<(Rect, (f32, f32))> {
             let s = &self.shell;
-            s.ui.as_ref()
+            s.win
+                .ui
+                .as_ref()
                 .map(|ui| {
                     ui.scroll_regions()
                         .iter()
                         .map(|a| {
                             (
                                 a.viewport,
-                                s.runtime.scroll.get(&a.id).copied().unwrap_or((0.0, 0.0)),
+                                s.win
+                                    .runtime
+                                    .scroll
+                                    .get(&a.id)
+                                    .copied()
+                                    .unwrap_or((0.0, 0.0)),
                             )
                         })
                         .collect()
@@ -14061,6 +14520,7 @@ pub mod testing {
         /// The node an assistive technology knows by `label`.
         fn node_labelled(&self, label: &str) -> Option<WidgetId> {
             self.shell
+                .win
                 .ui
                 .as_ref()?
                 .semantics()
@@ -14071,7 +14531,7 @@ pub mod testing {
 
         pub fn frame_parts(&self) -> Option<FrameParts<'_, A::Message>> {
             let s = &self.shell;
-            Some((s.ui.as_ref()?, s.tree.as_deref()?))
+            Some((s.win.ui.as_ref()?, s.win.tree.as_deref()?))
         }
 
         /// The words the last frame drew and the box each was drawn in, in paint order.
@@ -14099,7 +14559,7 @@ pub mod testing {
                 }
             }
             let mut out = Vec::new();
-            if let Some(ui) = self.shell.ui.as_ref() {
+            if let Some(ui) = self.shell.win.ui.as_ref() {
                 collect(ui.scene().primitives(), &mut out);
             }
             out
@@ -14125,13 +14585,14 @@ pub mod testing {
 
         /// The widget with the keyboard focus, if one has it.
         pub fn focused(&self) -> Option<WidgetId> {
-            self.shell.runtime.input.focused
+            self.shell.win.runtime.input.focused
         }
 
         /// A field's caret and the other end of its selection, if it has an edit state.
         #[cfg(test)]
         pub(crate) fn edit_of(&self, id: WidgetId) -> Option<(usize, Option<usize>)> {
             self.shell
+                .win
                 .runtime
                 .edits
                 .get(&id)
@@ -14141,7 +14602,7 @@ pub mod testing {
         /// How the focus is highlighted now: whether the widget with the focus would show
         /// its ring (milestone 752).
         pub fn focus_highlight_mode(&self) -> frus_widgets::FocusHighlightMode {
-            self.shell.runtime.focus_highlight_mode()
+            self.shell.win.runtime.focus_highlight_mode()
         }
 
         /// The system's **Back** as the key the platform sends — Android's
@@ -14166,14 +14627,14 @@ pub mod testing {
         #[cfg(test)]
         pub(crate) fn field_selection(&self) -> Option<(usize, usize)> {
             let id = self.focused()?;
-            self.shell.runtime.edits.get(&id)?.selection_range()
+            self.shell.win.runtime.edits.get(&id)?.selection_range()
         }
 
         /// Makes the shell stand in for a built-in device, as `FRUS_DEVICE` does
         /// (milestone 722).
         #[cfg(test)]
         pub(crate) fn simulate(&mut self, device: &str) {
-            self.shell.simulated = Some(crate::simulated::Simulated::named(device).unwrap());
+            self.shell.win.simulated = Some(crate::simulated::Simulated::named(device).unwrap());
         }
 
         /// Whether the simulated device's keyboard is up, once the end of a frame has
@@ -14181,7 +14642,11 @@ pub mod testing {
         #[cfg(test)]
         pub(crate) fn simulated_keyboard(&mut self) -> bool {
             self.shell.sync_soft_input();
-            self.shell.simulated.as_ref().is_some_and(|s| s.keyboard)
+            self.shell
+                .win
+                .simulated
+                .as_ref()
+                .is_some_and(|s| s.keyboard)
         }
 
         /// The modifiers the shell holds as down: Ctrl, Shift, Alt and Meta.
@@ -14196,13 +14661,14 @@ pub mod testing {
 
         /// The widget the last frame would hand a press at `at`, if any.
         pub fn hit(&self, at: Point) -> Option<WidgetId> {
-            self.shell.ui.as_ref().and_then(|ui| ui.hit(at))
+            self.shell.win.ui.as_ref().and_then(|ui| ui.hit(at))
         }
 
         /// The focusable a press at `at` would focus — a field, a button — if any.
         #[cfg(test)]
         pub(crate) fn focus_hit(&self, at: Point) -> Option<WidgetId> {
             self.shell
+                .win
                 .ui
                 .as_ref()
                 .and_then(|ui| ui.focus_hit(at))
@@ -14251,7 +14717,7 @@ pub mod testing {
 
         /// The target something carried — an item or files — would land on now.
         pub fn drag_over(&self) -> Option<WidgetId> {
-            self.shell.runtime.drag_over
+            self.shell.win.runtime.drag_over
         }
 
         /// A finger down at `at`.
@@ -14272,7 +14738,7 @@ pub mod testing {
         /// The long-press deadline, delivered as the loop's wake delivers it. Whether it
         /// fired: a press that moved past the slop, or was never waiting, has none.
         pub fn hold_deadline(&mut self) -> bool {
-            let fired = self.shell.press.poll(Instant::now() + LONG_PRESS_DELAY);
+            let fired = self.shell.win.press.poll(Instant::now() + LONG_PRESS_DELAY);
             if fired {
                 self.shell.hold_deadline_reached();
             }
@@ -14299,12 +14765,12 @@ pub mod testing {
         /// The cursor the window would show where the pointer is now.
         pub fn cursor_shown(&self) -> frus_widgets::Cursor {
             let s = &self.shell;
-            let requested = s.runtime.input.hovered.and_then(|id| {
-                let rect = s.ui.as_ref()?.widget_rect(id)?;
-                let widget = find_widget(s.tree.as_ref()?.as_ref(), id)?;
+            let requested = s.win.runtime.input.hovered.and_then(|id| {
+                let rect = s.win.ui.as_ref()?.widget_rect(id)?;
+                let widget = find_widget(s.win.tree.as_ref()?.as_ref(), id)?;
                 widget.cursor_icon(
-                    s.cursor.x - rect.x,
-                    s.cursor.y - rect.y,
+                    s.win.cursor.x - rect.x,
+                    s.win.cursor.y - rect.y,
                     rect.width,
                     rect.height,
                 )
@@ -14409,16 +14875,16 @@ pub mod testing {
         pub fn frame(&mut self, dt: f32) {
             let (width, height) = (self.size.width, self.size.height);
             let s = &mut self.shell;
-            if let Some((now, _)) = s.gesture_clock.as_mut() {
+            if let Some((now, _)) = s.win.gesture_clock.as_mut() {
                 *now += dt;
             }
-            if s.last_size != Some((width, height)) {
-                s.last_size = Some((width, height));
-                s.build_dirty = true;
+            if s.win.last_size != Some((width, height)) {
+                s.win.last_size = Some((width, height));
+                s.win.build_dirty = true;
                 s.app.on_resize(width, height);
             }
             // The timers that came due on the driver's clock, in the order they were set.
-            let now = s.gesture_clock.map_or(0.0, |(now, _)| now);
+            let now = s.win.gesture_clock.map_or(0.0, |(now, _)| now);
             let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut s.driver_timers)
                 .into_iter()
                 .partition(|(at, _)| *at <= now);
@@ -14434,19 +14900,19 @@ pub mod testing {
                 .platform
                 .accessibility
                 .with_overrides(s.app.accessibility());
-            let theme_moved = s.themes.advance(
+            let theme_moved = s.win.themes.advance(
                 &s.app,
                 s.platform.brightness,
                 settings.high_contrast,
                 settings.disable_animations,
                 dt,
             );
-            app_animating |= theme_moved | s.themes.animating();
-            let theme = s.themes.displayed(&s.app);
+            app_animating |= theme_moved | s.win.themes.animating();
+            let theme = s.win.themes.displayed(&s.app);
             install_ambient(&s.app, &s.platform.locales);
             let _surface = s.media_query(width, height).install();
-            s.runtime.still = settings.disable_animations;
-            let was = std::mem::replace(&mut s.app_was_animating, app_animating);
+            s.win.runtime.still = settings.disable_animations;
+            let was = std::mem::replace(&mut s.win.app_was_animating, app_animating);
             frus_widgets::run_local_tasks();
             let asked = s.app.effects();
             s.run_command(asked);
@@ -14457,60 +14923,63 @@ pub mod testing {
             s.report_focus();
             let mut built = None;
             if frame_needs_build(
-                s.build_dirty,
+                s.win.build_dirty,
                 app_animating,
                 was,
-                s.tree.is_none() || s.runtime.switching(),
+                s.win.tree.is_none() || s.win.runtime.switching(),
             ) {
                 let at = Instant::now();
-                s.tree = Some(build_view(&s.app, &theme, &s.runtime));
-                s.runtime.apply_restored();
+                s.win.tree = Some(build_view(&s.app, &theme, &s.win.runtime));
+                s.win.runtime.apply_restored();
                 built = Some(at.elapsed().as_secs_f32() * 1000.0);
-            } else if s.components_dirty {
-                if let Some(tree) = s.tree.as_deref() {
+            } else if s.win.components_dirty {
+                if let Some(tree) = s.win.tree.as_deref() {
                     let at = Instant::now();
-                    rebuild_marked(tree, &theme, &s.runtime);
-                    s.runtime.apply_restored();
+                    rebuild_marked(tree, &theme, &s.win.runtime);
+                    s.win.runtime.apply_restored();
                     built = Some(at.elapsed().as_secs_f32() * 1000.0);
                 }
             }
-            s.build_dirty = false;
-            s.components_dirty = false;
+            s.win.build_dirty = false;
+            s.win.components_dirty = false;
             // As the window's frame does once its tree is built (milestone 752).
             s.resolve_pending_focus();
             s.autoscroll_carried(dt);
             let selecting = s.autoscroll_selection(dt);
             s.advance_reorder_springs(dt);
-            let regions =
-                s.ui.as_ref()
-                    .map(|ui| ui.scroll_regions().to_vec())
-                    .unwrap_or_default();
-            s.runtime.apply_scroll_corrections();
-            s.runtime.sync_pages(&regions);
-            s.runtime.sync_visible(&regions);
+            let regions = s
+                .win
+                .ui
+                .as_ref()
+                .map(|ui| ui.scroll_regions().to_vec())
+                .unwrap_or_default();
+            s.win.runtime.apply_scroll_corrections();
+            s.win.runtime.sync_pages(&regions);
+            s.win.runtime.sync_visible(&regions);
             // The scroll requests the application made (`host::scroll_to`), as the window's
             // frame takes them; one whose region is not laid out yet waits for the next
             // frame (milestone 717: a test could not scroll a list before).
-            if let Some(tree) = s.tree.as_deref() {
-                let mut requests = std::mem::take(&mut s.retry_scroll);
-                requests.append(&mut s.pending_scroll);
-                let (retry, _) = apply_scroll_requests(&mut s.runtime, tree, requests, &regions);
-                s.retry_scroll = retry;
+            if let Some(tree) = s.win.tree.as_deref() {
+                let mut requests = std::mem::take(&mut s.win.retry_scroll);
+                requests.append(&mut s.win.pending_scroll);
+                let (retry, _) =
+                    apply_scroll_requests(&mut s.win.runtime, tree, requests, &regions);
+                s.win.retry_scroll = retry;
             }
             // A glide or a fling under way is movement too: a test that waits for the
             // screen to be still waits for it (milestone 719).
-            let values_moving = s.runtime.advance(dt);
-            let scrolling = s.runtime.advance_scroll(&regions, dt);
-            let tree = s.tree.as_deref().expect("the view was built");
+            let values_moving = s.win.runtime.advance(dt);
+            let scrolling = s.win.runtime.advance_scroll(&regions, dt);
+            let tree = s.win.tree.as_deref().expect("the view was built");
             // The widgets' own values, as the window's frame steps them: without it a value
             // a drag held would be held for ever here (milestone 638).
-            s.runtime.advance_values(tree, dt);
+            s.win.runtime.advance_values(tree, dt);
             let at = Instant::now();
-            let ui = build_ui(tree, Size::new(width, height), &s.runtime, &theme);
+            let ui = build_ui(tree, Size::new(width, height), &s.win.runtime, &theme);
             let laid = at.elapsed().as_secs_f32() * 1000.0;
-            s.runtime.states.end_frame();
+            s.win.runtime.states.end_frame();
             let mut scene = ui.scene().clone();
-            let ghost = if matches!(s.drag, Some(Drag::Reorder { moved: true, .. })) {
+            let ghost = if matches!(s.win.drag, Some(Drag::Reorder { moved: true, .. })) {
                 s.paint_reorder_preview(&ui, &theme, &mut scene);
                 // The ghost's outline is the last thing the preview draws, on the ghost's box.
                 scene.primitives().last().map(|p| p.bounds())
@@ -14520,7 +14989,8 @@ pub mod testing {
             let paged = ui.scroll_regions().to_vec();
             let scrolled: Vec<A::Message> = {
                 let grain = |id| find_widget(tree, id).map_or(0.0, |w| w.scroll_grain());
-                s.runtime
+                s.win
+                    .runtime
                     .scroll_changes(&paged, grain)
                     .into_iter()
                     .filter_map(|(id, position)| {
@@ -14531,6 +15001,7 @@ pub mod testing {
             // The paged views that turned a page, as the window's frame reports them: without
             // it `on_page_changed` never reached an application here (milestone 756).
             let turned: Vec<A::Message> = s
+                .win
                 .runtime
                 .page_changes(&paged)
                 .into_iter()
@@ -14538,7 +15009,7 @@ pub mod testing {
                     find_widget(tree, id).and_then(|w| w.on_page_changed(page))
                 })
                 .collect();
-            s.ui = Some(ui);
+            s.win.ui = Some(ui);
             s.sync_regions(false);
             s.follow_autoscrolled_selection();
             // As the shell does after every frame: focus that vanished goes back, and a
