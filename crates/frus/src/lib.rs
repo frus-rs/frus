@@ -113,6 +113,9 @@ pub struct GuideScreen;
 #[doc = include_str!("../../../docs/guide/components.md")]
 pub struct GuideComponents;
 #[cfg(doctest)]
+#[doc = include_str!("../../../docs/guide/managing-state.md")]
+pub struct GuideManagingState;
+#[cfg(doctest)]
 #[doc = include_str!("../../../docs/guide/running.md")]
 pub struct GuideRunning;
 #[cfg(doctest)]

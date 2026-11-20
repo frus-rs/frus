@@ -289,6 +289,8 @@ fn hash_node<Msg, H: Hasher>(
         behavior.shape_hash(hasher);
     }
     let _scrolling = scrolling.map(crate::ScrollConfiguration::install);
+    // And the values a `Scoped` puts in scope (milestone 825), for what `build_in` builds.
+    let _values = crate::scoped::hold(widget, runtime);
     // The cache exists to **skip** `build_layout`, so this walk can be the first one down
     // the tree: a deferred subtree has to be composed here too, or the fingerprint would
     // be taken of a node with no children and the cache would agree with itself forever.

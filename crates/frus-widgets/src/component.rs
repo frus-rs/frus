@@ -188,7 +188,7 @@ pub fn request_rebuild() {
 /// A component's own state changed: it is marked, and the next frame builds the components
 /// marked, not the tree.
 #[inline(never)]
-fn request_component_rebuild() {
+pub(crate) fn request_component_rebuild() {
     REBUILD.with(|flag| flag.set(true));
 }
 
@@ -312,6 +312,8 @@ pub struct StateStore {
     building: Cell<bool>,
     effects: RefCell<Vec<PendingEffect>>,
     services: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
+    /// The values in scope where the walk under way is (milestone 825).
+    scopes: crate::scoped::Scopes,
     /// What a restart handed over and no component has taken yet: by place, then type name.
     restoring: RefCell<HashMap<(StateKey, String), String>>,
     /// The rows of lists built on demand that are being built now, innermost last
@@ -524,12 +526,24 @@ impl StateStore {
         self.services.borrow_mut().insert(TypeId::of::<T>(), value);
     }
 
-    /// The service of type `T`, if one was provided.
+    /// The service of type `T`, if one was provided for the whole application. A component
+    /// asks [`BuildContext::service`], which finds a value put in scope above it first.
     pub fn service<T: 'static>(&self) -> Option<Rc<T>> {
         self.services
             .borrow()
             .get(&TypeId::of::<T>())
             .and_then(|s| s.clone().downcast::<T>().ok())
+    }
+
+    /// The values in scope where the walk under way is.
+    pub(crate) fn scopes(&self) -> &crate::scoped::Scopes {
+        &self.scopes
+    }
+
+    /// The nearest value of type `T`: in scope where the walk is, or else provided for the
+    /// whole application.
+    fn nearest<T: 'static>(&self) -> Option<Rc<T>> {
+        self.scopes.find::<T>().or_else(|| self.service::<T>())
     }
 
     /// How many components currently hold state. For tests and diagnostics.
@@ -605,6 +619,7 @@ impl StateStore {
                     entry.owner = self.row();
                     // Built again: what marked it is answered.
                     entry.hooks.dirty.set(false);
+                    entry.hooks.built.set(self.epoch.get());
                     return entry.hooks.clone();
                 }
                 Some(_) => entries.remove(&key),
@@ -615,6 +630,7 @@ impl StateStore {
             stale.dispose_all();
         }
         let hooks = Rc::new(Hooks::default());
+        hooks.built.set(self.epoch.get());
         self.entries.borrow_mut().insert(
             key,
             Entry {
@@ -647,6 +663,7 @@ impl StateStore {
         };
         if let Some((Some(state), hooks)) = found {
             hooks.dirty.set(false);
+            hooks.built.set(self.epoch.get());
             let cell = state
                 .downcast::<StateCell<W::State>>()
                 .unwrap_or_else(|_| unreachable!("an entry's kind says what its state is"));
@@ -662,6 +679,7 @@ impl StateStore {
             stale.dispose_all();
         }
         let hooks = Rc::new(Hooks::default());
+        hooks.built.set(self.epoch.get());
         let cell = Rc::new(StateCell {
             state: RefCell::new(widget.create_state()),
             widget: RefCell::new(widget),
@@ -793,6 +811,9 @@ struct Hooks {
     /// Whether the component's own state changed since it was last built: set by a
     /// [`UseState`] or a [`StateHandle`], answered by the next build (milestone 822).
     dirty: Rc<Cell<bool>>,
+    /// The rebuild the component was last built in: what it read from a model in an earlier
+    /// one no longer holds (milestone 825).
+    built: Rc<Cell<u64>>,
 }
 
 enum Slot {
@@ -968,6 +989,16 @@ impl<T: 'static> UseRef<T> {
     }
 }
 
+/// A component read a model nobody put in scope.
+#[cold]
+#[inline(never)]
+fn no_model(name: &str) -> ! {
+    panic!(
+        "no Model<{name}> above this component: put one in scope with `Scoped::new(model, \
+         child)` above it, or provide one for the whole application"
+    )
+}
+
 // ---------------------------------------------------------------------------------------
 // BuildContext
 // ---------------------------------------------------------------------------------------
@@ -1038,9 +1069,108 @@ impl<'a> BuildContext<'a> {
         self.runtime
     }
 
-    /// An application-wide object provided with [`StateStore::provide`] — a router, say.
+    /// The value of type `T` nearest above this component: put in scope by a
+    /// [`Scoped`](crate::Scoped) above it, or else provided for the whole application with
+    /// [`StateStore::provide`] — a router, say. Reading it this way asks for nothing when it
+    /// changes.
     pub fn service<T: 'static>(&self) -> Option<Rc<T>> {
-        self.runtime.states.service::<T>()
+        self.runtime.states.nearest::<T>()
+    }
+
+    /// The [`Model`](crate::Model) of `T` nearest above this component, which builds this
+    /// component again whenever it changes (milestone 825). The components that do not read
+    /// it are not built.
+    ///
+    /// # Panics
+    ///
+    /// When there is none: put one in scope with [`Scoped`](crate::Scoped) above, or provide
+    /// one for the whole application.
+    ///
+    /// ```
+    /// use frus_widgets::{text, BuildContext, Widget};
+    ///
+    /// struct Cart {
+    ///     items: Vec<String>,
+    /// }
+    ///
+    /// fn summary(cx: &BuildContext) -> Box<dyn Widget> {
+    ///     let cart = cx.watch::<Cart>();
+    ///     Box::new(text(cart.with(|cart| cart.items.join(", "))))
+    /// }
+    /// ```
+    pub fn watch<T: 'static>(&self) -> crate::Model<T> {
+        let model = self.read::<T>();
+        model.add_reader(self.reader(), None);
+        model
+    }
+
+    /// The part `select` picks out of the [`Model`](crate::Model) of `T` nearest above this
+    /// component, which builds this component again when **that part** changes, and not when
+    /// the rest of the model does (milestone 825).
+    ///
+    /// # Panics
+    ///
+    /// When there is no model of `T` above, as [`watch`](Self::watch).
+    ///
+    /// ```
+    /// use frus_widgets::{text, BuildContext, Widget};
+    ///
+    /// struct Cart {
+    ///     items: Vec<String>,
+    ///     note: String,
+    /// }
+    ///
+    /// // Typing a note does not build the badge.
+    /// fn badge(cx: &BuildContext) -> Box<dyn Widget> {
+    ///     let count = cx.select(|cart: &Cart| cart.items.len());
+    ///     Box::new(text(format!("{count}")))
+    /// }
+    /// ```
+    pub fn select<T: 'static, R: PartialEq + Clone + 'static>(
+        &self,
+        select: impl Fn(&T) -> R + 'static,
+    ) -> R {
+        let model = self.read::<T>();
+        let seen = model.with(&select);
+        let kept = seen.clone();
+        model.add_reader(
+            self.reader(),
+            Some(Box::new(move |value: &T| select(value) != kept)),
+        );
+        seen
+    }
+
+    /// The [`Model`](crate::Model) of `T` nearest above this component, **without** building
+    /// this component again when it changes: for a handler that changes it, or a value read
+    /// once (milestone 825).
+    ///
+    /// # Panics
+    ///
+    /// When there is none, as [`watch`](Self::watch). `cx.service::<Model<T>>()` answers
+    /// `None` instead.
+    pub fn read<T: 'static>(&self) -> crate::Model<T> {
+        match self.service::<crate::Model<T>>() {
+            Some(model) => (*model).clone(),
+            None => no_model(std::any::type_name::<T>()),
+        }
+    }
+
+    /// A [`Model`](crate::Model) owned by this component: made by `init` the first time and
+    /// kept for as long as the component is. Reading it here asks for nothing; put it in scope
+    /// with [`Scoped`](crate::Scoped) for the components below, which watch it (milestone
+    /// 825).
+    pub fn use_model<T: 'static>(&self, init: impl FnOnce() -> T) -> crate::Model<T> {
+        self.use_ref(|| crate::Model::new(init())).get()
+    }
+
+    /// This component as a reader of a model: its mark, and the rebuild it is built in.
+    fn reader(&self) -> crate::scoped::Reader {
+        let hooks = self.hooks();
+        crate::scoped::Reader {
+            mark: hooks.dirty.clone(),
+            built: hooks.built.clone(),
+            epoch: self.runtime.states.epoch(),
+        }
     }
 
     fn hooks(&self) -> Rc<Hooks> {

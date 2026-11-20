@@ -131,6 +131,8 @@ mod open_url;
 mod rebuild_tests;
 #[cfg(test)]
 mod restoration_tests;
+#[cfg(test)]
+mod scoped_tests;
 // Asking the person for the camera, the microphone, the location (milestone 730).
 #[cfg(target_os = "macos")]
 mod macos_permission;

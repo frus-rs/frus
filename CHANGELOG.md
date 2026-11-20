@@ -52,6 +52,18 @@ any release may break.
   for the router's routes nested by pattern, and `GoRouterState::route` on a page; a path
   parameter that does not parse reaches the error page. String locations keep working. The demo
   uses both. `Localizer::negotiate` is new.
+- **State scoped to a subtree, and only its readers built again** (J825, #222). New `Model<T>`:
+  a value that knows the components that read it. `Scoped::new(model, child)` puts it in scope
+  for a subtree, and the components below find the nearest one by its type: two instances of a
+  screen each hold their own. `cx.watch::<T>()` builds the component again on every change,
+  `cx.select(|t: &T| part)` only when that part changes, `cx.read::<T>()` never (for handlers);
+  `cx.use_model(init)` keeps one for as long as its component. A change marks the readers, and
+  the next frame builds them where they stand in the kept tree, and nothing else. `provide` /
+  `service` stay as the outermost scope, and `BuildContext::service` now finds a value in scope
+  first. `Model` is a `Listenable` whose listeners ask for no rebuild of the tree. New
+  `Widget::scoped_values` hook, forwarded by every transparent wrapper. New guide:
+  `docs/guide/managing-state.md`, the recommended pattern and when to use which tool. New
+  gallery demo: Model & Scoped.
 - **A component's own state builds that component, not the whole tree** (J822, #53). When
   `UseState::set`/`update` or `StateHandle::set_state` changes a component's state, that
   component is marked, and the next frame builds it again where it stands in the tree kept from
