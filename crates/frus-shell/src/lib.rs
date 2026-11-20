@@ -229,6 +229,7 @@ mod web_frame;
 #[cfg_attr(not(all(windows, feature = "webview2")), allow(dead_code))]
 mod web_view_protocol;
 mod widget_app;
+mod window;
 // The desktop window's size, place and maximized state, kept between runs (milestone 783).
 #[cfg(any(desktop, test))]
 mod window_memory;
@@ -316,6 +317,7 @@ pub use view_host::{
     register_platform_view_factory, NativeView, PlatformViewChannel, PlatformViewContext,
 };
 pub use widget_app::FrusApp;
+pub use window::Window;
 
 /// Cross-platform HTTP (`net` feature) — the [`fetch`] shorthand, the [`Request`]
 /// builder (method / headers / body / timeout) and the [`FetchError`] error type.

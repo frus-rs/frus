@@ -63,7 +63,7 @@ pub use custom::{GpuCallback, GpuPassContext, PassState, GPU_PASS_FORMAT};
 pub use frus_core::{Color, Rect, Scene};
 pub use offscreen::{render_offscreen, OffscreenFrame};
 pub use pipeline_cache::set_pipeline_cache_dir;
-pub use renderer::{backdrop, RenderOutcome, RenderTimings, Renderer, StartupTimes};
+pub use renderer::{backdrop, RenderOutcome, RenderTimings, Renderer, StartupTimes, WindowSurface};
 
 /// **The GPU memory a renderer holds** (milestone 796): what a page leaves behind it, made
 /// visible so that it cannot grow unseen. See [`Renderer::gpu_memory`].

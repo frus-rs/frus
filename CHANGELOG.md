@@ -29,6 +29,19 @@ any release may break.
   lock files), after reading again what another process wrote. Logs are set up before the
   application is made, so what it logs while it is made reaches the console. New example:
   `crates/frus-background-example`, checked on a phone.
+- **More windows than one** (J827, #218). An application lists the windows it wants open
+  besides its main one with `Application::windows` (or `FrusApp::windows`), as values of its
+  state — `Window::new(id, on_close).title(..).size(..)` — and builds each with
+  `Application::window_view` (`FrusApp::window_view`). The shell opens a window newly listed,
+  closes one no longer listed and retitles one whose title changed; a window's close button sends
+  its message and the state decides. Each window has its own focus, scroll positions, overlays,
+  gestures, semantics tree and accessibility adapter; all share the application's state and one
+  GPU device, pipelines, glyph atlas and image textures (`frus_gpu::WindowSurface`,
+  `Renderer::add_surface`, `Renderer::render_to`). Desktops only: on Android and the web a
+  listed window is not opened, and the log says so once. Single-window applications change
+  nothing. The demo opens its task summary in a second window from the Stats section and the
+  View menu.
+
 - **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
   when it is laid out, from the width it is given, instead of from the screen's width read when
   it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own
