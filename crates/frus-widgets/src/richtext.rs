@@ -581,6 +581,20 @@ impl<Msg: Clone + 'static> Widget<Msg> for RichText {
         )))
     }
 
+    /// The plain text at the base style's size (milestone 830).
+    fn page_words(&self) -> Option<crate::PageWords> {
+        if self.plain.trim().is_empty() {
+            return None;
+        }
+        let base = frus_core::with_text_scale(self.scale.get(), || self.base.resolved());
+        Some(crate::PageWords {
+            words: self.plain.clone(),
+            size: base.size,
+            line_height: base.line_height(),
+            heading: false,
+        })
+    }
+
     fn region_toolbar(
         &self,
         context: ToolbarContext,

@@ -215,6 +215,9 @@ mod web_keys;
 mod web_page;
 #[cfg(web)]
 mod web_platform_view;
+// The page's own text: find-in-page, printing, search engines (milestone 830).
+#[cfg(any(web, test))]
+mod web_text;
 // A web view controller's page in an `<iframe>` (milestone 804).
 #[cfg(all(web, feature = "webview"))]
 mod web_frame;

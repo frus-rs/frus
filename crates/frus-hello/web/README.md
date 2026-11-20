@@ -13,7 +13,7 @@ From `crates/frus-hello`:
 
 ```bash
 frus run -d web      # build, serve on http://localhost:8080 and open the browser
-frus build web       # the site in release: web/, with the application in web/pkg/
+frus build web       # release: the application into web/pkg/, the site to deploy in target/frus-web/<package>/
 ```
 
 It installs the wasm target and the matching `wasm-bindgen` itself. The rest of this page is

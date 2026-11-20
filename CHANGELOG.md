@@ -8,11 +8,26 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 826 so far, each documenting the objective, the alternatives
+> record — one per step, 830 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **The page has text on the web: find-in-page, printing, search engines** (J830, #212). The web
+  shell lays a transparent text layer over the canvas, built from a new registry of every text
+  the frame lays out (`Ui::page_text`, recorded only when `Runtime::page_text` is set, which only
+  the web shell does): Ctrl+F finds words on screen and scrolled out of view, and the
+  application scrolls to the match. A list that builds only the rows in view can say what all its
+  rows say, `ListView::item_text(|i| ..)`, asked only when find-in-page is opened, the page
+  printed or its text taken: find then reaches row 4321 of 5000. Ctrl+P prints the page's text as
+  a document, every row of such a list included. `frus build web` runs the built page in Chrome
+  or Edge with no window and writes the first screen's text into the site's `index.html` for
+  search engines and link previews (`--no-page-text` skips it). **`frus build web` now also
+  makes a copy of `web/` in `target/frus-web/<package>/`, and that copy is the site to deploy**:
+  the text is written into the copy's page, never into `web/index.html` in your sources. Not a
+  breaking change: the build still compiles the application into `web/pkg/` as before, and a
+  `web/` deployed as it was keeps working, only without the first screen's text. New
+  `Widget::page_words`, `PageText`, `PageWords`, `PageList`, `Runtime::list_item_spans`.
 - **A widget measures its children: the last of it** (J824, #52). An `AppBar` decides what fits
   when it is laid out, from the width it is given, instead of from the screen's width read when
   it was built: a bar beside a rail, in a pane or in a dialog folds its actions against its own

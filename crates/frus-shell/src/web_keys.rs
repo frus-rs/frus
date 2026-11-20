@@ -52,6 +52,12 @@ pub(crate) fn browser_owns(key: &str, cmd: bool, alt: bool, shift: bool) -> bool
     }
 }
 
+/// Whether `key`, with Ctrl or Command held when `cmd`, opens the browser's find-in-page.
+#[cfg(any(web, test))]
+pub(crate) fn opens_find(key: &str, cmd: bool) -> bool {
+    cmd && key.eq_ignore_ascii_case("f")
+}
+
 /// Installs the window-level listeners that let the browser keep its shortcuts.
 ///
 /// Best-effort like the other bridges: if there is no window, or the listener cannot be added,
@@ -72,6 +78,11 @@ pub(crate) fn let_the_browser_keep_its_shortcuts() {
             };
             let cmd = key.ctrl_key() || key.meta_key();
             if browser_owns(&key.key(), cmd, key.alt_key(), key.shift_key()) {
+                // Find-in-page is about to open: the rows the lists did not build are laid
+                // in the page's text for it to reach (milestone 830).
+                if event.type_() == "keydown" && opens_find(&key.key(), cmd) {
+                    crate::web_text::find_opened();
+                }
                 // Not `prevent_default`: the whole point is that the default happens.
                 event.stop_immediate_propagation();
             }
@@ -109,6 +120,16 @@ mod tests {
         );
         assert!(browser_owns("i", true, false, true), "Ctrl+Shift+I");
         assert!(browser_owns("l", true, false, false), "the address bar");
+    }
+
+    /// Ctrl+F (Cmd+F) opens find-in-page, and is the browser's; a plain F is typed.
+    #[test]
+    fn ctrl_f_opens_find_in_page() {
+        assert!(super::opens_find("f", true));
+        assert!(super::opens_find("F", true), "with Shift held");
+        assert!(!super::opens_find("f", false));
+        assert!(!super::opens_find("g", true));
+        assert!(browser_owns("f", true, false, false));
     }
 
     /// Save and Open are left to the application, which may want them.

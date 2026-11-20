@@ -508,6 +508,8 @@ struct BoundaryData<Msg> {
     /// The regions the mouse enters and leaves, in painted order (milestone 583).
     hover_regions: Vec<HoverEntry>,
     text_stops: Vec<crate::TextStop>,
+    /// The page's text (milestone 830).
+    page_text: Vec<crate::PageText>,
     semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
     system_ui: Vec<(Rect, crate::SystemUiOverlayStyle)>,
     /// The lifted primitives painted in the subtree and not put back yet, each with its place
@@ -532,6 +534,7 @@ struct Snapshot {
     pointer_listeners: usize,
     hover_regions: usize,
     text_stops: usize,
+    page_text: usize,
     semantics: usize,
     system_ui: usize,
     overlays: usize,
@@ -573,10 +576,12 @@ struct BarrierBase {
     pointer_listeners: usize,
     hover_regions: usize,
     text_stops: usize,
+    page_text: usize,
     reorderables: usize,
     interactives: usize,
     semantics: usize,
     dismisses: usize,
+    page_lists: usize,
 }
 
 struct XformBase {
@@ -592,6 +597,7 @@ struct XformBase {
     pointer_listeners: usize,
     hover_regions: usize,
     text_stops: usize,
+    page_text: usize,
     reorderables: usize,
     semantics: usize,
     platform_views: usize,
@@ -820,6 +826,11 @@ pub struct Ui<Msg = crate::callback::Callback> {
     /// The texts inside a [`SelectionArea`](crate::SelectionArea), in the order they were
     /// painted — reading order — each with the area it is in.
     text_stops: Vec<crate::TextStop>,
+    /// The texts laid out, those scrolled out of view included, when the runtime records the
+    /// page's text (milestone 830).
+    page_text: Vec<crate::PageText>,
+    /// The lists that can say what their rows say, likewise.
+    page_lists: Vec<crate::PageList>,
     /// **Reorderables** (column headers, Kanban cards): (id, visible bounds). Tracked
     /// independently of clicking — a card is not clickable but can still be picked up and
     /// dropped onto.
@@ -1215,6 +1226,20 @@ impl<Msg: Clone> Ui<Msg> {
     /// Every text that took part in a selection area this frame, in the order it was painted.
     pub fn text_stops(&self) -> &[crate::TextStop] {
         &self.text_stops
+    }
+
+    /// Every text the frame laid out, in the order it was painted (reading order), those
+    /// scrolled out of view included, when the runtime records the page's text
+    /// ([`Runtime::page_text`]); empty otherwise (milestone 830).
+    pub fn page_text(&self) -> &[crate::PageText] {
+        &self.page_text
+    }
+
+    /// The lists of the frame that can say what their rows say
+    /// ([`ListView::item_text`](crate::ListView::item_text)), when the runtime records the
+    /// page's text; empty otherwise.
+    pub fn page_lists(&self) -> &[crate::PageList] {
+        &self.page_lists
     }
 
     /// The texts a [`SelectionArea`](crate::SelectionArea) holds, in reading order.
@@ -3101,6 +3126,8 @@ struct Builder<'a, Msg> {
     /// The regions the mouse enters and leaves, in painted order (milestone 583).
     hover_regions: Vec<HoverEntry>,
     text_stops: Vec<crate::TextStop>,
+    page_text: Vec<crate::PageText>,
+    page_lists: Vec<crate::PageList>,
     /// The region the mouse enters and leaves that the walk is inside, if any: the parent of
     /// the next one registered (milestone 583).
     hover_parent: Option<WidgetId>,
@@ -3376,6 +3403,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             pointer_listeners: self.pointer_listeners.len(),
             hover_regions: self.hover_regions.len(),
             text_stops: self.text_stops.len(),
+            page_text: self.page_text.len(),
             semantics: self.semantics.len(),
             system_ui: self.system_ui.len(),
             overlays: self.overlays.len(),
@@ -3431,6 +3459,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             pointer_listeners: self.pointer_listeners[snap.pointer_listeners..].to_vec(),
             hover_regions: self.hover_regions[snap.hover_regions..].to_vec(),
             text_stops: self.text_stops[snap.text_stops..].to_vec(),
+            page_text: self.page_text[snap.page_text..].to_vec(),
             semantics: self.semantics[snap.semantics..].to_vec(),
             system_ui: self.system_ui[snap.system_ui..].to_vec(),
             lifted: self
@@ -3467,6 +3496,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         self.pointer_listeners.extend(data.pointer_listeners);
         self.hover_regions.extend(data.hover_regions);
         self.text_stops.extend(data.text_stops);
+        self.page_text.extend(data.page_text);
         self.semantics.extend(data.semantics);
         self.system_ui.extend(data.system_ui);
     }
@@ -3490,9 +3520,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             pointer_listeners: self.pointer_listeners.len(),
             hover_regions: self.hover_regions.len(),
             text_stops: self.text_stops.len(),
+            page_text: self.page_text.len(),
             reorderables: self.reorderables.len(),
             interactives: self.interactives.len(),
             semantics: self.semantics.len(),
+            page_lists: self.page_lists.len(),
         }
     }
 
@@ -3757,6 +3789,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // The clip is baked into each primitive when it is pushed, so dropping the tail
             // leaves nothing for the next sibling to repair.
             let _hidden = self.split_scene(base.scene);
+            // What is not drawn is not on the page either (milestone 830).
+            self.page_text.truncate(base.page_text);
+            self.page_lists.truncate(base.page_lists);
         }
         if barrier.semantics {
             self.semantics.truncate(base.semantics);
@@ -3778,6 +3813,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             pointer_listeners: self.pointer_listeners.len(),
             hover_regions: self.hover_regions.len(),
             text_stops: self.text_stops.len(),
+            page_text: self.page_text.len(),
             reorderables: self.reorderables.len(),
             semantics: self.semantics.len(),
             platform_views: self.platform_views.len(),
@@ -3832,6 +3868,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             }
             for stop in &mut self.text_stops[base.text_stops..] {
                 stop.rect = matrix.apply_rect(stop.rect);
+            }
+            for text in &mut self.page_text[base.page_text..] {
+                text.rect = matrix.apply_rect(text.rect);
             }
             for (_, r) in &mut self.draggables[base.draggables..] {
                 *r = matrix.apply_rect(*r);
@@ -4591,6 +4630,22 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 }
             }
         }
+        // The page's text (milestone 830): what shows, and what a scroll region holds out of
+        // view, which a find on the page has to reach. Asked only when the shell records it.
+        if self.runtime.page_text
+            && (self.scroll_host.is_some() || (visible.width > 0.0 && visible.height > 0.0))
+            && draw_rect.width > 0.0
+            && draw_rect.height > 0.0
+        {
+            if let Some(words) = widget.page_words() {
+                self.page_text.push(crate::PageText {
+                    id,
+                    rect: draw_rect,
+                    words,
+                    scroll: self.scroll_host,
+                });
+            }
+        }
         // A focus stop clipped entirely away by a **scroll** is still a focus stop.
         // Tab has to reach the field below the fold — the shell brings it into view
         // when it lands there — and registering only what the eye can see is how a long
@@ -5228,6 +5283,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 host: self.scroll_host,
                 keep_visible: None,
             });
+            // A list that can say what its rows say, for the page's text (milestone 830).
+            if let Some(words) = vlist.item_text.filter(|_| self.runtime.page_text) {
+                self.page_lists.push(crate::PageList {
+                    id,
+                    count: vlist.count,
+                    item_text: std::rc::Rc::clone(words),
+                    at: self.page_text.len(),
+                });
+            }
 
             // Where the content starts, so that a stretch can take all of it (milestone 591).
             let stretch_mark = (self.scene.primitives().len(), self.xform_base());
@@ -7610,6 +7674,8 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         hover_regions: Vec::new(),
         hover_parent: None,
         text_stops: Vec::new(),
+        page_text: Vec::new(),
+        page_lists: Vec::new(),
         area: None,
         area_widget: None,
         lifted: Vec::new(),
@@ -7716,6 +7782,8 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         pointer_listeners: builder.pointer_listeners,
         hover_regions: builder.hover_regions,
         text_stops: builder.text_stops,
+        page_text: builder.page_text,
+        page_lists: builder.page_lists,
         reorderables: builder.reorderables,
         interactives: builder.interactives,
         refreshes: builder.refreshes,

@@ -1081,6 +1081,9 @@ pub struct App<A: Application> {
     /// The element the focused text field is edited through, on the web (milestone 711).
     #[cfg(web)]
     web_editor: Option<crate::web_editing::Editor>,
+    /// The page's own text over the canvas, on the web (milestone 830).
+    #[cfg(web)]
+    web_text: Option<crate::web_text::TextLayer>,
     /// The scrolls the keyboard set off, taken back if the page pans for it (milestone 779).
     #[cfg(web)]
     keyboard_reveal: crate::web_page::KeyboardReveal,
@@ -1522,6 +1525,8 @@ impl<A: Application> App<A> {
             a11y: None,
             #[cfg(web)]
             web_editor: None,
+            #[cfg(web)]
+            web_text: None,
             #[cfg(web)]
             keyboard_reveal: Default::default(),
             ui: None,
@@ -1990,6 +1995,85 @@ impl<A: Application> App<A> {
                     self.request_redraw();
                 }
             }
+        }
+    }
+
+    /// The CSS pixels of one of the layout's, on the web, and where the application's screen
+    /// starts on the canvas, in CSS pixels: a simulated device's screen sits at its own place.
+    #[cfg(web)]
+    fn page_scale(&self) -> (f32, (f32, f32)) {
+        let k = self.total_scale() / self.scale.max(0.01);
+        let origin = self
+            .placement()
+            .map_or((0.0, 0.0), |at| (at.screen.x, at.screen.y));
+        (k, origin)
+    }
+
+    /// Publishes the frame's text to the layer over the canvas (milestone 830): the texts it
+    /// laid out, in the scroll regions as they are scrolled.
+    #[cfg(web)]
+    fn sync_web_text(&mut self) {
+        let (Some(layer), Some(ui)) = (self.web_text.as_ref(), self.ui.as_ref()) else {
+            return;
+        };
+        let regions: Vec<crate::web_text::Region> = ui
+            .scroll_regions()
+            .iter()
+            .map(|area| {
+                let offset = self
+                    .runtime
+                    .scroll_offset_within(area.id, (area.max_x, area.max_y))
+                    .unwrap_or((0.0, 0.0));
+                crate::web_text::Region::of(area, offset)
+            })
+            .collect();
+        let (k, origin) = self.page_scale();
+        let runtime = &self.runtime;
+        layer.update(
+            ui.page_text(),
+            ui.page_lists(),
+            &regions,
+            &|id| runtime.list_item_spans(id),
+            k,
+            origin,
+        );
+    }
+
+    /// Moves the regions the browser scrolled in the text layer — a find bringing a match
+    /// into view — where it scrolled them (milestone 830).
+    #[cfg(web)]
+    fn drain_web_text_scrolls(&mut self) {
+        let (k, _) = self.page_scale();
+        let scrolls = match self.web_text.as_ref() {
+            Some(layer) => layer.take_scrolls(k),
+            None => return,
+        };
+        if scrolls.is_empty() {
+            return;
+        }
+        let Some(ui) = self.ui.as_ref() else {
+            return;
+        };
+        let areas = ui.scroll_regions().to_vec();
+        let mut moved = false;
+        for (id, scrolled) in scrolls {
+            let Some(area) = areas.iter().find(|area| area.id == id) else {
+                continue;
+            };
+            let current = self
+                .runtime
+                .scroll_offset_within(id, (area.max_x, area.max_y))
+                .unwrap_or((0.0, 0.0));
+            let (x, y) = crate::web_text::Region::of(area, current).offset_for(scrolled);
+            let request = frus_widgets::ScrollTo {
+                x: (area.max_x > 0.0).then_some(frus_widgets::ScrollTarget::Offset(x)),
+                y: (area.max_y > 0.0).then_some(frus_widgets::ScrollTarget::Offset(y)),
+                animate: false,
+            };
+            moved |= self.runtime.scroll_to(area, request);
+        }
+        if moved {
+            self.request_redraw();
         }
     }
 
@@ -3376,6 +3460,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
             self.a11y = crate::a11y_web::A11y::new(&window);
             // And the element a text field is edited through (milestone 711).
             self.web_editor = crate::web_editing::Editor::new(&window);
+            // And the page's own text, over the canvas (milestone 830): the frame records its
+            // texts from now on, the ones scrolled out of view included.
+            self.web_text = crate::web_text::TextLayer::new(&window);
+            self.runtime.page_text = self.web_text.is_some();
             // The browser keeps none of its own gestures over the canvas: a finger drags the
             // application, not the page (milestone 779).
             crate::web_page::keep_touches(&window);
@@ -3665,6 +3753,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // Actions a screen reader asked for, through the DOM bridge (#18).
         #[cfg(web)]
         self.drain_a11y_actions();
+        // The regions the browser scrolled to show what a find found (milestone 830).
+        #[cfg(web)]
+        self.drain_web_text_scrolls();
         // And through the Android node provider (milestone 782).
         #[cfg(android)]
         self.drain_android_a11y();
@@ -4965,6 +5056,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         a11y.update(ui.semantics(), focus, editing, &title, &self.announce);
                     }
                 }
+                // And its text to the layer over the canvas (milestone 830).
+                #[cfg(web)]
+                self.sync_web_text();
 
                 // Publish the frame's tree to the Android node provider (milestone 782), while
                 // a screen reader is on to read it.

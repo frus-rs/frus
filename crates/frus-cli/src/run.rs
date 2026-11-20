@@ -1803,6 +1803,7 @@ fn run_web_hot(
             mounts: vec![("pkg".into(), built.clone()), ("wasm".into(), built)],
             hot: true,
             device: options.simulate.clone(),
+            page_text: None,
         },
         options.port,
     )?;
