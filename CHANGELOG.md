@@ -13,6 +13,14 @@ any release may break.
 
 ## [Unreleased]
 
+- **A transformed layer is drawn around what it holds** (J831). A layer with a transform (a
+  wheel's rows, `Transform`, `RotatedBox`, a page sliding in, the overscroll stretch) was given
+  a texture and a composite quad the size of the whole screen, whatever it held. The wheel
+  picker page drew forty-five of them a frame: 434 MB of textures and a quarter of a second per
+  frame on a mid-range phone, which made every wheel crawl to a stop for about nine seconds.
+  The texture now covers only what the transform can bring into the clip, and the quad only
+  where it lands. On that phone the page went from about 300 ms to 20 ms a frame, from 511 MB to
+  56 MB of GPU memory, and a wheel settles in under two seconds.
 - **A line with an expanded child fills its axis** (J832). A `Flex` row or column holding an
   `Expanded` (or a tight `Flexible`) shrink-wrapped, so the expanded child got no free room:
   the demo's conversation screen showed its list at a fixed 200 px with the composer floating

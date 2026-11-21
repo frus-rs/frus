@@ -726,4 +726,51 @@ mod tests {
         assert_eq!(at(32, 32), 255, "the middle of the disc is white");
         assert_eq!(at(2, 2), 0, "its corner is not: the ellipse clipped it");
     }
+
+    /// **A transformed layer lands where its transform sends it**, now that its texture is
+    /// only the part around what it holds and its quad only where that part lands
+    /// (milestone 831): stretched, moved, held to its clip — and nothing left behind where
+    /// it was laid out.
+    #[test]
+    fn a_transformed_layer_lands_where_it_is_sent() {
+        let mut inner = Scene::new();
+        inner.fill_rect(Rect::new(8.0, 8.0, 16.0, 16.0), Color::WHITE);
+        let layer = |clip: Rect| Primitive::Layer {
+            primitives: inner.primitives().to_vec(),
+            opacity: 1.0,
+            clip,
+            clip_shape: frus_core::ClipShape::Rect,
+            // Twice as wide about (16, 16), then 20 right and 30 down: x 20 .. 52, y 38 .. 54.
+            transform: Some(frus_core::LayerTransform::new(
+                frus_core::Affine::scale(2.0, 1.0)
+                    .about(frus_core::Point::new(16.0, 16.0))
+                    .then(frus_core::Affine::translation(20.0, 30.0)),
+            )),
+            filter: LayerFilter::NONE,
+            owner: 0,
+        };
+        let mut scene = Scene::new();
+        scene.push_primitive(layer(Rect::UNBOUNDED));
+        let Some(frame) = render_offscreen(&scene, 64, 64, Color::BLACK) else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let at = |frame: &OffscreenFrame, x: u32, y: u32| {
+            frame.rgba[((y * frame.width + x) * 4) as usize] as i32
+        };
+        assert_eq!(at(&frame, 22, 40), 255, "the stretched square's left end");
+        assert_eq!(at(&frame, 50, 52), 255, "and its right end");
+        assert_eq!(at(&frame, 17, 46), 0, "nothing left of it");
+        assert_eq!(at(&frame, 55, 46), 0, "nor right of it");
+        assert_eq!(at(&frame, 12, 12), 0, "nor where it was laid out");
+
+        // Clipped on the screen at y = 45: its top half shows, its bottom half does not.
+        let mut scene = Scene::new();
+        scene.push_primitive(layer(Rect::new(0.0, 0.0, 64.0, 45.0)));
+        let Some(frame) = render_offscreen(&scene, 64, 64, Color::BLACK) else {
+            return;
+        };
+        assert_eq!(at(&frame, 36, 42), 255, "above the clip's edge");
+        assert_eq!(at(&frame, 36, 48), 0, "below it");
+    }
 }

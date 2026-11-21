@@ -72,6 +72,7 @@ struct InstanceInput {
     @location(4) shape: vec4<f32>,   // kind (0=rect,1=rrect,2=oval), _, _, _
     @location(5) radii: vec4<f32>,   // rrect radii: tl, tr, br, bl
     @location(6) region: vec4<f32>,  // where the texture lies: x, y, width, height (px)
+    @location(7) quad: vec4<f32>,    // where the quad is drawn: x, y, width, height (px)
 };
 
 struct VertexOutput {
@@ -92,8 +93,9 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     // The unit quad covers the layer's **region** (milestone 610): the whole target for a
     // layer that may draw anywhere, only its clip for one that may not. Outside the region
     // there is nothing of the layer, so nothing to shade. `uv` stays the target's, which is
-    // what the full-target clip mask is read in.
-    let px = inst.region.xy + vert.unit_pos * inst.region.zw;
+    // what the full-target clip mask is read in. A transformed layer's region is where its
+    // content lies flat, and its quad is where the transform sends it (milestone 831).
+    let px = inst.quad.xy + vert.unit_pos * inst.quad.zw;
     let unit = px / viewport.size;
     let ndc = vec2<f32>(unit.x * 2.0 - 1.0, 1.0 - unit.y * 2.0);
     var out: VertexOutput;
