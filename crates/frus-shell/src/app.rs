@@ -1151,6 +1151,18 @@ pub struct App<A: Application> {
     /// The [`frus_widgets::AutofillGroup`] that form is, while it is on screen.
     #[cfg(android)]
     autofill_group: Option<WidgetId>,
+    /// The spell checker's conversation with the focused field (milestone 829). With the
+    /// autofill state: Android, its only user, has one window.
+    #[cfg(android)]
+    spell_checker: crate::textservices::SpellChecker,
+    /// Whether the installed "process text" actions have been asked for (milestone 829):
+    /// once, the first time a selection bar opens.
+    #[cfg(android)]
+    process_text_queried: bool,
+    /// The field and the selection (`start`, `end`) a "process text" action was handed, for
+    /// the text it may answer with.
+    #[cfg(android)]
+    process_text_target: Option<(WidgetId, usize, usize)>,
     /// What [`App::click_clock`] counts from in an application.
     clock_origin: Instant,
     /// How many values the work components started had brought when this shell last looked
@@ -1687,6 +1699,12 @@ impl<A: Application> App<A> {
             autofill_reported: Vec::new(),
             #[cfg(android)]
             autofill_focus: None,
+            #[cfg(android)]
+            spell_checker: Default::default(),
+            #[cfg(android)]
+            process_text_queried: false,
+            #[cfg(android)]
+            process_text_target: None,
             #[cfg(android)]
             autofill_group: None,
             clock_origin: Instant::now(),
@@ -3235,6 +3253,56 @@ impl<A: Application> App<A> {
         self.request_redraw();
     }
 
+    /// Has the platform's spell checker read the focused field, when it asked for it, each
+    /// time its text changes (milestone 829): one request at a time, and the results handed
+    /// to the field. Nothing is asked for a field that did not ask.
+    #[cfg(android)]
+    fn sync_spell_check(&mut self) {
+        if !crate::android_text_services::installed() {
+            return;
+        }
+        let focused = self.win.runtime.input.focused.and_then(|id| {
+            self.win
+                .tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), id))
+                .filter(|widget| widget.ime().spell_check)
+                .and_then(|widget| widget.text_value().map(|text| (id, text.to_owned())))
+        });
+        let poll = self
+            .spell_checker
+            .poll(focused.as_ref().map(|(id, text)| (*id, text.as_str())));
+        if poll.clear {
+            frus_widgets::set_spell_check_results(None);
+            self.request_redraw();
+        }
+        if let Some((sequence, text)) = poll.send {
+            crate::android_text_services::spell_check(sequence, &text);
+        }
+    }
+
+    /// What the spell checker and the "process text" actions answered (milestone 829).
+    #[cfg(android)]
+    fn drain_text_services(&mut self) {
+        use crate::android_text_services::Answer;
+        for answer in crate::android_text_services::drain() {
+            match answer {
+                Answer::Spelling { sequence, words } => {
+                    if let Some(results) = self.spell_checker.answer(sequence, words) {
+                        frus_widgets::set_spell_check_results(Some(results));
+                        self.request_redraw();
+                    }
+                }
+                Answer::Processed(text) => {
+                    let target = self.process_text_target.take();
+                    if let (Some(text), Some((id, start, end))) = (text, target) {
+                        self.replace_in_field(id, start, end, &text);
+                    }
+                }
+            }
+        }
+    }
+
     /// Publishes field `id`'s editing state to the bridge — text, caret and selection
     /// — the context the IME reads for its suggestions.
     #[cfg(android)]
@@ -3861,6 +3929,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
         // And the values an autofill service chose, from the same bridge.
         #[cfg(android)]
         self.drain_autofill();
+        // And what the spell checker and the "process text" actions answered.
+        #[cfg(android)]
+        self.drain_text_services();
         // Actions a screen reader asked for, through the Android node provider (milestone 782).
         #[cfg(android)]
         self.drain_android_a11y();
@@ -5286,6 +5357,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // And the autofill service follows the form being edited.
                 #[cfg(android)]
                 self.sync_autofill();
+                // And the spell checker the focused field's text (milestone 829).
+                #[cfg(android)]
+                self.sync_spell_check();
 
                 // While an animation is running, ask for another frame: at once, unless
                 // decoration alone moves, which waits for its own rate (milestone 783).
@@ -7769,9 +7843,14 @@ impl<A: Application> App<A> {
             let still = (self.win.cursor.x - press.at.x).hypot(self.win.cursor.y - press.at.y)
                 <= TOUCH_SLOP;
             if still && (ended.is_none() || gesture_was_a_tap(ended.as_ref())) {
+                let tapped = press.focus.0;
                 self.place_field_press();
                 // A tap, not the start of a selection: nothing is left to drag.
                 self.win.drag = None;
+                // A tap in a misspelled word offers the spell checker's corrections.
+                if self.win.runtime.input.focused == Some(tapped) {
+                    self.offer_spelling(tapped);
+                }
             } else {
                 self.win.pending_field_press = None;
             }
@@ -11761,8 +11840,138 @@ impl<A: Application> App<A> {
     /// selection (milestone 618).
     fn show_selection_toolbar_at(&mut self, id: WidgetId, at: Option<Point>) {
         let can_paste = self.clipboard.has_text();
-        self.win.runtime.selection_toolbar = Some(ToolbarMark { id, can_paste, at });
+        // The installed applications that act on a selection, asked for once, before the
+        // first bar is built (milestone 829).
+        #[cfg(android)]
+        if !self.process_text_queried && crate::android_text_services::installed() {
+            self.process_text_queried = true;
+            frus_widgets::set_process_text_actions(
+                crate::android_text_services::process_text_labels(),
+            );
+        }
+        self.win.runtime.selection_toolbar = Some(ToolbarMark {
+            id,
+            can_paste,
+            at,
+            more: false,
+            spell: false,
+        });
         self.request_redraw();
+    }
+
+    /// A tap put the caret in field `id`: when it landed in a word the spell checker found
+    /// misspelled, the checker's bar opens over it, with its suggestions (milestone 829).
+    fn offer_spelling(&mut self, id: WidgetId) {
+        let Some(cursor) = self.win.runtime.edits.get(&id).map(|edit| edit.cursor) else {
+            return;
+        };
+        let misspelled = self
+            .win
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))
+            .filter(|widget| widget.ime().spell_check)
+            .and_then(|widget| widget.text_value())
+            .and_then(|text| frus_widgets::misspelled_word_at(text, cursor));
+        if misspelled.is_none() {
+            return;
+        }
+        self.win.runtime.selection_toolbar = Some(ToolbarMark {
+            id,
+            can_paste: false,
+            at: None,
+            more: false,
+            spell: true,
+        });
+        self.request_redraw();
+    }
+
+    /// Puts `with` in place of characters `start..end` of field `id`, through the message
+    /// typing would have sent, with the caret after it: a correction, a deleted word, what a
+    /// "process text" action answered (milestone 829).
+    fn replace_in_field(&mut self, id: WidgetId, start: usize, end: usize, with: &str) {
+        let Some((value, caret)) = self
+            .win
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))
+            .and_then(|widget| widget.text_value())
+            .map(|text| crate::textservices::replace_chars(text, start, end, with))
+        else {
+            return;
+        };
+        let Some(message) = self
+            .win
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))
+            .and_then(|widget| widget.replace_value(value))
+        else {
+            return;
+        };
+        self.win.runtime.edits.insert(
+            id,
+            Edit {
+                cursor: caret,
+                anchor: None,
+                composing: None,
+                affinity: Default::default(),
+            },
+        );
+        self.win.runtime.close_edit_run(id);
+        self.dispatch_edit(message);
+        #[cfg(android)]
+        self.push_ime_context(id);
+        self.request_redraw();
+    }
+
+    /// The misspelled word at field `id`'s caret, as the spell checker last found it.
+    fn misspelled_at_caret(&self, id: WidgetId) -> Option<frus_widgets::SpellCheckSpan> {
+        let cursor = self.win.runtime.edits.get(&id)?.cursor;
+        let widget = self
+            .win
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))?;
+        frus_widgets::misspelled_word_at(widget.text_value()?, cursor)
+    }
+
+    /// Hands field `id`'s selection to "process text" action `index` (milestone 829). What
+    /// the action answers replaces the selection, unless the field is read-only, whose text
+    /// is handed over as read-only.
+    fn process_text(&mut self, id: WidgetId, index: u16) {
+        #[cfg(android)]
+        {
+            let Some((start, end)) = self
+                .win
+                .runtime
+                .edits
+                .get(&id)
+                .and_then(|edit| edit.selection_range())
+            else {
+                return;
+            };
+            let Some(widget) = self
+                .win
+                .tree
+                .as_ref()
+                .and_then(|tree| find_widget(tree.as_ref(), id))
+            else {
+                return;
+            };
+            let read_only = !widget.takes_typing();
+            let selected: String = widget
+                .text_value()
+                .unwrap_or_default()
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            self.process_text_target = (!read_only).then_some((id, start, end));
+            crate::android_text_services::process_text(index, &selected, read_only);
+        }
+        #[cfg(not(android))]
+        let _ = (id, index);
     }
 
     /// What Back and Escape do to an open selection bar: put it away, with the handles that
@@ -11804,7 +12013,12 @@ impl<A: Application> App<A> {
                     self.win.runtime.region = None;
                 }
                 EditAction::SelectAll => self.select_all_region(),
-                EditAction::Cut | EditAction::Paste => {}
+                EditAction::Cut
+                | EditAction::Paste
+                | EditAction::More
+                | EditAction::ProcessText(_)
+                | EditAction::ReplaceMisspelled(_)
+                | EditAction::DeleteMisspelled => {}
             }
             self.request_redraw();
             return;
@@ -11855,6 +12069,44 @@ impl<A: Application> App<A> {
                     // where it was: a menu a right-click opened stays at the pointer.
                     let at = self.win.runtime.selection_toolbar.and_then(|mark| mark.at);
                     self.show_selection_toolbar_at(id, at);
+                }
+            }
+            // What did not fit on the bar shows in its place.
+            EditAction::More => {
+                if let Some(mark) = self.win.runtime.selection_toolbar.as_mut() {
+                    mark.more = true;
+                }
+                self.request_redraw();
+            }
+            EditAction::ProcessText(index) => {
+                self.win.runtime.selection_handles = None;
+                self.hide_selection_toolbar();
+                self.process_text(id, index);
+            }
+            EditAction::ReplaceMisspelled(index) => {
+                self.hide_selection_toolbar();
+                if let Some(word) = self.misspelled_at_caret(id) {
+                    if let Some(with) = word.suggestions.get(usize::from(index)) {
+                        self.replace_in_field(id, word.start, word.end, &with.clone());
+                    }
+                }
+            }
+            EditAction::DeleteMisspelled => {
+                self.hide_selection_toolbar();
+                let range = self.misspelled_at_caret(id).and_then(|word| {
+                    let text = self
+                        .win
+                        .tree
+                        .as_ref()
+                        .and_then(|tree| find_widget(tree.as_ref(), id))?
+                        .text_value()?
+                        .to_owned();
+                    Some(crate::textservices::delete_word_range(
+                        &text, word.start, word.end,
+                    ))
+                });
+                if let Some((start, end)) = range {
+                    self.replace_in_field(id, start, end, "");
                 }
             }
         }
@@ -20394,5 +20646,108 @@ mod screenshot_tests {
             .flat_map(|y| (0..400).map(move |x| (x, y)))
             .all(|(x, y)| at(&in_picture, x, y) == [255, 255, 255]);
         assert!(all_white, "the picture holds the page alone");
+    }
+}
+
+/// **A tap in a misspelled word offers the spell checker's corrections** (milestone 829), and
+/// choosing one puts it in the field, driven through the shell's own tap path.
+#[cfg(test)]
+mod spell_check_tests {
+    use super::testing::Driver;
+    use crate::{Application, Command};
+    use frus_widgets::{Point, SpellCheckResults, SpellCheckSpan, TextField, Theme, Widget};
+
+    struct Notes {
+        text: String,
+    }
+
+    impl Application for Notes {
+        type Message = String;
+
+        fn update(&mut self, text: String) -> Command<String> {
+            self.text = text;
+            Command::none()
+        }
+
+        fn view(&self, _theme: &Theme) -> Box<dyn Widget<String>> {
+            Box::new(
+                TextField::new(self.text.clone())
+                    .spell_check(true)
+                    .on_input(|text| text),
+            )
+        }
+    }
+
+    fn checked(text: &str) {
+        frus_widgets::set_spell_check_results(Some(SpellCheckResults {
+            text: text.into(),
+            spans: vec![SpellCheckSpan {
+                start: 0,
+                end: 3,
+                suggestions: vec!["The".into(), "Ten".into()],
+            }],
+        }));
+    }
+
+    fn tap_in_words(d: &mut Driver<Notes>, words: &str, offset: f32) {
+        let (_, rect) = d
+            .texts()
+            .into_iter()
+            .find(|(t, _)| t == words)
+            .expect("the field's words");
+        let at = Point::new(rect.x + offset, rect.y + rect.height * 0.5);
+        d.press(at);
+        d.release(at);
+        d.run(0.1);
+    }
+
+    fn shown(d: &Driver<Notes>, label: &str) -> bool {
+        d.texts().iter().any(|(t, _)| t == label)
+    }
+
+    #[test]
+    fn a_tap_on_a_misspelled_word_offers_its_corrections() {
+        let mut d = Driver::new(
+            Notes {
+                text: "Teh cat sat".into(),
+            },
+            500.0,
+            300.0,
+        );
+        d.run(0.1);
+        checked("Teh cat sat");
+        // A tap in a correctly spelled word offers nothing.
+        tap_in_words(&mut d, "Teh cat sat", 45.0);
+        assert!(!shown(&d, "Delete"), "no bar over a word spelled right");
+        // A tap in the misspelled one opens the bar: its suggestions, then Delete.
+        tap_in_words(&mut d, "Teh cat sat", 6.0);
+        assert!(shown(&d, "The") && shown(&d, "Ten") && shown(&d, "Delete"));
+        // Choosing a suggestion replaces the word, through the field's message.
+        assert!(d.tap_text("The"));
+        d.run(0.1);
+        assert_eq!(d.app().text, "The cat sat");
+        assert!(
+            !shown(&d, "Delete"),
+            "the bar goes once a correction is chosen"
+        );
+        frus_widgets::set_spell_check_results(None);
+    }
+
+    #[test]
+    fn delete_takes_the_word_and_one_space() {
+        let mut d = Driver::new(
+            Notes {
+                text: "Teh cat".into(),
+            },
+            500.0,
+            300.0,
+        );
+        d.run(0.1);
+        checked("Teh cat");
+        tap_in_words(&mut d, "Teh cat", 6.0);
+        assert!(d.tap_text("Delete"));
+        d.run(0.1);
+        assert_eq!(d.app().text, "cat");
+        frus_widgets::set_spell_check_results(None);
     }
 }

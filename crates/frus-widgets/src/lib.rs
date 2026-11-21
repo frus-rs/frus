@@ -245,6 +245,7 @@ mod table;
 mod tabs;
 mod text;
 mod textinput;
+mod textservices;
 mod wheelpicker;
 // External textures: video, camera, maps, native views (milestone 793).
 mod nested;
@@ -726,7 +727,11 @@ pub use textinput::{
     FIELD_DENSE_PADDING_Y, FIELD_DISABLED_OPACITY, FIELD_FOCUSED_BORDER_WIDTH, FIELD_GAP,
     FIELD_ICON_SIZE, FIELD_LABEL_SCALE, FIELD_NOTCH_GAP, FIELD_OUTLINED_PADDING_BOTTOM,
     FIELD_OUTLINED_PADDING_TOP, FIELD_PADDING_X, FIELD_PADDING_Y, FIELD_RADIUS, FIELD_SUB_SIZE,
-    FIELD_TEXT_SIZE,
+    FIELD_TEXT_SIZE, MAX_SPELL_SUGGESTIONS, MISSPELLED_COLOR,
+};
+pub use textservices::{
+    misspelled_word_at, misspelled_words, process_text_actions, set_process_text_actions,
+    set_spell_check_results, spell_check_results, SpellCheckResults, SpellCheckSpan,
 };
 pub use texture::Texture;
 pub use theme::{

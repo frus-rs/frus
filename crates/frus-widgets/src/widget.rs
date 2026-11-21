@@ -634,6 +634,19 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// What the bar's **More** button opens for `context`: the items that did not fit on
+    /// the bar, as a menu shown in its place (milestone 829). Built once and kept, as the
+    /// bar is.
+    fn selection_toolbar_more(&self, _context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        None
+    }
+
+    /// The spell checker's bar for the misspelled word `word` (milestone 829): its
+    /// suggestions and a way to delete it, shown when a tap puts the caret in it.
+    fn spell_check_toolbar(&self, _word: &crate::SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
+        None
+    }
+
     /// The box the bar is placed against, in the field's **local** coordinates: the
     /// selection's, or the caret's when nothing is selected. Like
     /// [`selection_handles`](Self::selection_handles) it is the paint's own geometry.
@@ -2367,6 +2380,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn selection_toolbar(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
         (**self).selection_toolbar(context)
+    }
+    fn selection_toolbar_more(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        (**self).selection_toolbar_more(context)
+    }
+    fn spell_check_toolbar(&self, word: &crate::SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
+        (**self).spell_check_toolbar(word)
     }
     fn selection_anchor(&self, width: f32, edit: &Edit, scroll_y: f32) -> Option<Rect> {
         (**self).selection_anchor(width, edit, scroll_y)

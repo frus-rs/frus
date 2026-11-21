@@ -6833,12 +6833,45 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             can_paste,
             all_selected: len == 0 || selection == Some((0, len)),
         };
-        let Some(content) = widget.selection_toolbar(context) else {
-            return;
+        let mark = self.runtime.selection_toolbar.filter(|mark| mark.id == id);
+        // The bar the mark asks for: the spell checker's for the word at the caret, what
+        // More opened, or the bar itself (milestone 829).
+        let (content, identity) = if mark.is_some_and(|mark| mark.spell) {
+            let Some(word) = widget
+                .text_value()
+                .and_then(|text| crate::textservices::misspelled_word_at(text, edit.cursor))
+            else {
+                return;
+            };
+            let key = word.suggestions.iter().fold(0u64, |h, s| {
+                s.bytes().fold(h.rotate_left(5) ^ 0xff, |h, b| {
+                    h.rotate_left(5) ^ u64::from(b)
+                })
+            });
+            let Some(content) = widget.spell_check_toolbar(&word) else {
+                return;
+            };
+            (
+                content,
+                id.toolbar(2 * crate::ToolbarContext::VARIANTS).keyed(key),
+            )
+        } else if mark.is_some_and(|mark| mark.more) {
+            let Some(content) = widget.selection_toolbar_more(context) else {
+                return;
+            };
+            (
+                content,
+                id.toolbar(crate::ToolbarContext::VARIANTS + context.variant()),
+            )
+        } else {
+            let Some(content) = widget.selection_toolbar(context) else {
+                return;
+            };
+            (content, id.toolbar(context.variant()))
         };
         self.overlays.push((
             content,
-            id.toolbar(context.variant()),
+            identity,
             pointer.unwrap_or(anchor),
             Placement::Selection,
             None,
@@ -10013,6 +10046,8 @@ mod tests {
             id,
             can_paste,
             at: None,
+            more: false,
+            spell: false,
         });
         // The pill's tests: under a theme that follows Android, where the bar is a pill
         // (milestone 618), whatever this test runs on.
@@ -10036,6 +10071,8 @@ mod tests {
                 id,
                 can_paste: false,
                 at,
+                more: false,
+                spell: false,
             });
             build_ui(&tree, Size::new(300.0, 400.0), &rt, &theme)
         };
@@ -10302,6 +10339,8 @@ mod tests {
             id: ids[1],
             can_paste: true,
             at: None,
+            more: false,
+            spell: false,
         });
         let ui = build_ui(&tree, size, &rt, &theme);
         assert_eq!(ui.toolbars.len(), 1);

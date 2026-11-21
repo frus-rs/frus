@@ -207,6 +207,12 @@ pub trait Localizations {
         "Remove"
     }
 
+    /// **The item that deletes a misspelled word**, under the spell checker's suggestions
+    /// (`deleteButtonTooltip`, milestone 829).
+    fn delete_button_label(&self) -> &str {
+        "Delete"
+    }
+
     /// **The button through to an application's licences**, on the box that says what the
     /// application is (`viewLicensesButtonLabel`).
     fn licenses_label(&self) -> &str {
@@ -744,6 +750,10 @@ impl Localizations for French {
         "Supprimer"
     }
 
+    fn delete_button_label(&self) -> &str {
+        "Supprimer"
+    }
+
     /// The same word as the English table's, which spells it the British way.
     fn licenses_label(&self) -> &str {
         "Licences"
@@ -1148,6 +1158,10 @@ impl Localizations for German {
         "Löschen"
     }
 
+    fn delete_button_label(&self) -> &str {
+        "Löschen"
+    }
+
     fn licenses_label(&self) -> &str {
         "Lizenzen"
     }
@@ -1531,6 +1545,10 @@ impl Localizations for Spanish {
     }
 
     fn remove_button_label(&self) -> &str {
+        "Eliminar"
+    }
+
+    fn delete_button_label(&self) -> &str {
         "Eliminar"
     }
 
@@ -1927,6 +1945,10 @@ impl Localizations for Japanese {
         "削除"
     }
 
+    fn delete_button_label(&self) -> &str {
+        "削除"
+    }
+
     fn licenses_label(&self) -> &str {
         "ライセンス"
     }
@@ -2301,6 +2323,10 @@ impl Localizations for Thai {
     }
 
     fn remove_button_label(&self) -> &str {
+        "ลบ"
+    }
+
+    fn delete_button_label(&self) -> &str {
         "ลบ"
     }
 
@@ -2698,6 +2724,10 @@ impl Localizations for Vietnamese {
     }
 
     fn remove_button_label(&self) -> &str {
+        "Xóa"
+    }
+
+    fn delete_button_label(&self) -> &str {
         "Xóa"
     }
 

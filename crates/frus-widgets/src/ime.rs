@@ -128,7 +128,7 @@ impl Capitalization {
     }
 }
 
-/// The pair the platform is told when a field takes focus.
+/// What the platform is told when a field takes focus.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Ime {
     /// Which keys.
@@ -137,6 +137,17 @@ pub struct Ime {
     pub action: TextInputAction,
     /// Which letters the keyboard capitalises by itself.
     pub capitalization: Capitalization,
+    /// Whether the keyboard may correct a word as it is typed: `None` leaves it to the
+    /// keyboard type (on for prose, off for everything else), `Some` decides. See
+    /// [`corrects`](Self::corrects).
+    pub autocorrect: Option<bool>,
+    /// Whether the keyboard may show its strip of suggested words: `None` leaves it on for
+    /// everything but a secret, `Some(false)` turns it off. See
+    /// [`suggests`](Self::suggests).
+    pub suggestions: Option<bool>,
+    /// Whether the platform's spell checker reads the field's text, so that misspelled
+    /// words are underlined and offer corrections (milestone 829). Off unless asked for.
+    pub spell_check: bool,
 }
 
 impl Ime {
@@ -146,6 +157,52 @@ impl Ime {
             keyboard,
             action: TextInputAction::Done,
             capitalization: Capitalization::Auto,
+            autocorrect: None,
+            suggestions: None,
+            spell_check: false,
+        }
+    }
+
+    /// The same, correcting words as they are typed or not, whatever the type implies.
+    pub const fn autocorrect(mut self, on: bool) -> Self {
+        self.autocorrect = Some(on);
+        self
+    }
+
+    /// The same, with the keyboard's suggestion strip on or off.
+    pub const fn suggestions(mut self, on: bool) -> Self {
+        self.suggestions = Some(on);
+        self
+    }
+
+    /// The same, with the platform's spell checker reading the text or not.
+    pub const fn spell_check(mut self, on: bool) -> Self {
+        self.spell_check = on;
+        self
+    }
+
+    /// Whether the keyboard may correct words: what was asked for, or else **prose only**.
+    /// An address, a number or a name corrected into a dictionary word is a mistake the
+    /// reader has to notice and undo. A secret is never corrected, whatever was asked.
+    pub const fn corrects(self) -> bool {
+        if self.keyboard.is_secret() {
+            return false;
+        }
+        match self.autocorrect {
+            Some(on) => on,
+            None => matches!(self.keyboard, KeyboardType::Text | KeyboardType::Multiline),
+        }
+    }
+
+    /// Whether the keyboard may show suggested words: what was asked for, or else on. Never
+    /// for a secret, which the keyboard would otherwise learn and offer back.
+    pub const fn suggests(self) -> bool {
+        if self.keyboard.is_secret() {
+            return false;
+        }
+        match self.suggestions {
+            Some(on) => on,
+            None => true,
         }
     }
 
@@ -164,16 +221,36 @@ impl Ime {
     ///
     /// [`Capitalization::Auto`] leaves the type's own bits alone, which is why the
     /// existing types keep answering exactly what they always did.
+    ///
+    /// Then the two switches, on a text class only (milestone 829):
+    ///
+    /// - **autocorrect** is `TYPE_TEXT_FLAG_AUTO_CORRECT`. A keyboard reads its absence on a
+    ///   single-line field as "do not correct", so prose has to ask for it;
+    /// - **no suggestions** is `TYPE_TEXT_FLAG_NO_SUGGESTIONS`, which many keyboards ignore
+    ///   on ordinary text. They do honour the *visible password* variation, so a plain text
+    ///   field that turns suggestions off takes that variation too. A field with a variation
+    ///   of its own (an email address, a URL) keeps it: replacing it would cost the field
+    ///   its `@` key.
     pub const fn android_input_type(self) -> i32 {
         use input_type as t;
         let base = self.keyboard.android_input_type();
         if base & t::CLASS_MASK != t::CLASS_TEXT {
             return base;
         }
-        match self.capitalization {
+        let mut bits = match self.capitalization {
             Capitalization::Auto => base,
             other => (base & !t::CAP_MASK) | other.flag(),
+        };
+        if self.corrects() {
+            bits |= t::TEXT_FLAG_AUTO_CORRECT;
         }
+        if !self.suggests() {
+            bits |= t::TEXT_FLAG_NO_SUGGESTIONS;
+            if bits & t::VARIATION_MASK == 0 {
+                bits |= t::TEXT_VARIATION_VISIBLE_PASSWORD;
+            }
+        }
+        bits
     }
 
     /// The same, with a different action key.
@@ -203,6 +280,10 @@ mod input_type {
     pub const CAP_MASK: i32 =
         TEXT_FLAG_CAP_CHARACTERS | TEXT_FLAG_CAP_SENTENCES | TEXT_FLAG_CAP_WORDS;
     pub const TEXT_FLAG_MULTI_LINE: i32 = 0x0002_0000;
+    pub const TEXT_FLAG_AUTO_CORRECT: i32 = 0x0000_8000;
+    pub const TEXT_FLAG_NO_SUGGESTIONS: i32 = 0x0008_0000;
+    /// Every variation bit.
+    pub const VARIATION_MASK: i32 = 0x0000_0ff0;
 
     pub const TEXT_VARIATION_URI: i32 = 0x0000_0010;
     pub const TEXT_VARIATION_EMAIL_ADDRESS: i32 = 0x0000_0020;
@@ -370,7 +451,7 @@ impl Ime {
                 Capitalization::Words => "words",
                 Capitalization::Characters => "characters",
             },
-            corrects: matches!(k, K::Text | K::Multiline),
+            corrects: self.corrects(),
             autocomplete: "off",
         }
     }
@@ -489,10 +570,13 @@ mod tests {
         assert_eq!(bits(Capitalization::None).android_input_type() & 0xf, 1);
     }
 
-    /// `Auto` is the absence of an opinion, so every type answers exactly what it always
-    /// did — a name still capitalises words, an email address still capitalises nothing.
+    /// `Auto` is the absence of an opinion, so every type answers what it always did — a
+    /// name still capitalises words, an email address still capitalises nothing — apart
+    /// from the two text-service flags (milestone 829): prose asks to be corrected, and a
+    /// secret asks for no suggestions.
     #[test]
     fn auto_leaves_every_type_as_it_was() {
+        const SERVICES: i32 = 0x0000_8000 | 0x0008_0000;
         for keyboard in [
             KeyboardType::Text,
             KeyboardType::Multiline,
@@ -503,11 +587,102 @@ mod tests {
             KeyboardType::Phone,
         ] {
             assert_eq!(
-                Ime::new(keyboard).android_input_type(),
+                Ime::new(keyboard).android_input_type() & !SERVICES,
                 keyboard.android_input_type(),
                 "{keyboard:?}"
             );
         }
+    }
+
+    /// Prose asks to be corrected, since a keyboard reads silence on a single line as a
+    /// refusal; nothing else does, and a secret never does, whatever was asked.
+    #[test]
+    fn prose_asks_to_be_corrected() {
+        const AUTO_CORRECT: i32 = 0x0000_8000;
+        let corrected = |ime: Ime| ime.android_input_type() & AUTO_CORRECT != 0;
+        assert!(corrected(Ime::new(KeyboardType::Text)));
+        assert!(corrected(Ime::new(KeyboardType::Multiline)));
+        for keyboard in [
+            KeyboardType::Email,
+            KeyboardType::Url,
+            KeyboardType::Name,
+            KeyboardType::Password,
+            KeyboardType::VisiblePassword,
+            KeyboardType::Number,
+        ] {
+            assert!(!corrected(Ime::new(keyboard)), "{keyboard:?}");
+        }
+        // Asked for, a name is corrected; a secret still is not.
+        assert!(corrected(Ime::new(KeyboardType::Name).autocorrect(true)));
+        assert!(!corrected(
+            Ime::new(KeyboardType::Password).autocorrect(true)
+        ));
+        // And a username field turns it off.
+        assert!(!corrected(Ime::new(KeyboardType::Text).autocorrect(false)));
+        // A keypad carries no such flag: the bit means something else on a number class.
+        assert_eq!(
+            Ime::new(KeyboardType::Number)
+                .autocorrect(true)
+                .android_input_type(),
+            KeyboardType::Number.android_input_type()
+        );
+    }
+
+    /// Suggestions turned off are the no-suggestions flag **and**, on plain text, the
+    /// visible-password variation that many keyboards honour instead; a field with a
+    /// variation of its own keeps it.
+    #[test]
+    fn suggestions_off_reach_every_keyboard() {
+        const NO_SUGGESTIONS: i32 = 0x0008_0000;
+        const VARIATION_MASK: i32 = 0x0000_0ff0;
+        let plain = Ime::new(KeyboardType::Text)
+            .autocorrect(false)
+            .suggestions(false)
+            .android_input_type();
+        assert_ne!(plain & NO_SUGGESTIONS, 0);
+        assert_eq!(plain & VARIATION_MASK, 0x90);
+        assert_eq!(plain & 0xf, 1);
+        let email = Ime::new(KeyboardType::Email)
+            .suggestions(false)
+            .android_input_type();
+        assert_ne!(email & NO_SUGGESTIONS, 0);
+        assert_eq!(
+            email & VARIATION_MASK,
+            0x20,
+            "an email field keeps its @ key"
+        );
+        // On by default, so nothing is added.
+        assert_eq!(
+            Ime::new(KeyboardType::Text).android_input_type() & NO_SUGGESTIONS,
+            0
+        );
+        // A secret suggests nothing, and keeps its password variation.
+        let secret = Ime::new(KeyboardType::Password).android_input_type();
+        assert_ne!(secret & NO_SUGGESTIONS, 0);
+        assert_eq!(secret & VARIATION_MASK, 0x80);
+    }
+
+    /// The browser hears the same answer: `autocorrect` and `spellcheck` follow the switch.
+    #[test]
+    fn the_web_follows_the_autocorrect_switch() {
+        assert!(
+            !Ime::new(KeyboardType::Text)
+                .autocorrect(false)
+                .web()
+                .corrects
+        );
+        assert!(
+            Ime::new(KeyboardType::Name)
+                .autocorrect(true)
+                .web()
+                .corrects
+        );
+        assert!(
+            !Ime::new(KeyboardType::Password)
+                .autocorrect(true)
+                .web()
+                .corrects
+        );
     }
 
     /// Only a text class capitalises. `0x1000` is *signed* on a number class, so asking

@@ -69,6 +69,12 @@ pub struct ToolbarMark {
     /// rather than to the selection, as the reference's context menu goes to the last
     /// secondary tap (milestone 618). `None` when it opened any other way.
     pub at: Option<frus_core::Point>,
+    /// The bar's **More** button was pressed: what did not fit on it shows in its place
+    /// (milestone 829).
+    pub more: bool,
+    /// The bar is the **spell checker's**, for the misspelled word at the caret, opened by a
+    /// tap on it (milestone 829).
+    pub spell: bool,
 }
 
 /// One of the two handles under a touch selection, in the field's **local** coordinates
