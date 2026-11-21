@@ -261,6 +261,26 @@ impl<Msg: Clone> Widget<Msg> for Flex<Msg> {
         &self.children
     }
 
+    /// **A line holding a tight flexible child fills its own axis** (milestone 832).
+    ///
+    /// Otherwise a flex line shrink-wraps, and an [`crate::Expanded`] in it has no free room
+    /// to take: it silently gets its child's own size. A column of a list in an `Expanded`
+    /// and a composer below it, as a screen's body, came out the list's default height
+    /// with the composer floating under it. A line with a flexible child that must fill its
+    /// share is asking for the room along its axis, and takes it where there is room to
+    /// take: alone in a box, or across its parent's line. Along a parent's line, the room is
+    /// unbounded and the line keeps its children's size, as before.
+    ///
+    /// A wrapping line divides its room into lines of its own and is left as it is, as is
+    /// a line given a size on its axis.
+    fn fill_axes(&self, _theme: &Theme) -> crate::widget::FillAxes {
+        if !self.wrap && self.children.iter().any(|c| c.fills_flex_share()) {
+            crate::widget::FillAxes::along(self.direction)
+        } else {
+            crate::widget::FillAxes::NONE
+        }
+    }
+
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {
         // A flex container is transparent: no decoration of its own.
     }
@@ -511,6 +531,49 @@ mod tests {
         );
         assert_eq!(boxes[0].y, 80.0, "the first child sits at the bottom");
         assert_eq!(boxes[1].y, 50.0, "the second one above it");
+    }
+
+    /// **A column holding an `Expanded` fills the box it is alone in** (milestone 832): the
+    /// expanded child takes what the others leave. Without one, the column keeps its
+    /// children's size.
+    #[test]
+    fn a_line_with_an_expanded_child_fills_its_box() {
+        let boxes = laid_out(
+            Flex::column()
+                .child(crate::Expanded::new(
+                    Container::<()>::new().color(Color::rgb(1.0, 0.0, 0.0)),
+                ))
+                .child(row_of(20.0)),
+        );
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(
+            (boxes[0].y, boxes[0].height),
+            (0.0, 80.0),
+            "the expanded child takes the rest: {boxes:?}"
+        );
+        assert_eq!((boxes[1].y, boxes[1].height), (80.0, 20.0));
+        // A loose one need not fill its share, so the column keeps its children's size.
+        let loose = laid_out(
+            Flex::column()
+                .child(crate::Flexible::new(row_of(10.0)))
+                .child(row_of(20.0)),
+        );
+        assert_eq!(loose[1].y, 10.0, "nothing to fill: {loose:?}");
+        let plain = laid_out(Flex::column().child(row_of(10.0)).child(row_of(20.0)));
+        assert_eq!(plain[1].y, 10.0, "no flexible child, no filling: {plain:?}");
+    }
+
+    /// **Along a parent's line it keeps its children's size**: two columns with an expanded
+    /// child each, in a column, are not stretched to share the box.
+    #[test]
+    fn a_line_with_an_expanded_child_beside_siblings_keeps_its_size() {
+        let boxes = laid_out(
+            Flex::column()
+                .child(Flex::column().child(crate::Expanded::new(row_of(10.0))))
+                .child(row_of(20.0)),
+        );
+        assert_eq!(boxes[0].height, 10.0, "{boxes:?}");
+        assert_eq!(boxes[1].y, 10.0, "{boxes:?}");
     }
 
     /// Reversing twice is the direction it started with — the builder is a flip, not a

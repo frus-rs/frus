@@ -8,11 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 830 so far, each documenting the objective, the alternatives
+> record — one per step, 832 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A line with an expanded child fills its axis** (J832). A `Flex` row or column holding an
+  `Expanded` (or a tight `Flexible`) shrink-wrapped, so the expanded child got no free room:
+  the demo's conversation screen showed its list at a fixed 200 px with the composer floating
+  under it, `ChatComposer`'s field kept a 220-px width, and a search bar's clear button sat in
+  the middle of the bar. Such a line now fills its axis where it has room (alone in a box, or
+  across its parent's line); along its parent's line it keeps its children's size. `SafeArea` no longer grows along a line shared with siblings: it
+  fills a box it is alone in and stretches across, and beside siblings it is its content plus
+  its padding.
 - **The page has text on the web: find-in-page, printing, search engines** (J830, #212). The web
   shell lays a transparent text layer over the canvas, built from a new registry of every text
   the frame lays out (`Ui::page_text`, recorded only when `Runtime::page_text` is set, which only
@@ -42,7 +50,6 @@ any release may break.
   just as `cancel_job` was called could still start one more run after `cancel_job` returned.
   The run is now counted under the same lock the cancel takes, so it has either started (and is
   told to stop) or never will.
-
 - **Rust code that runs with no window** (J828, #215). `main!(app, headless: { "sync" => sync })`
   declares headless entry points: plain functions, `fn(&HeadlessContext) -> anyhow::Result<()>`,
   handed the job's name and input, the application's preferences and data folder (shared with
