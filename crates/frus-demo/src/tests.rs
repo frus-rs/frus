@@ -2499,3 +2499,68 @@ fn the_tags_field_beside_the_info_button_is_a_field() {
         })
     }
 }
+
+/// **The conversation's list takes the screen and its composer sits on the bottom edge**
+/// (milestone 832), as on the phone it was reported on: a status bar, a navigation bar, the
+/// app bar, the list, a rule and the composer kept clear of the navigation bar. The list kept a
+/// default height of 200 under a column that shrink-wrapped it, the composer stopped below it in
+/// the middle of the screen, and its field kept a default width.
+#[test]
+fn the_conversation_fills_the_screen_above_its_composer() {
+    const TOP: f32 = 27.0;
+    const BOTTOM: f32 = 48.0;
+    let mut bench = Bench::new(PHONE.0, PHONE.1);
+    bench.insets = WindowInsets::bars(Insets::new(TOP, 0.0, BOTTOM, 0.0));
+    bench.go("/conversation");
+    bench.settle_frames();
+    let theme = bench
+        .app
+        .resolved_theme(frus_widgets::Brightness::Dark, false)
+        .with_platform(bench.platform);
+    let nodes = MediaQuery::new(bench.size)
+        .with_insets(bench.insets)
+        .scope(|| {
+            bench.runtime.states.begin_build();
+            let tree = Application::view(&bench.app, &theme);
+            frus_widgets::build_deferred(tree.as_ref(), &theme, &bench.runtime);
+            let (_, nodes) = build_ui_inspected(tree.as_ref(), bench.size, &bench.runtime, &theme);
+            bench.runtime.states.end_frame();
+            nodes
+        });
+    let first = |name: &str| {
+        nodes
+            .iter()
+            .find(|n| n.name == name)
+            .map(|n| n.rect)
+            .unwrap_or_else(|| panic!("no {name} on the screen"))
+    };
+    let list = first("ListView");
+    let divider = first("Divider");
+    let field = first("TextField");
+    // The safe area the screen holds, not the app bar's.
+    let composer = nodes
+        .iter()
+        .filter(|n| n.name == "SafeArea")
+        .map(|n| n.rect)
+        .next_back()
+        .expect("the composer's safe area");
+    let bottom = PHONE.1;
+    assert_eq!(
+        composer.y + composer.height,
+        bottom,
+        "the composer reaches the bottom edge: {composer:?}"
+    );
+    assert!(
+        field.y + field.height > bottom - BOTTOM - 16.0
+            && field.y + field.height <= bottom - BOTTOM,
+        "the field sits just above the navigation bar: {field:?}"
+    );
+    assert!(
+        field.width > PHONE.0 - 2.0 * 48.0 - 4.0 * 8.0 - 1.0,
+        "the field takes the width the buttons leave: {field:?}"
+    );
+    assert!(
+        list.y + list.height >= divider.y - 0.5 && list.height > 500.0,
+        "the list reaches down to the rule above the composer: {list:?}, {divider:?}"
+    );
+}

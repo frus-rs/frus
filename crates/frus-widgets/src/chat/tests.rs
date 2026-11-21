@@ -514,3 +514,37 @@ fn visit(w: &dyn Widget<Msg>, f: &mut dyn FnMut(&dyn Widget<Msg>)) {
         visit(child.as_ref(), f);
     }
 }
+
+/// In a column, the list takes the room and the composer sits at the bottom, its own height.
+#[test]
+fn the_composer_sits_at_the_bottom_of_a_column() {
+    for platform in [
+        frus_core::TargetPlatform::Android,
+        frus_core::TargetPlatform::Windows,
+    ] {
+        let mut theme = Theme::dark();
+        theme.platform = platform;
+        let state = ChatListState::new();
+        // The body a scaffold hands its content: a box of a definite size.
+        let page: Flex<Msg> = Flex::column()
+            .width(411.0)
+            .height(835.0)
+            .child(Expanded::new(chat(conversation(), &state)))
+            .child(crate::Divider::new())
+            .child(crate::SafeArea::new(
+                ChatComposer::new("", Msg::Draft).on_send(Msg::Send),
+            ));
+        let ui = frame_with(&page, Size::new(411.0, 835.0), &Runtime::default(), &theme);
+        let placeholder = text_at(&ui, "Message").expect("the placeholder is drawn");
+        let newest = text_at(&ui, "Pushing now.").expect("the newest message is drawn");
+        eprintln!("{platform:?}: placeholder {placeholder:?} newest {newest:?}");
+        assert!(
+            placeholder.y > 835.0 - 80.0,
+            "{platform:?}: the composer sits at the bottom, not at {placeholder:?}"
+        );
+        assert!(
+            newest.y > 835.0 - 200.0,
+            "{platform:?}: the list reaches down to the composer, newest at {newest:?}"
+        );
+    }
+}
