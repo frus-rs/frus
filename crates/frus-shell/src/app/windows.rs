@@ -173,6 +173,9 @@ impl<A: Application> App<A> {
         // And what the browser did to the field it edits for the application (milestone 711).
         #[cfg(web)]
         self.drain_web_editing();
+        // The regions the browser scrolled to show what a find found (milestone 830).
+        #[cfg(web)]
+        self.drain_web_text_scrolls();
     }
 
     /// Brings the windows open to what the application lists (milestone 827): opens, closes

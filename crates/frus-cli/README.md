@@ -206,7 +206,7 @@ and takes `{"method":"app.restart","params":{"fullRestart":false}}` (`r`; `true`
 
 ```text
 frus build apk        # the Android package
-frus build web        # web/, with the application compiled into web/pkg/
+frus build web        # the application into web/pkg/; the site to deploy in target/frus-web/<package>/
 frus build desktop    # the program for this computer
 ```
 

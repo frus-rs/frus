@@ -283,6 +283,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.selectable_text())
     }
 
+    fn page_words(&self) -> Option<crate::PageWords> {
+        self.inner.as_ref().and_then(|w| w.page_words())
+    }
+
     fn region_toolbar(
         &self,
         context: crate::ToolbarContext,
@@ -313,6 +317,18 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner
             .as_ref()
             .and_then(|w| w.selection_toolbar(context))
+    }
+
+    fn selection_toolbar_more(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        self.inner
+            .as_ref()
+            .and_then(|w| w.selection_toolbar_more(context))
+    }
+
+    fn spell_check_toolbar(&self, word: &crate::SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
+        self.inner
+            .as_ref()
+            .and_then(|w| w.spell_check_toolbar(word))
     }
 
     fn selection_anchor(&self, width: f32, edit: &Edit, scroll_y: f32) -> Option<Rect> {

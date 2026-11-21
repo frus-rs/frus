@@ -669,6 +669,13 @@ pub struct TextFieldTheme {
     /// What a tap outside a focused field does to the focus (milestone 750). Unset,
     /// [`TapOutside::Unfocus`](crate::TapOutside::Unfocus).
     pub tap_outside: Option<crate::TapOutside>,
+    /// The line under a misspelled word (milestone 829). Unset, the platform's red,
+    /// [`MISSPELLED_COLOR`](crate::MISSPELLED_COLOR).
+    pub misspelled_color: Option<Color>,
+    /// Whether that line is a wave. Unset, it is.
+    pub misspelled_wavy: Option<bool>,
+    /// That line's thickness. Unset, 1.
+    pub misspelled_thickness: Option<f32>,
 }
 
 /// Defaults for [`Button`](crate::Button): a style for each kind of button — the

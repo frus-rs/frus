@@ -551,6 +551,15 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// What this widget **says**, for the page's own text on the web (milestone 830): a
+    /// [`Text`](crate::Text) or a [`RichText`](crate::RichText) with words in it, and nothing
+    /// that is not made of words. Asked only while the shell records the page's text
+    /// ([`Runtime::page_text`](crate::Runtime::page_text)), of the texts laid out — those
+    /// scrolled out of view included.
+    fn page_words(&self) -> Option<crate::PageWords> {
+        None
+    }
+
     /// The **bar** a [`SelectionArea`](crate::SelectionArea) offers over its selection, for
     /// `context`, when the application has said what it holds
     /// ([`SelectionArea::selection_toolbar`](crate::SelectionArea::selection_toolbar)): `Some`
@@ -622,6 +631,19 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// One bar per context, built once and kept — a bar is a widget the walk borrows for
     /// the frame, and two different lists must not share an identity.
     fn selection_toolbar(&self, _context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        None
+    }
+
+    /// What the bar's **More** button opens for `context`: the items that did not fit on
+    /// the bar, as a menu shown in its place (milestone 829). Built once and kept, as the
+    /// bar is.
+    fn selection_toolbar_more(&self, _context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        None
+    }
+
+    /// The spell checker's bar for the misspelled word `word` (milestone 829): its
+    /// suggestions and a way to delete it, shown when a tap puts the caret in it.
+    fn spell_check_toolbar(&self, _word: &crate::SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
         None
     }
 
@@ -2328,6 +2350,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     fn selectable_text(&self) -> Option<std::rc::Rc<dyn crate::SelectableText>> {
         (**self).selectable_text()
     }
+    fn page_words(&self) -> Option<crate::PageWords> {
+        (**self).page_words()
+    }
     fn region_toolbar(
         &self,
         context: crate::ToolbarContext,
@@ -2355,6 +2380,12 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn selection_toolbar(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
         (**self).selection_toolbar(context)
+    }
+    fn selection_toolbar_more(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        (**self).selection_toolbar_more(context)
+    }
+    fn spell_check_toolbar(&self, word: &crate::SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
+        (**self).spell_check_toolbar(word)
     }
     fn selection_anchor(&self, width: f32, edit: &Edit, scroll_y: f32) -> Option<Rect> {
         (**self).selection_anchor(width, edit, scroll_y)

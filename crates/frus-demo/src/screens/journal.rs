@@ -117,6 +117,9 @@ impl State for JournalState {
         // during one — which is the honest cost of a view that answers the offset.
         .on_scroll(cx.handler(|s, position: ScrollPosition| s.scroll = Some(position)))
         .notify_every(4.0)
+        // What every row says, built or not: on the web, find-in-page reaches row 4321 and
+        // the printed page lists all 5000 (milestone 830).
+        .item_text(|i| format!("Row {}", i + 1))
         // Opens where it was after the system ended the process (milestone 753).
         .restoration_id("journal");
         // Unset, the list follows the platform. The toggle overrides it, which is the

@@ -21,6 +21,35 @@ any release may break.
   across its parent's line); along its parent's line it keeps its children's size. `SafeArea` no longer grows along a line shared with siblings: it
   fills a box it is alone in and stretches across, and beside siblings it is its content plus
   its padding.
+- **The page has text on the web: find-in-page, printing, search engines** (J830, #212). The web
+  shell lays a transparent text layer over the canvas, built from a new registry of every text
+  the frame lays out (`Ui::page_text`, recorded only when `Runtime::page_text` is set, which only
+  the web shell does): Ctrl+F finds words on screen and scrolled out of view, and the
+  application scrolls to the match. A list that builds only the rows in view can say what all its
+  rows say, `ListView::item_text(|i| ..)`, asked only when find-in-page is opened, the page
+  printed or its text taken: find then reaches row 4321 of 5000. Ctrl+P prints the page's text as
+  a document, every row of such a list included. `frus build web` runs the built page in Chrome
+  or Edge with no window and writes the first screen's text into the site's `index.html` for
+  search engines and link previews (`--no-page-text` skips it). **`frus build web` now also
+  makes a copy of `web/` in `target/frus-web/<package>/`, and that copy is the site to deploy**:
+  the text is written into the copy's page, never into `web/index.html` in your sources. Not a
+  breaking change: the build still compiles the application into `web/pkg/` as before, and a
+  `web/` deployed as it was keeps working, only without the first screen's text. New
+  `Widget::page_words`, `PageText`, `PageWords`, `PageList`, `Runtime::list_item_spans`.
+- **A text field gets the system's text services** (J829, #214). `TextField::spell_check(true)`
+  has the platform's spell checker read the field on Android: misspelled words are underlined (a
+  red wave by default; `misspelled_color`, `misspelled_wavy` and `misspelled_thickness` on the
+  field's style and theme), and a tap on one opens a bar with up to three suggestions and
+  *Delete*, which `TextField::spell_check_toolbar` can change. `TextField::autocorrect(bool)` and
+  `TextField::enable_suggestions(bool)` reach the keyboard as `InputType` flags; ordinary text
+  now asks to be corrected, which single-line fields never did. The selection bar lists the
+  installed "process text" applications (translate, search) behind a new **More** button; the
+  text one returns replaces the selection. New `EditAction` variants: `More`, `ProcessText`,
+  `ReplaceMisspelled`, `DeleteMisspelled`.
+- **A cancelled background job never starts again on the desktop.** A schedule whose wait ended
+  just as `cancel_job` was called could still start one more run after `cancel_job` returned.
+  The run is now counted under the same lock the cancel takes, so it has either started (and is
+  told to stop) or never will.
 - **Rust code that runs with no window** (J828, #215). `main!(app, headless: { "sync" => sync })`
   declares headless entry points: plain functions, `fn(&HeadlessContext) -> anyhow::Result<()>`,
   handed the job's name and input, the application's preferences and data folder (shared with
