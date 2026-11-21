@@ -339,7 +339,7 @@ letter. The directory is made if it is not there; `frus create` never writes ove
 | `--frus-path <dir>` | builds against a checkout of frus rather than the published crates (see below) |
 | `--no-git` | no `git init` (it is skipped anyway inside an existing repository) |
 
-The generated `Cargo.toml` has one dependency, the published `frus = "0.5"`. The project
+The generated `Cargo.toml` has one dependency, the published `frus = "0.6"`. The project
 also has:
 
 - a `README.md` with each platform's commands, for running and for shipping;
@@ -592,6 +592,13 @@ frus build desktop   # the program for this computer
 frus build web       # the application into web/pkg/; the site to deploy in target/frus-web/<package>/
 ```
 
+`frus build web` compiles the application into `web/pkg/`, then copies `web/` to
+`target/frus-web/<package>/`: **that copy is the site to deploy**. Its `index.html` gets the
+first screen's text, read from the built page in Chrome or Edge with no window, so that search
+engines and link previews find words where the canvas has pixels; your `web/index.html` is
+never written. `--no-page-text` skips that step, and a machine with neither browser leaves the
+page as `web/` has it, with a warning. See [the web](guide/web.md).
+
 By hand, the APK is `cargo apk build --lib --release`, and `--lib` is not decoration. A
 frus crate carries **both** a library (the `cdylib` Android loads, holding your
 `android_main`) and a binary (the desktop entry point). Asked for both, the packager
@@ -670,7 +677,7 @@ What makes an application smaller, largest first:
   text in those scripts breaks only at spaces and punctuation.
 
 ```toml
-frus = { version = "0.5", default-features = false, features = ["bundled-sans", "images"] }
+frus = { version = "0.6", default-features = false, features = ["bundled-sans", "images"] }
 ```
 
 - **Leave out the optional features you do not use**: `svg`, `net`, `json`, the desktop ones.
@@ -782,7 +789,7 @@ Each group is a feature, all on by default. An application that ships its own fa
 or simply never draws italics or Arabic, can turn off what it does not need:
 
 ```toml
-frus = { version = "0.5", default-features = false, features = ["bundled-sans", "images"] }
+frus = { version = "0.6", default-features = false, features = ["bundled-sans", "images"] }
 ```
 
 `default-features = false` turns off **everything** on by default, and that is not only the

@@ -333,7 +333,7 @@ function latestVersion(): Promise<string | undefined> {
     const request = https.get(
       "https://crates.io/api/v1/crates/frus-cli",
       // crates.io refuses a request that does not say who makes it.
-      { headers: { "User-Agent": "frus-vscode (https://github.com/KalybosPro/frus)" }, timeout: 10_000 },
+      { headers: { "User-Agent": "frus-vscode (https://github.com/frus-rs/frus)" }, timeout: 10_000 },
       (response) => {
         let body = "";
         response.on("data", (chunk) => (body += chunk));

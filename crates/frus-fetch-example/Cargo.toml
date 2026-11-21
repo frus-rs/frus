@@ -48,7 +48,7 @@ config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenS
 
 # The activity enters frus first (milestone 762): frus then answers Android's request for the
 # application's saved state itself, on every Android version, so state restoration works
-# before Android 10 too. Needs a frus newer than 0.5.0, which defines that function.
+# before Android 10 too. Needs frus 0.6.0 or newer, which defines that function.
 [[package.metadata.android.application.activity.meta_data]]
 name = "android.app.func_name"
 value = "frus_native_activity_on_create"

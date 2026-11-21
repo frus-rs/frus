@@ -2,7 +2,7 @@
   "name": "frus",
   "displayName": "frus",
   "description": "Build, run and reload frus applications on any device — desktop, Android, the web — from VS Code: a device picker, F5 with the log in the Debug Console, and reload on save with the state kept.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "kalybospro",
   "license": "MIT OR Apache-2.0",
   "icon": "icon.png",
@@ -11,7 +11,7 @@
     "url": "https://github.com/frus-rs/frus",
     "directory": "editors/vscode"
   },
-  "homepage": "https://github.com/frus-rs/frus/tree/master/editors/vscode",
+  "homepage": "https://frus.dev",
   "bugs": {
     "url": "https://github.com/frus-rs/frus/issues"
   },

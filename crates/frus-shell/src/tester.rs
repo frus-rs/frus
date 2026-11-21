@@ -19,7 +19,7 @@ use crate::application::Application;
 ///
 /// ```toml
 /// [dev-dependencies]
-/// frus = { version = "0.5", features = ["testing"] }
+/// frus = { version = "0.6", features = ["testing"] }
 /// ```
 ///
 /// ```

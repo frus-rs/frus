@@ -212,6 +212,12 @@ frus build desktop    # the program for this computer
 
 Release by default; `--debug` for a debug build.
 
+`frus build web` compiles the application into `web/pkg/`, then copies `web/` to
+`target/frus-web/<package>/`: that copy is the site to deploy. Its `index.html` gets the first
+screen's text, read from the built page in Chrome or Edge with no window, for search engines and
+link previews; `web/index.html` in your sources is never written. `--no-page-text` skips that
+step, and without Chrome or Edge the page stays as `web/` has it, with a warning.
+
 A release build cuts every font embedded with `frus::fonts::include_font!`, frus's bundled faces
 included, down to the characters the application can show: Latin, the scripts of its languages,
 the symbols the widgets draw and the text of its sources. `frus fonts` prints what it keeps and
@@ -281,7 +287,7 @@ One line for each part of the toolchain — `[✓]` ready, `[!]` usable but inco
 missing — and under it what is wrong, with what to do:
 
 ```text
-[✓] frus (0.5.0)
+[✓] frus (0.6.0)
 [✓] Rust (1.96.1, x86_64-pc-windows-msvc)
 [✓] Desktop (windows)
 [!] Android toolchain (android-36.1)

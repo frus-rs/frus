@@ -54,7 +54,7 @@ files, one per language: plurals, genders and arguments are written by the trans
 the code. Add it beside `frus`:
 
 ```toml
-frus-l10n = "0.5"
+frus-l10n = "0.6"
 ```
 
 Load the files once and look each message up in the language frus resolved:

@@ -6,7 +6,7 @@ half is `json`:
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["net", "json"] }
+frus = { version = "0.6", features = ["net", "json"] }
 serde = { version = "1", features = ["derive"] }
 ```
 

@@ -6,7 +6,7 @@ step with it, seeks and streams. A `VideoPlayer` shows the picture; a `VideoProg
 and `VideoControls` drive it. It is the `video` feature of the `frus` crate:
 
 ```toml
-frus = { version = "0.5", features = ["video"] }
+frus = { version = "0.6", features = ["video"] }
 ```
 
 | | Android | Windows | Web | macOS, Linux, iOS |

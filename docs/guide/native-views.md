@@ -29,7 +29,7 @@ The web view on Windows is behind the `webview2` feature of `frus`, off by defau
 `webview` feature of [web views](webview.md) turns it on too):
 
 ```toml
-frus = { version = "0.5", features = ["webview2"] }
+frus = { version = "0.6", features = ["webview2"] }
 ```
 
 It uses the Edge WebView2 runtime, which Windows 11 ships with. Where the runtime is missing,

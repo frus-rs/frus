@@ -58,7 +58,7 @@ fois). `frus run --no-hot` redémarre plutôt pour recharger : `r` reconstruit l
 relance avec l'état de chaque composant qui en garde un. Ce qu'une commande requiert et qui
 manque à la machine (une cible Rust, le SDK Android, wasm-bindgen), elle l'installe d'abord.
 
-Le projet généré dépend de la crate publiée [`frus`](https://crates.io/crates/frus) (`frus = "0.5"`). `frus create my_app --frus-path <checkout>` le construit contre un checkout de ce dépôt à la place ; [`docs/getting-started.md`](docs/getting-started.md) détaille les options.
+Le projet généré dépend de la crate publiée [`frus`](https://crates.io/crates/frus) (`frus = "0.6"`). `frus create my_app --frus-path <checkout>` le construit contre un checkout de ce dépôt à la place ; [`docs/getting-started.md`](docs/getting-started.md) détaille les options.
 
 ### Essayer les exemples de ce dépôt
 

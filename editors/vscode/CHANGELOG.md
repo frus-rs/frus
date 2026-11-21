@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.3.0
+
+Released with frus 0.6.0.
+
+- **The extension's links lead to the frus organisation**: the Marketplace page, the repository,
+  the issues and the requests it makes to crates.io now point at
+  [github.com/frus-rs/frus](https://github.com/frus-rs/frus) and [frus.dev](https://frus.dev),
+  where frus moved. 0.2.0 still named the old repository.
+- **Hot reload on Android and the web too**: a save is patched into the running application on
+  the desktop, Android and the web, every state kept.
+- **frus: Open DevTools** opens the running application's DevTools in the browser: the live
+  widget tree, the frames and the log.
+- **Several devices at once**: with `"deviceId": "all"` in a launch configuration, one F5 runs on
+  every device, and the session lasts until the last of them has stopped.
 - **Run Frus Update updates every install, and says when there is nothing to do**: it compares
   `frus --version` with the newest on crates.io and, when that one is newer, runs
   `cargo install frus-cli --locked --force`, so a `frus` installed from a checkout is replaced too

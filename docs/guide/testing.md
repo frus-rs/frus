@@ -96,7 +96,7 @@ reads what the screen says. It is frus's `testing` feature, for the tests only:
 
 ```toml
 [dev-dependencies]
-frus = { version = "0.5", features = ["testing"] }
+frus = { version = "0.6", features = ["testing"] }
 ```
 
 ```rust
@@ -135,7 +135,7 @@ its pixels. Add it for the tests only:
 
 ```toml
 [dev-dependencies]
-frus-test = "0.5"
+frus-test = "0.6"
 ```
 
 ```rust
