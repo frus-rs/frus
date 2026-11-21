@@ -8,10 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 828 so far, each documenting the objective, the alternatives
+> record — one per step, 831 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A transformed layer is drawn around what it holds** (J831). A layer with a transform (a
+  wheel's rows, `Transform`, `RotatedBox`, a page sliding in, the overscroll stretch) was given
+  a texture and a composite quad the size of the whole screen, whatever it held. The wheel
+  picker page drew forty-five of them a frame: 434 MB of textures and a quarter of a second per
+  frame on a mid-range phone, which made every wheel crawl to a stop for about nine seconds.
+  The texture now covers only what the transform can bring into the clip, and the quad only
+  where it lands. On that phone the page went from about 300 ms to 20 ms a frame, from 511 MB to
+  56 MB of GPU memory, and a wheel settles in under two seconds.
 
 - **Rust code that runs with no window** (J828, #215). `main!(app, headless: { "sync" => sync })`
   declares headless entry points: plain functions, `fn(&HeadlessContext) -> anyhow::Result<()>`,

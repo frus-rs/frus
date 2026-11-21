@@ -78,6 +78,10 @@ struct CompInstance {
     /// Where the layer's texture lies on the target: `[x, y, width, height]`, in pixels
     /// (milestone 610). The whole target for a layer that may draw anywhere.
     region: [f32; 4],
+    /// Where the composite quad lies on the target: `[x, y, width, height]`, in pixels. The
+    /// region itself for a layer that is not transformed; the box its transformed region
+    /// covers, held to its clip, for one that is (milestone 831).
+    quad: [f32; 4],
 }
 
 #[repr(C)]
@@ -201,6 +205,8 @@ struct LayerComposite {
     filter: LayerFilter,
     /// Where its texture lies on the target, when it is not the whole of it.
     region: Option<[f32; 4]>,
+    /// Where its composite quad lies, when it is not the region (milestone 831).
+    quad: Option<[f32; 4]>,
     /// An application's shader or GPU pass colouring it, through a pipeline of its own
     /// (milestone 792).
     custom: Option<crate::custom::CustomDraw>,
@@ -224,14 +230,47 @@ fn layer_region(
     w: u32,
     h: u32,
 ) -> Option<Rect> {
-    if transform.is_some()
-        || filter.image.is_some_and(|f| !f.is_identity())
+    if filter.image.is_some_and(|f| !f.is_identity())
         || filter.backdrop.is_some()
         || matches!(clip_shape, frus_core::ClipShape::Path(_))
         || !primitives.iter().all(boundable)
     {
         return None;
     }
+    // A **transformed** layer's texture holds its content flat, where it was laid out, and
+    // the composite moves it (milestone 831). The part of the flat content that can reach the
+    // screen is what the transform sends into the clip: the clip on the target, taken back
+    // through the inverse. That is where the texture has to be — and no more: a wheel's
+    // rows, one transformed layer each, were each given a texture the size of the screen,
+    // and a picker page on a phone drew forty-five of them, 434 MB, a quarter of a second a
+    // frame. Its shader-coloured and passed layers keep the whole target: their own draws
+    // read the region as the box they paint.
+    let clip = match transform {
+        None => clip,
+        Some(t) => {
+            if filter.shader.is_some() || filter.external.is_some() {
+                return None;
+            }
+            let [a, b, c, d, ..] = t.affine.m;
+            if (a * d - b * c).abs() < 1e-6 {
+                return None;
+            }
+            let on_target = clip.intersect(Rect::new(0.0, 0.0, w as f32, h as f32));
+            if on_target.width <= 0.0 || on_target.height <= 0.0 {
+                // Nothing of it reaches the target: one pixel, which draws nothing.
+                return Some(Rect::new(0.0, 0.0, 1.0, 1.0));
+            }
+            // A pixel more all round, so that the texels a sample at the clip's edge blends
+            // with are the content's own rather than the texture's clamped border.
+            let flat = bounds_under(t.affine.inverse(), on_target);
+            Rect::new(
+                flat.x - 2.0,
+                flat.y - 2.0,
+                flat.width + 4.0,
+                flat.height + 4.0,
+            )
+        }
+    };
     // No larger than what it holds (milestone 796): a layer's clip is often the screen's —
     // a group faded, a shader mask over a title — while what it draws is a line of text.
     // Its texture, its multisampled pass and its compositing draw were the screen's size;
@@ -265,6 +304,51 @@ fn layer_region(
         return None;
     }
     Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+/// The box `rect` covers once moved by `affine`: all four corners, so that a rotation is
+/// held as well as a scale.
+fn bounds_under(affine: frus_core::Affine, rect: Rect) -> Rect {
+    let corners = [
+        (rect.x, rect.y),
+        (rect.x + rect.width, rect.y),
+        (rect.x, rect.y + rect.height),
+        (rect.x + rect.width, rect.y + rect.height),
+    ]
+    .map(|(x, y)| affine.apply(Point::new(x, y)));
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for p in corners {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// Where a layer's composite quad goes on the target, in whole pixels: `None` when it is
+/// the texture's region, as it is for a layer that is not transformed. A transformed layer
+/// paints where its transform sends the region, and only inside its clip (milestone 831).
+fn layer_quad(
+    region: Rect,
+    clip: Rect,
+    transform: &Option<frus_core::LayerTransform>,
+    w: u32,
+    h: u32,
+) -> Option<[f32; 4]> {
+    let t = transform.as_ref()?;
+    let on = bounds_under(t.affine, region)
+        .intersect(clip)
+        .intersect(Rect::new(0.0, 0.0, w as f32, h as f32));
+    let x0 = on.x.floor();
+    let y0 = on.y.floor();
+    let x1 = (on.x + on.width).ceil();
+    let y1 = (on.y + on.height).ceil();
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        // Nothing of it lands on the target: a quad of no size, which covers no pixel.
+        return Some([0.0, 0.0, 0.0, 0.0]);
+    }
+    Some([x0, y0, x1 - x0, y1 - y0])
 }
 
 /// How far past its footprint a layer's content may paint, in pixels: an antialiased edge.
@@ -878,6 +962,10 @@ impl CompositePainter {
                     shape: l.shape,
                     radii: l.radii,
                     region: l.region.unwrap_or([0.0, 0.0, w.max(1.0), h.max(1.0)]),
+                    quad: l
+                        .quad
+                        .or(l.region)
+                        .unwrap_or([0.0, 0.0, w.max(1.0), h.max(1.0)]),
                 }
             })
             .collect();
@@ -1027,13 +1115,14 @@ impl CompositePainter {
 }
 
 pub(crate) fn comp_instance_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    const ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
         1 => Float32x4,
         2 => Float32x4,
         3 => Float32x4,
         4 => Float32x4,
         5 => Float32x4,
         6 => Float32x4,
+        7 => Float32x4,
     ];
     wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<CompInstance>() as wgpu::BufferAddress,
@@ -1336,6 +1425,7 @@ impl Painters {
                     h,
                 );
                 entry.region = region.map(|r| r.to_array());
+                entry.quad = region.and_then(|r| layer_quad(r, *clip, transform, w, h));
                 if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
                     continue;
                 }
@@ -1366,6 +1456,7 @@ impl Painters {
                         inverse: frus_core::Affine::IDENTITY.m,
                         filter: LayerFilter::NONE,
                         region: None,
+                        quad: None,
                         custom: None,
                     });
                 } else if filter.blend.is_some() {
@@ -1654,6 +1745,7 @@ impl Painters {
                 ..filter.clone()
             },
             region: None,
+            quad: None,
             custom: None,
         }
     }
@@ -2001,6 +2093,7 @@ impl Painters {
                     h,
                 );
                 entry.region = region.map(|r| r.to_array());
+                entry.quad = region.and_then(|r| layer_quad(r, *clip, transform, w, h));
                 if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
                     continue;
                 }
@@ -2386,9 +2479,96 @@ mod tests {
         assert_eq!(region, Some(Rect::new(0.0, 354.0, 1080.0, 122.0)));
     }
 
+    /// **A transformed layer is drawn around what it holds too** (milestone 831): a wheel's
+    /// row, scaled about its centre and moved along the wheel, gets a texture around the
+    /// row, not one the size of the screen — and its quad is where the transform sends it,
+    /// held to its clip.
+    #[test]
+    fn a_transformed_layer_is_drawn_around_what_it_holds() {
+        let none = LayerFilter::NONE;
+        let rect = frus_core::ClipShape::Rect;
+        // A row of a wheel: 300 × 100 at (100, 1000), in a viewport 500 tall.
+        let mut row = Scene::new();
+        row.fill_rect(Rect::new(100.0, 1000.0, 300.0, 100.0), Color::WHITE);
+        let viewport = Rect::new(0.0, 800.0, 1080.0, 500.0);
+        let turned = Some(frus_core::LayerTransform::new(
+            frus_core::Affine::scale(0.9, 0.7)
+                .about(frus_core::Point::new(540.0, 1050.0))
+                .then(frus_core::Affine::translation(0.0, -30.0)),
+        ));
+        let region = layer_region(
+            viewport,
+            &rect,
+            &turned,
+            &none,
+            row.primitives(),
+            1080,
+            2340,
+        )
+        .expect("a region, not the whole target");
+        // The row and 16 px around it, in whole pixels.
+        assert_eq!(region, Rect::new(84.0, 984.0, 332.0, 132.0));
+        let quad = layer_quad(region, viewport, &turned, 1080, 2340).expect("a quad of its own");
+        // The region scaled about (540, 1050) and moved up 30: x 129.6 .. 428.4,
+        // y 973.8 .. 1066.2, in whole pixels.
+        assert_eq!(quad, [129.0, 973.0, 300.0, 94.0]);
+        // An untransformed layer's quad is its region.
+        assert_eq!(layer_quad(region, viewport, &None, 1080, 2340), None);
+
+        // A clip that cuts the row: only the part the transform sends into the clip is kept,
+        // with two pixels to spare for the sampler.
+        let cut = Rect::new(0.0, 800.0, 1080.0, 230.0);
+        let region = layer_region(cut, &rect, &turned, &none, row.primitives(), 1080, 2340)
+            .expect("a region");
+        assert_eq!(region.y, 984.0, "from the top of the row");
+        assert!(
+            region.y + region.height < 1100.0,
+            "but not past what reaches the clip: {region:?}"
+        );
+        let quad = layer_quad(region, cut, &turned, 1080, 2340).expect("a quad");
+        assert!(quad[1] + quad[3] <= 1030.0, "held to the clip: {quad:?}");
+
+        // A quarter turn about the row's centre still finds the row.
+        let rotated = Some(frus_core::LayerTransform::rotation(
+            std::f32::consts::FRAC_PI_2,
+            frus_core::Point::new(250.0, 1050.0),
+        ));
+        let region = layer_region(
+            Rect::UNBOUNDED,
+            &rect,
+            &rotated,
+            &none,
+            row.primitives(),
+            1080,
+            2340,
+        )
+        .expect("a region");
+        assert_eq!(region, Rect::new(84.0, 984.0, 332.0, 132.0));
+        let quad = layer_quad(region, Rect::UNBOUNDED, &rotated, 1080, 2340).expect("a quad");
+        // Turned on its side: x 184 .. 316, y 884 .. 1216, give or take the pixel a
+        // rotation's rounding may round out to.
+        let side = [184.0, 884.0, 132.0, 332.0];
+        assert!(
+            quad.iter().zip(side).all(|(q, s)| (q - s).abs() <= 1.0),
+            "turned on its side: {quad:?}"
+        );
+
+        // Moved wholly off the target: nothing to draw, and no texture worth the name.
+        let away = Some(frus_core::LayerTransform::new(
+            frus_core::Affine::translation(5000.0, 0.0),
+        ));
+        let region = layer_region(viewport, &rect, &away, &none, row.primitives(), 1080, 2340)
+            .expect("a region");
+        assert!(region.width * region.height <= 1.0, "{region:?}");
+        assert_eq!(
+            layer_quad(region, viewport, &away, 1080, 2340),
+            Some([0.0, 0.0, 0.0, 0.0])
+        );
+    }
+
     /// **What may draw past its clip, or holds the target's own coordinates, keeps the
-    /// target**: a transform, an image filter, a backdrop, a path clip, or such a layer
-    /// anywhere inside.
+    /// target**: an image filter, a backdrop, a path clip, a shader or a pass under a
+    /// transform, or such a layer anywhere inside.
     #[test]
     fn what_may_draw_anywhere_keeps_the_whole_target() {
         let clip = Rect::new(10.0, 10.0, 100.0, 100.0);
@@ -2396,12 +2576,23 @@ mod tests {
         let moved = Some(frus_core::LayerTransform::new(
             frus_core::Affine::translation(5.0, 0.0),
         ));
+        let shader = frus_core::Shader::from_wgsl(
+            "fn shade(frag: Fragment) -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+",
+        )
+        .expect("the test shader compiles");
+        let shaded = LayerFilter {
+            shader: Some(Box::new(shader.paint().at(clip))),
+            ..LayerFilter::NONE
+        };
         assert_eq!(
             layer_region(
                 clip,
                 &frus_core::ClipShape::Rect,
                 &moved,
-                &none,
+                &shaded,
                 &[square()],
                 1080,
                 2340
