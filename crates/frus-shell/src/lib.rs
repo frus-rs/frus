@@ -60,6 +60,8 @@ mod android_settings;
 mod android_share;
 #[cfg(android)]
 mod android_system_bars;
+#[cfg(android)]
+mod android_text_services;
 mod app;
 mod application;
 // Signing in through the system's browser (feature `auth`, milestone 795).
@@ -109,6 +111,7 @@ mod icon;
 mod image_cache;
 #[cfg(any(android, test))]
 mod ime;
+// The system's text services: spell check, process text (milestone 829).
 #[cfg(desktop)]
 mod instance;
 #[cfg(any(
@@ -118,6 +121,8 @@ mod instance;
 mod interface_thread;
 mod link;
 mod logging;
+#[cfg_attr(not(android), allow(dead_code))]
+mod textservices;
 // Opening an address in the system's handler (milestone 775).
 /// Cross-platform `fetch` HTTP helper (behind the `net` feature).
 #[cfg(feature = "net")]

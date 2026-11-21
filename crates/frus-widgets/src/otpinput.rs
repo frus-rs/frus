@@ -695,6 +695,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for OtpInput<Msg> {
         Widget::<Msg>::selection_toolbar(&self.field, context)
     }
 
+    fn selection_toolbar_more(&self, context: crate::ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        Widget::<Msg>::selection_toolbar_more(&self.field, context)
+    }
+
     /// The bar (*Paste*, *Select all*) sits over the box being typed into.
     fn selection_anchor(&self, _width: f32, edit: &Edit, _scroll_y: f32) -> Option<Rect> {
         let m = self.metrics(None);
