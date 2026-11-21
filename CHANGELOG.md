@@ -23,6 +23,11 @@ any release may break.
   installed "process text" applications (translate, search) behind a new **More** button; the
   text one returns replaces the selection. New `EditAction` variants: `More`, `ProcessText`,
   `ReplaceMisspelled`, `DeleteMisspelled`.
+- **A cancelled background job never starts again on the desktop.** A schedule whose wait ended
+  just as `cancel_job` was called could still start one more run after `cancel_job` returned.
+  The run is now counted under the same lock the cancel takes, so it has either started (and is
+  told to stop) or never will.
+
 - **Rust code that runs with no window** (J828, #215). `main!(app, headless: { "sync" => sync })`
   declares headless entry points: plain functions, `fn(&HeadlessContext) -> anyhow::Result<()>`,
   handed the job's name and input, the application's preferences and data folder (shared with
