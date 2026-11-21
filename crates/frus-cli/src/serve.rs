@@ -30,6 +30,24 @@ const SCREENSHOT_PATH: &str = "/__frus/screenshot";
 const PATCH_PATH: &str = "/__frus/patch";
 /// Where the page posts DevTools' answers (milestone 788).
 const DEVTOOLS_PATH: &str = "/__frus/devtools";
+/// Where the page posts its text for `frus build web` (milestone 830).
+const PAGE_TEXT_PATH: &str = "/__frus/page-text";
+
+/// The script added to the page `frus build web` takes the text of (milestone 830): once the
+/// application answers `window.__frusPageText()` with the same text three times in a row, a
+/// quarter of a second apart, the text is posted to `/__frus/page-text`.
+const PAGE_TEXT_PROBE: &str = r#"<script>(() => {
+  let last = null, steady = 0;
+  const ask = setInterval(() => {
+    if (typeof window.__frusPageText !== 'function') return;
+    const text = window.__frusPageText();
+    if (!text || text === '<main></main>') return;
+    if (text === last) steady += 1; else { last = text; steady = 0; }
+    if (steady < 3) return;
+    clearInterval(ask);
+    fetch('/__frus/page-text', { method: 'POST', body: text }).catch(() => {});
+  }, 250);
+})();</script>"#;
 
 /// The script added to the page under `frus run --hot`: it asks for the latest patch until the
 /// shell can take one (`window.__frusPatch`), then for each newer one. A page that loads asks
@@ -167,6 +185,9 @@ pub(crate) struct Site {
     /// The simulated device the page stands in for, under `frus run -d <device> --web`
     /// (milestone 724): told to the shell before the application loads.
     pub device: Option<String>,
+    /// Under `frus build web` (milestone 830): the page is asked for its text, which is put
+    /// here. The page then has nothing else added.
+    pub page_text: Option<Arc<Mutex<Option<String>>>>,
 }
 
 /// The latest hot-reload patch, as the engine sent it, and how many there were: what a page
@@ -317,6 +338,16 @@ fn handle(
         }
         return respond(&mut stream, "204 No Content", "text/plain", b"");
     }
+    if method == "POST" && path == PAGE_TEXT_PATH {
+        let mut body = vec![0; length.min(16 << 20)];
+        reader.read_exact(&mut body)?;
+        if let Some(slot) = &site.page_text {
+            if let Ok(mut slot) = slot.lock() {
+                *slot = Some(String::from_utf8_lossy(&body).into_owned());
+            }
+        }
+        return respond(&mut stream, "204 No Content", "text/plain", b"");
+    }
     if method == "POST" && path == DEVTOOLS_PATH {
         // A screenshot of a large canvas is a few megabytes as base64.
         let mut body = vec![0; length.min(64 << 20)];
@@ -357,7 +388,11 @@ fn handle(
     match site_file(site, path) {
         Some(file) => match std::fs::read(&file) {
             Ok(mut bytes) => {
-                if file.file_name().is_some_and(|name| name == "index.html") {
+                if site.page_text.is_some()
+                    && file.file_name().is_some_and(|name| name == "index.html")
+                {
+                    bytes = with_page_text_probe(&String::from_utf8_lossy(&bytes)).into_bytes();
+                } else if file.file_name().is_some_and(|name| name == "index.html") {
                     let mut page = with_bridge(&String::from_utf8_lossy(&bytes));
                     if let Some(device) = &site.device {
                         page = with_device(&page, device);
@@ -523,6 +558,17 @@ fn patch_module(message: &str) -> Option<&str> {
     Some(rest[..rest.find('"')?].trim_start_matches('/'))
 }
 
+/// The page made to give its text to `frus build web`, at the top of its `<head>`.
+pub(crate) fn with_page_text_probe(page: &str) -> String {
+    match page.find("<head>") {
+        Some(at) => {
+            let at = at + "<head>".len();
+            format!("{}\n    {PAGE_TEXT_PROBE}{}", &page[..at], &page[at..])
+        }
+        None => format!("{PAGE_TEXT_PROBE}\n{page}"),
+    }
+}
+
 /// The page made to ask for each hot-reload patch, at the top of its `<head>`.
 pub(crate) fn with_patches(page: &str) -> String {
     match page.find("<head>") {
@@ -617,6 +663,7 @@ mod tests {
             ],
             hot: true,
             device: None,
+            page_text: None,
         };
         assert_eq!(site_file(&site, "/"), Some(web.join("index.html")));
         assert_eq!(site_file(&site, "/pkg/app.js"), Some(built.join("app.js")));

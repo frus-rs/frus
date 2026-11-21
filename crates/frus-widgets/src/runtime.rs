@@ -69,6 +69,12 @@ pub struct ToolbarMark {
     /// rather than to the selection, as the reference's context menu goes to the last
     /// secondary tap (milestone 618). `None` when it opened any other way.
     pub at: Option<frus_core::Point>,
+    /// The bar's **More** button was pressed: what did not fit on it shows in its place
+    /// (milestone 829).
+    pub more: bool,
+    /// The bar is the **spell checker's**, for the misspelled word at the caret, opened by a
+    /// tap on it (milestone 829).
+    pub spell: bool,
 }
 
 /// One of the two handles under a touch selection, in the field's **local** coordinates
@@ -673,6 +679,11 @@ pub struct Runtime {
     /// decoration, and a list that jumped to a stop would be harder to use rather than
     /// calmer — the reference draws the same line.
     pub still: bool,
+    /// **Record the page's text** (milestone 830): each frame then keeps every text it laid
+    /// out, those scrolled out of view included, and the lists that can say what their rows
+    /// say ([`Ui::page_text`](crate::Ui::page_text)). The web shell sets it, for find-in-page,
+    /// printing and search engines; off, nothing is asked and nothing is kept.
+    pub page_text: bool,
     /// **How present each area's scrollbar is**, and how close a pointer has come to
     /// it. Advanced by [`Runtime::advance_scroll`], which is where movement is seen.
     pub scrollbar_fade: HashMap<WidgetId, ScrollbarFade>,
@@ -2357,6 +2368,28 @@ impl Runtime {
                 self.item_targets.remove(&id);
             }
         }
+    }
+
+    /// Whether list `id` runs across, and where each of its items lies along it, as the last
+    /// frame that laid it out knew: `(start, extent)` per item, from the start of the content, its leading padding
+    /// included — measured for the items laid out once, guessed for the others, as a request
+    /// for an item ([`ScrollTarget::Item`](crate::ScrollTarget::Item)) places them. `None` for
+    /// a region that is not a list (milestone 830).
+    pub fn list_item_spans(&self, id: WidgetId) -> Option<(bool, Vec<(f32, f32)>)> {
+        let shape = self.list_shapes.borrow().get(&id).copied()?;
+        let extents = self.item_extents.borrow();
+        let known = extents.get(&id).filter(|_| shape.variable);
+        let guess = known.map_or(shape.item_extent, |k| k.estimate(shape.item_extent));
+        let mut start = shape.lead;
+        let spans = (0..shape.count)
+            .map(|i| {
+                let extent = known.map_or(shape.item_extent, |k| k.extent_or(i, guess));
+                let span = (start, extent);
+                start += extent;
+                span
+            })
+            .collect();
+        Some((shape.across, spans))
     }
 
     /// Where region `id` is **drawn**, its content now reaching no further than `max`: the

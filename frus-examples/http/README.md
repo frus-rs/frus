@@ -56,7 +56,7 @@ frus test                    # URLs, JSON decoding, error mapping, page state â€
 
 ```sh
 frus run -d web          # build, serve on http://localhost:8080 and open the browser
-frus build web           # release: web/, with the application compiled into web/pkg/
+frus build web           # release: the application into web/pkg/, the site to deploy in target/frus-web/<package>/
 ```
 
 By hand, once: `rustup target add wasm32-unknown-unknown` and

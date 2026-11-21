@@ -231,15 +231,24 @@ impl<Msg: Clone> Widget<Msg> for SafeArea<Msg> {
     fn style(&self) -> Style {
         Style {
             padding: self.resolve(),
-            // **It fills what it is given.** The reference's is a `Padding` under the
-            // screen's own constraints, which are tight: it is the size of the box it
-            // was handed, and its child is that box less the intrusions. A flex node
-            // that grows nothing would instead hug its content, and a screen wrapped in
-            // one would come out the width of its widest line — the failure milestone
-            // 392 chased. Growing is what makes it the box.
-            flex_grow: 1.0,
             ..Default::default()
         }
+    }
+
+    /// **It fills what it is given**, asked rather than declared (milestone 832).
+    ///
+    /// Under a screen's own constraints, which are tight, a safe area is the size of the box
+    /// it was handed and its child is that box less the intrusions. A box that hugged its
+    /// content would make a screen wrapped in one the width of its widest line — the failure
+    /// milestone 392 chased.
+    ///
+    /// It used to say so with `flex_grow`, which grows along a line shared with siblings
+    /// too: a composer kept above the navigation bar under a list in a column split the
+    /// column with the list, and sat in the middle of half the screen. A fill request is
+    /// granted where the box is alone and across a row or a column, and along a shared line
+    /// the safe area is as tall as what it holds plus its padding.
+    fn fill_axes(&self, _theme: &Theme) -> crate::widget::FillAxes {
+        crate::widget::FillAxes::BOTH
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
@@ -457,5 +466,40 @@ mod tests {
             let area = SafeArea::<()>::new(Container::new());
             assert_eq!(Widget::<()>::style(&area).padding.top, 28.0);
         });
+    }
+
+    /// **Beside siblings in a column, it is as tall as what it holds** (milestone 832).
+    ///
+    /// A list over a composer kept clear of the navigation bar: the list takes the rest of
+    /// the screen and the composer sits on the bottom edge, its own height plus the bar's.
+    /// The safe area used to grow along the column, split it with the list, and leave the
+    /// composer in the middle of the lower half.
+    #[test]
+    fn beside_siblings_it_takes_only_its_content() {
+        let root = crate::Flex::column()
+            .width(360.0)
+            .height(780.0)
+            .child(crate::Expanded::new(Container::new()))
+            .child(SafeArea::new(Container::new().height(40.0).color(MARK)));
+        let composer = marked_in(&root);
+        assert_eq!(
+            composer.y,
+            780.0 - 16.0 - 40.0,
+            "on the bottom edge, above the bar: {composer:?}"
+        );
+        assert_eq!(composer.height, 40.0);
+        assert_eq!(composer.width, 360.0, "and across the whole column");
+    }
+
+    /// **Alone in a box it still fills it**, as the screen it wraps (milestone 392).
+    #[test]
+    fn alone_it_fills_the_box() {
+        let root = crate::Flex::column().child(SafeArea::new(Container::new().color(MARK)));
+        let screen = marked_in(&root);
+        assert_eq!(
+            (screen.y, screen.height, screen.width),
+            (28.0, 780.0 - 28.0 - 16.0, 360.0),
+            "the screen less its bars: {screen:?}"
+        );
     }
 }

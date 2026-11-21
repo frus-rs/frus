@@ -335,6 +335,10 @@ macro_rules! forward_transparent {
                 self.inner.selectable_text()
             }
 
+            fn page_words(&self) -> Option<$crate::PageWords> {
+                self.inner.page_words()
+            }
+
             fn region_toolbar(
                 &self,
                 context: $crate::ToolbarContext,
@@ -366,6 +370,20 @@ macro_rules! forward_transparent {
                 context: $crate::ToolbarContext,
             ) -> Option<&dyn $crate::Widget<Msg>> {
                 self.inner.selection_toolbar(context)
+            }
+
+            fn selection_toolbar_more(
+                &self,
+                context: $crate::ToolbarContext,
+            ) -> Option<&dyn $crate::Widget<Msg>> {
+                self.inner.selection_toolbar_more(context)
+            }
+
+            fn spell_check_toolbar(
+                &self,
+                word: &$crate::SpellCheckSpan,
+            ) -> Option<&dyn $crate::Widget<Msg>> {
+                self.inner.spell_check_toolbar(word)
             }
 
             fn selection_anchor(

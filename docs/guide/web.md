@@ -9,13 +9,15 @@ screen readers, and what a browser does not allow.
 
 ```sh
 frus run -d web          # build, serve on http://localhost:8080, open the browser
-frus build web           # the site, in web/, ready to copy to any static host
+frus build web           # the site, in target/frus-web/<package>/, ready for any static host
 ```
 
 `frus run -d web` relays the browser's console to the terminal and patches each saved change
-into the page (see [Running and hot reload](running.md)). `frus build web` writes `web/`: the
-page (`index.html`), and the application compiled and shrunk into `web/pkg/`. Copy the folder to
-any static host: GitHub Pages, a bucket, nginx. `frus create` makes the page with the
+into the page (see [Running and hot reload](running.md)). `frus build web` compiles and shrinks
+the application into `web/pkg/`, then copies `web/` to `target/frus-web/<package>/`: that copy is
+the site, and its `index.html` gets the first screen's text for search engines and link
+previews, so the build never writes into your page. Copy that folder to any static host: GitHub
+Pages, a bucket, nginx. `web/` itself still runs as a site too, only without that text. `frus create` makes the page with the
 application's name, a loading indicator, and a message for a browser that can draw neither with
 WebGPU nor with WebGL 2; edit it freely, keeping the canvas styles.
 

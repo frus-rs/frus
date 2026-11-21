@@ -20,6 +20,7 @@ use crate::ime::{Capitalization, Ime, KeyboardType, TextInputAction};
 use crate::interaction::{Key, Status};
 use crate::runtime::Edit;
 use crate::selectiontoolbar::{SelectionToolbar, ToolbarContext, ToolbarItem};
+use crate::textservices::SpellCheckSpan;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
@@ -200,7 +201,21 @@ pub struct TextFieldStyle {
     pub icon_size: Option<f32>,
     /// Padding either side of the content.
     pub padding_x: Option<f32>,
+    /// The line under a word the spell checker says is misspelled (milestone 829). Unset,
+    /// the platform's red.
+    pub misspelled_color: Option<frus_core::Color>,
+    /// Whether that line is a wave rather than straight. Unset, a wave.
+    pub misspelled_wavy: Option<bool>,
+    /// That line's thickness, in logical pixels. Unset, 1.
+    pub misspelled_thickness: Option<f32>,
 }
+
+/// The red a misspelled word is underlined in when nothing else is said: the platform's
+/// (`Colors.red`, `#F44336`).
+pub const MISSPELLED_COLOR: frus_core::Color = frus_core::Color::rgb8(0xF4, 0x43, 0x36);
+
+/// The most suggestions the spell checker's bar offers for one word, as the platform's own.
+pub const MAX_SPELL_SUGGESTIONS: usize = 3;
 
 /// A single-line text input field, with optional **form decoration** (label, hint,
 /// helper text, error). **Validity** stays decided by the application (a pure
@@ -315,6 +330,20 @@ pub struct TextField<Msg = crate::callback::Callback> {
     /// field does.
     toolbars:
         [std::cell::OnceCell<Option<Box<dyn Widget<Msg>>>>; ToolbarContext::VARIANTS as usize],
+    /// The same for what the bar's **More** button opens (milestone 829).
+    more_bars:
+        [std::cell::OnceCell<Option<Box<dyn Widget<Msg>>>>; ToolbarContext::VARIANTS as usize],
+    /// Whether the keyboard may correct words; see [`TextField::autocorrect`].
+    autocorrect: Option<bool>,
+    /// Whether the keyboard shows its suggestions; see [`TextField::enable_suggestions`].
+    suggestions: Option<bool>,
+    /// Whether the platform's spell checker reads the text; see [`TextField::spell_check`].
+    spell_check: bool,
+    /// The application's say over the spell checker's bar; see
+    /// [`TextField::spell_check_toolbar`].
+    spell_toolbar_build: Option<SpellToolbarBuild<Msg>>,
+    /// The spell checker's bars built so far, one per list of suggestions.
+    spell_bars: SpellBars<Msg>,
     /// Where the caret and the selection are kept for restoration, and the scroll of a
     /// multi-line field; see [`TextField::restoration_id`].
     restoration: Option<Vec<String>>,
@@ -324,6 +353,72 @@ pub struct TextField<Msg = crate::callback::Callback> {
 /// list for it, answered with the list to show.
 pub(crate) type ToolbarBuild<Msg> =
     Box<dyn Fn(&ToolbarContext, Vec<ToolbarItem<Msg>>) -> Vec<ToolbarItem<Msg>>>;
+
+/// The wave under a misspelled word, from `x0` to `x1`, its troughs on `bottom`: a period
+/// six times the line's thickness, and a crest two thicknesses high (milestone 829).
+fn misspelled_wave(x0: f32, x1: f32, bottom: f32, thickness: f32) -> frus_core::Path {
+    let t = thickness.max(0.5);
+    let period = 6.0 * t;
+    let amplitude = t;
+    let middle = bottom - amplitude - t * 0.5;
+    let y = |x: f32| middle + amplitude * (std::f32::consts::TAU * (x - x0) / period).cos();
+    let mut path = frus_core::Path::new().move_to(Point::new(x0, y(x0)));
+    let step = period / 8.0;
+    let mut x = x0 + step;
+    while x < x1 {
+        path = path.line_to(Point::new(x, y(x)));
+        x += step;
+    }
+    path.line_to(Point::new(x1, y(x1)))
+}
+
+/// What an application gives [`TextField::spell_check_toolbar`]: the misspelled word, and
+/// the default list for it, answered with the list to show.
+type SpellToolbarBuild<Msg> =
+    Box<dyn Fn(&SpellCheckSpan, Vec<ToolbarItem<Msg>>) -> Vec<ToolbarItem<Msg>>>;
+
+/// The spell checker's bars a field has built, one per list of suggestions (milestone 829).
+///
+/// A chain rather than one cell: each bar is borrowed for the whole frame it floats in, so
+/// none can be replaced while the field lives, and the next misspelled word tapped needs a
+/// bar of its own.
+struct SpellBars<Msg> {
+    bar: std::cell::OnceCell<SpellBar<Msg>>,
+    next: std::cell::OnceCell<Box<SpellBars<Msg>>>,
+}
+
+/// One of them: the suggestions it was built for, and the bar (none for an empty list).
+type SpellBar<Msg> = (Vec<String>, Option<Box<dyn Widget<Msg>>>);
+
+impl<Msg> Default for SpellBars<Msg> {
+    fn default() -> Self {
+        Self {
+            bar: std::cell::OnceCell::new(),
+            next: std::cell::OnceCell::new(),
+        }
+    }
+}
+
+impl<Msg> SpellBars<Msg> {
+    /// The bar built for `key`, building it with `build` the first time.
+    fn get_or_build(
+        &self,
+        key: &[String],
+        build: impl FnOnce() -> Option<Box<dyn Widget<Msg>>>,
+    ) -> Option<&dyn Widget<Msg>> {
+        let mut at = self;
+        loop {
+            match at.bar.get() {
+                Some((built_for, bar)) if built_for.as_slice() == key => return bar.as_deref(),
+                Some(_) => at = at.next.get_or_init(Default::default),
+                None => {
+                    let (_, bar) = at.bar.get_or_init(|| (key.to_vec(), build()));
+                    return bar.as_deref();
+                }
+            }
+        }
+    }
+}
 
 impl TextField<crate::callback::Callback> {
     /// Drives the field from `controller`: it shows the controller's text, and what is typed
@@ -754,6 +849,12 @@ impl<Msg> TextField<Msg> {
             autofill: Vec::new(),
             toolbar_build: None,
             toolbars: Default::default(),
+            more_bars: Default::default(),
+            autocorrect: None,
+            suggestions: None,
+            spell_check: false,
+            spell_toolbar_build: None,
+            spell_bars: SpellBars::default(),
             restoration: None,
         }
     }
@@ -1000,6 +1101,23 @@ impl<Msg> TextField<Msg> {
             ),
             icon_size: Some(self.icon_size()),
             padding_x: Some(self.pad_x()),
+            misspelled_color: pick(
+                self.style.misspelled_color,
+                t.misspelled_color,
+                MISSPELLED_COLOR,
+            ),
+            misspelled_wavy: Some(
+                self.style
+                    .misspelled_wavy
+                    .or(t.misspelled_wavy)
+                    .unwrap_or(true),
+            ),
+            misspelled_thickness: Some(
+                self.style
+                    .misspelled_thickness
+                    .or(t.misspelled_thickness)
+                    .unwrap_or(1.0),
+            ),
         }
     }
 
@@ -1242,7 +1360,76 @@ impl<Msg> TextField<Msg> {
             keyboard,
             action,
             capitalization: self.capitalization,
+            autocorrect: self.autocorrect,
+            suggestions: self.suggestions,
+            spell_check: self.checks_spelling(),
         }
+    }
+
+    /// Whether the spell checker reads this field: asked for, and on text that is prose a
+    /// reader is typing. A secret is never sent to it.
+    fn checks_spelling(&self) -> bool {
+        self.spell_check && !self.obscure && self.enabled && !self.read_only
+    }
+
+    /// Whether the keyboard may **correct words** as they are typed (milestone 829).
+    ///
+    /// Untold, ordinary text is corrected and nothing else is: an email address, a URL, a
+    /// name or a number corrected into a dictionary word is a mistake the reader has to
+    /// notice and undo. A **username** wants it off. A secret is never corrected, whatever
+    /// this says.
+    pub fn autocorrect(mut self, on: bool) -> Self {
+        self.autocorrect = Some(on);
+        self
+    }
+
+    /// Whether the keyboard may show its **strip of suggested words** (milestone 829). On
+    /// unless told, except for a secret. A username or a code wants it off, so that the
+    /// keyboard neither offers nor learns what is typed.
+    pub fn enable_suggestions(mut self, on: bool) -> Self {
+        self.suggestions = Some(on);
+        self
+    }
+
+    /// Has the **platform's spell checker** read the text (milestone 829): misspelled words
+    /// are underlined — in [`misspelled_color`](Self::misspelled_color), a wave unless told
+    /// otherwise — and a tap on one offers the checker's suggestions and a way to delete it
+    /// ([`spell_check_toolbar`](Self::spell_check_toolbar) changes that list).
+    ///
+    /// Off unless asked for. A masked, disabled or read-only field is never checked. Where
+    /// the platform has no spell checker the field behaves as if it were off.
+    pub fn spell_check(mut self, on: bool) -> Self {
+        self.spell_check = on;
+        self
+    }
+
+    /// The colour of the line under a misspelled word. Unset, the theme's, then the
+    /// platform's red ([`MISSPELLED_COLOR`]).
+    pub fn misspelled_color(mut self, color: Color) -> Self {
+        self.style.misspelled_color = Some(color);
+        self
+    }
+
+    /// Whether the line under a misspelled word is a wave (the default) or straight.
+    pub fn misspelled_wavy(mut self, wavy: bool) -> Self {
+        self.style.misspelled_wavy = Some(wavy);
+        self
+    }
+
+    /// **What the spell checker's bar offers** for a misspelled word, decided by the
+    /// application (milestone 829).
+    ///
+    /// `build` is handed the word — where it is, and the suggestions — and the default
+    /// list: up to [`MAX_SPELL_SUGGESTIONS`] suggestions
+    /// ([`ToolbarItem::suggestion`]), then *Delete*. It returns the list to show, or an
+    /// empty list for no bar.
+    pub fn spell_check_toolbar(
+        mut self,
+        build: impl Fn(&SpellCheckSpan, Vec<ToolbarItem<Msg>>) -> Vec<ToolbarItem<Msg>> + 'static,
+    ) -> Self {
+        self.spell_toolbar_build = Some(Box::new(build));
+        self.spell_bars = SpellBars::default();
+        self
     }
 
     /// Decorative icon on the left inside the field.
@@ -1710,7 +1897,82 @@ impl<Msg> TextField<Msg> {
         if !context.all_selected {
             items.push(ToolbarItem::select_all());
         }
+        // The installed applications that act on a selection (milestone 829), behind
+        // More. Never for a secret, which would be handed to another application.
+        if context.has_selection && !self.obscure {
+            let count = crate::textservices::process_text_actions().len();
+            for index in 0..count.min(usize::from(u16::MAX)) {
+                items.push(ToolbarItem::process_text(index as u16));
+            }
+        }
         items
+    }
+
+    /// The items the bar shows for `context`: the defaults, as the application changed them.
+    fn toolbar_items(&self, context: &ToolbarContext) -> Vec<ToolbarItem<Msg>> {
+        let defaults = self.default_toolbar_items(context);
+        match &self.toolbar_build {
+            Some(build) => build(context, defaults),
+            None => defaults,
+        }
+    }
+
+    /// The spell checker's default bar for `word`: its first suggestions, then *Delete*.
+    fn default_spell_items(&self, word: &SpellCheckSpan) -> Vec<ToolbarItem<Msg>> {
+        let mut items: Vec<ToolbarItem<Msg>> = word
+            .suggestions
+            .iter()
+            .take(MAX_SPELL_SUGGESTIONS)
+            .enumerate()
+            .map(|(index, suggestion)| ToolbarItem::suggestion(index as u8, suggestion.clone()))
+            .collect();
+        items.push(ToolbarItem::action(crate::EditAction::DeleteMisspelled));
+        items
+    }
+
+    /// The line under the misspelled words of the value, as the spell checker last found
+    /// them (milestone 829). Not under the word being composed: the keyboard is still
+    /// deciding what it is.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_misspelled(
+        &self,
+        layout: &TextLayout,
+        origin: Point,
+        len: usize,
+        status: &Status,
+        style: &TextFieldStyle,
+        opacity: f32,
+        scene: &mut Scene,
+    ) {
+        let words = crate::textservices::misspelled_words(&self.value);
+        if words.is_empty() {
+            return;
+        }
+        let color = style
+            .misspelled_color
+            .unwrap_or(MISSPELLED_COLOR)
+            .fade(opacity);
+        let thickness = style.misspelled_thickness.unwrap_or(1.0).max(0.0);
+        let wavy = style.misspelled_wavy.unwrap_or(true);
+        for word in words {
+            let (start, end) = (word.start.min(len), word.end.min(len));
+            let composing = status
+                .composing
+                .is_some_and(|(cs, ce)| cs < end && start < ce);
+            if start >= end || composing {
+                continue;
+            }
+            for r in layout.selection_rects(start, end) {
+                let x0 = origin.x + r.x;
+                let bottom = origin.y + r.y + r.height;
+                if wavy {
+                    let path = misspelled_wave(x0, x0 + r.width, bottom, thickness);
+                    scene.stroke_path(&path, color, thickness);
+                } else {
+                    scene.fill_rect(Rect::new(x0, bottom - thickness, r.width, thickness), color);
+                }
+            }
+        }
     }
 
     /// The value's width, between the paddings and the affixes, in a widget `width` wide.
@@ -2337,6 +2599,19 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
             }
         }
 
+        // The words the spell checker found misspelled (milestone 829).
+        if status.focused && self.checks_spelling() {
+            self.paint_misspelled(
+                &layout,
+                Point::new(text_x, text_top),
+                len,
+                &status,
+                &s,
+                o,
+                scene,
+            );
+        }
+
         // The caret, in the shown half of its blink (milestone 513).
         // In the reference's colour, `primary`, and the error's while one shows; its shape the
         // caller's or the platform's (milestone 659).
@@ -2773,17 +3048,46 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
     fn selection_toolbar(&self, context: ToolbarContext) -> Option<&dyn Widget<Msg>> {
         self.toolbars[usize::from(context.variant())]
             .get_or_init(|| {
-                let defaults = self.default_toolbar_items(&context);
-                let items = match &self.toolbar_build {
-                    Some(build) => build(&context, defaults),
-                    None => defaults,
-                };
+                let items = self.toolbar_items(&context);
                 (!items.is_empty()).then(|| {
                     let bar: Box<dyn Widget<Msg>> = Box::new(SelectionToolbar::new(items));
                     bar
                 })
             })
             .as_deref()
+    }
+
+    fn selection_toolbar_more(&self, context: ToolbarContext) -> Option<&dyn Widget<Msg>> {
+        self.more_bars[usize::from(context.variant())]
+            .get_or_init(|| {
+                let items: Vec<ToolbarItem<Msg>> = self
+                    .toolbar_items(&context)
+                    .into_iter()
+                    .filter(ToolbarItem::overflows)
+                    .collect();
+                (!items.is_empty()).then(|| {
+                    let bar: Box<dyn Widget<Msg>> = Box::new(SelectionToolbar::column(items));
+                    bar
+                })
+            })
+            .as_deref()
+    }
+
+    fn spell_check_toolbar(&self, word: &SpellCheckSpan) -> Option<&dyn Widget<Msg>> {
+        if !self.checks_spelling() {
+            return None;
+        }
+        self.spell_bars.get_or_build(&word.suggestions, || {
+            let defaults = self.default_spell_items(word);
+            let items = match &self.spell_toolbar_build {
+                Some(build) => build(word, defaults),
+                None => defaults,
+            };
+            (!items.is_empty()).then(|| {
+                let bar: Box<dyn Widget<Msg>> = Box::new(SelectionToolbar::column(items));
+                bar
+            })
+        })
     }
 
     fn selection_anchor(&self, width: f32, edit: &Edit, scroll_y: f32) -> Option<Rect> {
@@ -3817,6 +4121,9 @@ mod tests {
                 keyboard: KeyboardType::Text,
                 action: TextInputAction::Done,
                 capitalization: Capitalization::Auto,
+                autocorrect: None,
+                suggestions: None,
+                spell_check: false,
             }
         );
     }
@@ -5856,5 +6163,236 @@ mod bidi_tests {
             Widget::<()>::caret_key(&field, width, &mut edit, &ctrl(true));
             assert!(edit.cursor < was, "{edit:?}");
         }
+    }
+}
+
+/// The system's text services in a field (milestone 829): the spell checker's underline and
+/// bar, the "process text" actions behind More, and the keyboard switches.
+#[cfg(test)]
+mod text_service_tests {
+    use super::*;
+    use crate::{SpellCheckResults, SpellCheckSpan};
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Changed(String),
+    }
+
+    fn field(value: &str) -> TextField<Msg> {
+        TextField::new(value).on_input(Msg::Changed)
+    }
+
+    fn misspelled(text: &str, start: usize, end: usize, suggestions: &[&str]) {
+        crate::set_spell_check_results(Some(SpellCheckResults {
+            text: text.into(),
+            spans: vec![SpellCheckSpan {
+                start,
+                end,
+                suggestions: suggestions.iter().map(|s| s.to_string()).collect(),
+            }],
+        }));
+    }
+
+    fn focused() -> Status {
+        Status {
+            focused: true,
+            cursor: Some(0),
+            ..Default::default()
+        }
+    }
+
+    fn paint(field: &TextField<Msg>, status: Status) -> Vec<frus_core::Primitive> {
+        let mut scene = Scene::new();
+        Widget::<Msg>::paint(
+            field,
+            Rect::new(0.0, 0.0, 220.0, 56.0),
+            status,
+            &Theme::default(),
+            &mut scene,
+        );
+        scene.primitives().to_vec()
+    }
+
+    /// The stroked paths in a paint: the waves under misspelled words.
+    fn waves(primitives: &[frus_core::Primitive]) -> Vec<frus_core::Color> {
+        primitives
+            .iter()
+            .filter_map(|p| match p {
+                frus_core::Primitive::Path {
+                    stroke: Some(stroke),
+                    fill: None,
+                    ..
+                } => Some(stroke.color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// **A misspelled word is underlined with a wave**, in the platform's red: only in a
+    /// field that asked for spell checking, only while it has focus, and only for the text
+    /// the checker was asked about.
+    #[test]
+    fn a_misspelled_word_is_underlined() {
+        misspelled("teh cat", 0, 3, &["the"]);
+        let checked = field("teh cat").spell_check(true);
+        assert_eq!(waves(&paint(&checked, focused())), [MISSPELLED_COLOR]);
+        // Not focused: no underline.
+        assert!(waves(&paint(&checked, Status::default())).is_empty());
+        // A field that did not ask: none.
+        assert!(waves(&paint(&field("teh cat"), focused())).is_empty());
+        // A secret is never checked, even when asked.
+        let secret = field("teh cat").spell_check(true).obscure(true);
+        assert!(waves(&paint(&secret, focused())).is_empty());
+        // The word being composed is the keyboard's still: no underline under it.
+        let composing = Status {
+            composing: Some((0, 3)),
+            ..focused()
+        };
+        assert!(waves(&paint(&checked, composing)).is_empty());
+        crate::set_spell_check_results(None);
+        assert!(waves(&paint(&checked, focused())).is_empty());
+    }
+
+    /// The underline is the theme's, then the caller's: its colour, and straight on request.
+    #[test]
+    fn the_underline_can_be_restyled() {
+        misspelled("teh cat", 0, 3, &[]);
+        let blue = frus_core::Color::rgb8(0, 0, 255);
+        let mut theme = Theme::default();
+        theme.widgets.text_field.misspelled_color = Some(blue);
+        let mut scene = Scene::new();
+        Widget::<Msg>::paint(
+            &field("teh cat").spell_check(true),
+            Rect::new(0.0, 0.0, 220.0, 56.0),
+            focused(),
+            &theme,
+            &mut scene,
+        );
+        assert_eq!(waves(scene.primitives()), [blue]);
+        let green = frus_core::Color::rgb8(0, 255, 0);
+        let straight = field("teh cat")
+            .spell_check(true)
+            .misspelled_color(green)
+            .misspelled_wavy(false);
+        let painted = paint(&straight, focused());
+        assert!(waves(&painted).is_empty());
+        assert!(painted.iter().any(|p| matches!(
+            p,
+            frus_core::Primitive::Rect { color, rect, .. } if *color == green && rect.height <= 1.0
+        )));
+        crate::set_spell_check_results(None);
+    }
+
+    fn labels(bar: &dyn Widget<Msg>) -> Vec<String> {
+        bar.children()
+            .iter()
+            .map(|button| {
+                button
+                    .semantics()
+                    .and_then(|semantics| semantics.label)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// **The spell checker's bar**: up to three suggestions, then Delete; and the
+    /// application's own list when it gave one.
+    #[test]
+    fn the_spell_bar_offers_suggestions_then_delete() {
+        let word = SpellCheckSpan {
+            start: 0,
+            end: 3,
+            suggestions: vec!["the".into(), "tea".into(), "ten".into(), "tex".into()],
+        };
+        let checked = field("teh").spell_check(true);
+        let bar = Widget::<Msg>::spell_check_toolbar(&checked, &word).expect("a bar");
+        assert_eq!(labels(bar), ["the", "tea", "ten", "Delete"]);
+        let actions: Vec<_> = bar.children().iter().map(|b| b.edit_action()).collect();
+        assert_eq!(
+            actions,
+            [
+                Some(crate::EditAction::ReplaceMisspelled(0)),
+                Some(crate::EditAction::ReplaceMisspelled(1)),
+                Some(crate::EditAction::ReplaceMisspelled(2)),
+                Some(crate::EditAction::DeleteMisspelled),
+            ]
+        );
+        // Another word's suggestions: another bar, the first one kept.
+        let other = SpellCheckSpan {
+            suggestions: vec!["cat".into()],
+            ..word.clone()
+        };
+        let second = Widget::<Msg>::spell_check_toolbar(&checked, &other).expect("a bar");
+        assert_eq!(labels(second), ["cat", "Delete"]);
+        let again = Widget::<Msg>::spell_check_toolbar(&checked, &word).expect("a bar");
+        assert_eq!(labels(again), ["the", "tea", "ten", "Delete"]);
+        // The application's say.
+        let own = field("teh")
+            .spell_check(true)
+            .spell_check_toolbar(|_, mut items| {
+                items.truncate(1);
+                items
+            });
+        let bar = Widget::<Msg>::spell_check_toolbar(&own, &word).expect("a bar");
+        assert_eq!(labels(bar), ["the"]);
+        // A field that did not ask has no such bar.
+        assert!(Widget::<Msg>::spell_check_toolbar(&field("teh"), &word).is_none());
+    }
+
+    /// **The installed "process text" actions** go behind a More button at the end of the
+    /// bar, and More opens them as a list; never for a secret, never without a selection.
+    #[test]
+    fn process_text_actions_go_behind_more() {
+        crate::set_process_text_actions(vec!["Translate".into(), "Search".into()]);
+        let selected = ToolbarContext {
+            has_selection: true,
+            can_paste: false,
+            all_selected: false,
+        };
+        let plain = field("hello world");
+        let bar = Widget::<Msg>::selection_toolbar(&plain, selected).expect("a bar");
+        assert_eq!(labels(bar), ["Cut", "Copy", "Select all", "More"]);
+        assert_eq!(
+            bar.children().last().and_then(|b| b.edit_action()),
+            Some(crate::EditAction::More)
+        );
+        let more = Widget::<Msg>::selection_toolbar_more(&plain, selected).expect("a menu");
+        assert_eq!(labels(more), ["Translate", "Search"]);
+        assert_eq!(
+            more.children()[1].edit_action(),
+            Some(crate::EditAction::ProcessText(1))
+        );
+        // A caret only: nothing to hand over.
+        let caret = ToolbarContext {
+            has_selection: false,
+            ..selected
+        };
+        let short = field("hello");
+        let bar = Widget::<Msg>::selection_toolbar(&short, caret).expect("a bar");
+        assert!(!labels(bar).contains(&"More".to_string()));
+        // A secret is handed to nobody.
+        let secret = field("hunter2").obscure(true);
+        let bar = Widget::<Msg>::selection_toolbar(&secret, selected).expect("a bar");
+        assert!(!labels(bar).contains(&"More".to_string()));
+        assert!(Widget::<Msg>::selection_toolbar_more(&secret, selected).is_none());
+        crate::set_process_text_actions(Vec::new());
+    }
+
+    /// **A username field turns autocorrect and suggestions off**, and the keyboard is told
+    /// in its own numbers; an ordinary field asks to be corrected.
+    #[test]
+    fn a_username_field_turns_the_keyboard_services_off() {
+        const AUTO_CORRECT: i32 = 0x0000_8000;
+        const NO_SUGGESTIONS: i32 = 0x0008_0000;
+        let ordinary = Widget::<Msg>::ime(&field("x")).android_input_type();
+        assert_ne!(ordinary & AUTO_CORRECT, 0);
+        assert_eq!(ordinary & NO_SUGGESTIONS, 0);
+        let username = field("x").autocorrect(false).enable_suggestions(false);
+        let bits = Widget::<Msg>::ime(&username).android_input_type();
+        assert_eq!(bits & AUTO_CORRECT, 0);
+        assert_ne!(bits & NO_SUGGESTIONS, 0);
+        // Spell checking is told too, and never for a secret.
+        assert!(Widget::<Msg>::ime(&field("x").spell_check(true)).spell_check);
+        assert!(!Widget::<Msg>::ime(&field("x").spell_check(true).obscure(true)).spell_check);
     }
 }

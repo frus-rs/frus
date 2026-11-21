@@ -380,12 +380,34 @@ pub fn run_headless(name: &str, input: Option<&str>) -> Result<(), JobError> {
 
 /// Runs an entry point, catching its panic: what every way of running one ends in.
 fn run(context: HeadlessContext) -> Result<(), JobError> {
+    run_counted(context, Running::start())
+}
+
+/// Counts one run in [`RUNNING`] for as long as it lives.
+struct Running(());
+
+impl Running {
+    fn start() -> Running {
+        RUNNING.fetch_add(1, Ordering::AcqRel);
+        Running(())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// [`run`], for a run already counted: a scheduled run is counted under the lock its cancel
+/// takes, so that once [`cancel_job`] returns, a run has either been counted (and
+/// [`wait_for_running`] waits for it) or will never start.
+fn run_counted(context: HeadlessContext, running: Running) -> Result<(), JobError> {
     let name = context.name.clone();
     let entry = entry(&name).ok_or_else(|| JobError::NoSuchEntry(name.clone()))?;
-    RUNNING.fetch_add(1, Ordering::AcqRel);
     log::info!("background job {name:?}: running");
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| entry(&context)));
-    RUNNING.fetch_sub(1, Ordering::AcqRel);
+    drop(running);
     let result = match ran {
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(JobError::Failed(format!("{err:#}"))),
@@ -478,6 +500,13 @@ mod desktop {
             *guard
         }
 
+        /// Counts a run about to start, unless the job was cancelled: both under the lock
+        /// [`Cancel::cancel`] takes, so a cancel cannot fall between the wait and the count.
+        fn begin(&self) -> Option<Running> {
+            let cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner());
+            (!*cancelled).then(Running::start)
+        }
+
         fn cancel(&self) {
             *self.cancelled.lock().unwrap_or_else(|e| e.into_inner()) = true;
             self.stop.store(true, Ordering::Release);
@@ -517,8 +546,12 @@ mod desktop {
             if cancel.wait(wait) {
                 return;
             }
+            // The wait may have timed out just as the job was cancelled.
+            let Some(running) = cancel.begin() else {
+                return;
+            };
             let context = HeadlessContext::new(&job.name, job.input.clone(), cancel.stop.clone());
-            let failed = run(context).is_err();
+            let failed = run_counted(context, running).is_err();
             wait = match (failed, job.period) {
                 (true, _) if failures < RETRIES => {
                     failures += 1;
@@ -548,6 +581,21 @@ mod desktop {
 
     pub(super) fn is_scheduled(name: &str) -> bool {
         scheduled().contains_key(name)
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn a_run_is_not_counted_once_its_job_is_cancelled() {
+        // The schedule's wait timed out, then the cancel came before the run was counted.
+        let cancel = Cancel::default();
+        let running = cancel.begin();
+        assert!(running.is_some(), "a live job's run is counted");
+        drop(running);
+        cancel.cancel();
+        assert!(
+            cancel.begin().is_none(),
+            "a cancelled job's run never starts"
+        );
     }
 }
 

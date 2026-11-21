@@ -42,6 +42,19 @@ pub enum EditAction {
     Paste,
     /// Selects the whole text.
     SelectAll,
+    /// Opens the items that did not fit on the bar (milestone 829): the system's "process
+    /// text" actions, shown as a menu in the bar's place.
+    More,
+    /// Hands the selection to the installed application the platform offered at this index
+    /// of [`process_text_actions`](crate::process_text_actions) — a translator, a search, a
+    /// dictionary — and, when it answers with text, writes that over the selection
+    /// (milestone 829). Android only.
+    ProcessText(u16),
+    /// Replaces the misspelled word at the caret with the spell checker's suggestion at
+    /// this index (milestone 829).
+    ReplaceMisspelled(u8),
+    /// Deletes the misspelled word at the caret (milestone 829).
+    DeleteMisspelled,
 }
 
 impl EditAction {
@@ -54,8 +67,22 @@ impl EditAction {
             EditAction::Copy => words.copy_button_label(),
             EditAction::Paste => words.paste_button_label(),
             EditAction::SelectAll => words.select_all_button_label(),
+            EditAction::More => words.more_button_label(),
+            EditAction::DeleteMisspelled => words.delete_button_label(),
+            // The platform's words, not ours.
+            EditAction::ProcessText(index) => {
+                return crate::textservices::process_text_label(index)
+            }
+            // The suggestion itself, which only the item that offers it knows.
+            EditAction::ReplaceMisspelled(_) => "",
         }
         .to_owned()
+    }
+
+    /// Whether the item goes behind the bar's **More** button rather than on the bar: the
+    /// system's own actions, which can be many, as the platform's own bar keeps them.
+    fn overflows(self) -> bool {
+        matches!(self, EditAction::ProcessText(_))
     }
 }
 
@@ -95,7 +122,15 @@ pub struct ToolbarItem<Msg = crate::callback::Callback> {
 #[derive(Clone)]
 enum ItemKind<Msg> {
     Action(EditAction),
-    Custom { label: String, message: Msg },
+    /// A built-in action whose words come with it: a spell checker's suggestion.
+    Labelled {
+        label: String,
+        action: EditAction,
+    },
+    Custom {
+        label: String,
+        message: Msg,
+    },
 }
 
 impl<Msg> ToolbarItem<Msg> {
@@ -126,6 +161,24 @@ impl<Msg> ToolbarItem<Msg> {
         Self::action(EditAction::SelectAll)
     }
 
+    /// The installed application the platform offered at `index` of
+    /// [`process_text_actions`](crate::process_text_actions), with the platform's words
+    /// (milestone 829). A field's default list has one for each, behind **More**.
+    pub fn process_text(index: u16) -> Self {
+        Self::action(EditAction::ProcessText(index))
+    }
+
+    /// The spell checker's suggestion at `index`, whose words are `word`: pressing it puts
+    /// `word` in place of the misspelled word at the caret (milestone 829).
+    pub fn suggestion(index: u8, word: impl Into<String>) -> Self {
+        Self {
+            kind: ItemKind::Labelled {
+                label: word.into(),
+                action: EditAction::ReplaceMisspelled(index),
+            },
+        }
+    }
+
     /// An item of the application's own: `message` is what pressing it sends, like any
     /// button. The bar closes when it is pressed.
     pub fn custom(label: impl Into<String>, message: Msg) -> Self {
@@ -144,16 +197,32 @@ impl<Msg> ToolbarItem<Msg> {
     pub fn label(&self) -> std::borrow::Cow<'_, str> {
         match &self.kind {
             ItemKind::Action(action) => std::borrow::Cow::Owned(action.label()),
-            ItemKind::Custom { label, .. } => std::borrow::Cow::Borrowed(label),
+            ItemKind::Labelled { label, .. } | ItemKind::Custom { label, .. } => {
+                std::borrow::Cow::Borrowed(label)
+            }
         }
     }
 
     /// The built-in action this item performs, or `None` for an application's own item.
     pub fn edit_action(&self) -> Option<EditAction> {
         match &self.kind {
-            ItemKind::Action(action) => Some(*action),
+            ItemKind::Action(action) | ItemKind::Labelled { action, .. } => Some(*action),
             ItemKind::Custom { .. } => None,
         }
+    }
+
+    /// The words, the action and the message, taken apart for a button.
+    fn parts(self) -> (String, Option<EditAction>, Option<Msg>) {
+        match self.kind {
+            ItemKind::Action(action) => (action.label(), Some(action), None),
+            ItemKind::Labelled { label, action } => (label, Some(action), None),
+            ItemKind::Custom { label, message } => (label, None, Some(message)),
+        }
+    }
+
+    /// Whether the item goes behind **More**; see [`EditAction::overflows`].
+    pub(crate) fn overflows(&self) -> bool {
+        self.edit_action().is_some_and(EditAction::overflows)
     }
 }
 
@@ -228,15 +297,27 @@ pub(crate) struct SelectionToolbar<Msg> {
     /// Which form the last layout chose, from the theme it was laid out under; read by the
     /// walks that follow it in the same frame.
     desktop: std::cell::Cell<bool>,
+    /// A list of rows on every platform: the spell checker's suggestions, and what was
+    /// behind **More** (milestone 829).
+    column: bool,
 }
 
 impl<Msg: Clone + 'static> SelectionToolbar<Msg> {
-    /// A bar of `items`, in order.
+    /// A bar of `items`, in order. On the pill, the items that overflow (the system's own
+    /// actions) give way to one **More** button at its end; the desktop menu has room for
+    /// every row.
     pub(crate) fn new(items: Vec<ToolbarItem<Msg>>) -> Self {
-        let total = items.len();
-        let pill = items
+        let mut shown: Vec<ToolbarItem<Msg>> = items
             .iter()
+            .filter(|item| !item.overflows())
             .cloned()
+            .collect();
+        if shown.len() < items.len() {
+            shown.push(ToolbarItem::action(EditAction::More));
+        }
+        let total = shown.len();
+        let pill = shown
+            .into_iter()
             .enumerate()
             .map(|(index, item)| {
                 let button: Box<dyn Widget<Msg>> =
@@ -252,13 +333,22 @@ impl<Msg: Clone + 'static> SelectionToolbar<Msg> {
             pill,
             menu,
             desktop: std::cell::Cell::new(false),
+            column: false,
         }
+    }
+
+    /// A list of rows of `items`, on every platform: the spell checker's suggestions, and
+    /// the items behind **More** (milestone 829).
+    pub(crate) fn column(items: Vec<ToolbarItem<Msg>>) -> Self {
+        let mut bar = Self::new(items);
+        bar.column = true;
+        bar
     }
 }
 
 impl<Msg: Clone> Widget<Msg> for SelectionToolbar<Msg> {
     fn style_themed(&self, theme: &Theme) -> Style {
-        let desktop = uses_menu(theme.platform);
+        let desktop = self.column || uses_menu(theme.platform);
         self.desktop.set(desktop);
         if desktop {
             Style {
@@ -283,7 +373,7 @@ impl<Msg: Clone> Widget<Msg> for SelectionToolbar<Msg> {
     }
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
-        if self.desktop.get() {
+        if self.column || self.desktop.get() {
             &self.menu
         } else {
             &self.pill
@@ -292,7 +382,7 @@ impl<Msg: Clone> Widget<Msg> for SelectionToolbar<Msg> {
 
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
         let o = status.opacity;
-        if self.desktop.get() {
+        if self.column || self.desktop.get() {
             // The desktop menu: a card, its corners rounded, one step off the page
             // (`desktop_text_selection_toolbar.dart:55`).
             let radius = BorderRadius::uniform(MENU_RADIUS);
@@ -348,10 +438,7 @@ struct ToolbarButton<Msg> {
 
 impl<Msg> ToolbarButton<Msg> {
     fn new(item: ToolbarItem<Msg>, first: bool, last: bool) -> Self {
-        let (label, action, message) = match item.kind {
-            ItemKind::Action(action) => (action.label(), Some(action), None),
-            ItemKind::Custom { label, message } => (label, None, Some(message)),
-        };
+        let (label, action, message) = item.parts();
         Self {
             label,
             action,
@@ -378,8 +465,27 @@ fn label_style(theme: Option<&Theme>) -> frus_core::TextStyle {
     style
 }
 
+impl<Msg> ToolbarButton<Msg> {
+    /// The **More** button, which shows three dots rather than its words: the words are
+    /// for a screen reader.
+    fn is_more(&self) -> bool {
+        self.action == Some(EditAction::More)
+    }
+}
+
+/// The More button's dots: their diameter, and the distance between two centres.
+const DOT: f32 = 4.0;
+const DOT_STEP: f32 = 6.0;
+
 impl<Msg: Clone> Widget<Msg> for ToolbarButton<Msg> {
     fn style_themed(&self, theme: &Theme) -> Style {
+        if self.is_more() {
+            return Style {
+                width: Dimension::Length(MIN_WIDTH),
+                height: Dimension::Length(HEIGHT),
+                ..Default::default()
+            };
+        }
         let measured = frus_text::measure_style(&self.label, label_style(Some(theme)));
         let (before, after) = self.padding();
         Style {
@@ -416,6 +522,22 @@ impl<Msg: Clone> Widget<Msg> for ToolbarButton<Msg> {
             bottom_right: end_r,
         };
         scene.draw_shape(bounds, ShapeBorder::rounded(radius), layer.fade(o));
+        if self.is_more() {
+            // Three dots stacked in the middle, in the words' ink, as on the platform's own
+            // overflow button.
+            let cx = bounds.x + bounds.width * 0.5;
+            let cy = bounds.y + bounds.height * 0.5;
+            for step in [-1.0, 0.0, 1.0] {
+                scene.draw_rect(
+                    Rect::new(cx - DOT * 0.5, cy + step * DOT_STEP - DOT * 0.5, DOT, DOT),
+                    ink.fade(o),
+                    DOT * 0.5,
+                    0.0,
+                    frus_core::Color::TRANSPARENT,
+                );
+            }
+            return;
+        }
         let resolved = label_style(Some(theme)).resolved();
         let measured = frus_text::measure_resolved(&self.label, &resolved);
         let (before, after) = self.padding();
@@ -470,10 +592,7 @@ struct MenuButton<Msg> {
 
 impl<Msg> MenuButton<Msg> {
     fn new(item: ToolbarItem<Msg>) -> Self {
-        let (label, action, message) = match item.kind {
-            ItemKind::Action(action) => (action.label(), Some(action), None),
-            ItemKind::Custom { label, message } => (label, None, Some(message)),
-        };
+        let (label, action, message) = item.parts();
         Self {
             label,
             action,
