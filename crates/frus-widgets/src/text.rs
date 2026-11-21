@@ -1197,6 +1197,20 @@ impl<Msg: Clone + 'static> Widget<Msg> for Text {
         self.selecting()?.toolbar(context)
     }
 
+    /// The words at the size they were laid out at (milestone 830).
+    fn page_words(&self) -> Option<crate::PageWords> {
+        if self.content.trim().is_empty() {
+            return None;
+        }
+        let r = self.resolution();
+        Some(crate::PageWords {
+            words: self.content.clone(),
+            size: r.style.size,
+            line_height: r.style.line_height(),
+            heading: self.heading,
+        })
+    }
+
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         // A text carries its content as its accessible label — or as a **heading**, which
         // is a landmark rather than a label and is what a screen reader's user navigates by.

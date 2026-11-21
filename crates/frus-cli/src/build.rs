@@ -23,6 +23,9 @@ pub(crate) struct Request {
     pub variant: crate::variant::Variant,
     /// Whether a release build cuts its fonts down; `--no-font-subset` says no (milestone 823).
     pub font_subset: bool,
+    /// Whether a web build writes the first screen's text into its page; `--no-page-text`
+    /// says no (milestone 830).
+    pub page_text: bool,
 }
 
 /// What `frus build` makes.
@@ -79,6 +82,7 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
         format,
         variant,
         font_subset,
+        page_text,
     } = request;
     if split_per_abi && target != Target::Apk {
         return Err("--split-per-abi goes with `frus build apk`".into());
@@ -128,7 +132,21 @@ pub(crate) fn build(request: Request) -> Result<ExitCode, String> {
             }
         }
         Target::Web => {
-            let site = cargo::build_web(&project, mode)?;
+            let web = cargo::build_web(&project, mode)?;
+            // The site is a copy of `web/` in the target directory: what the build writes into
+            // the page stays out of the sources (milestone 830).
+            let site = stage_site(
+                &web,
+                &project
+                    .target_dir()?
+                    .join("frus-web")
+                    .join(&project.package),
+            )?;
+            // The first screen's text, in the page, for whoever reads it without running it
+            // (milestone 830).
+            if page_text {
+                crate::pagetext::write(&site);
+            }
             let wasm = site.join("pkg").join(format!("{}_bg.wasm", project.lib));
             println!(
                 "\nBuilt the site: {} (the application is {}).\n\
@@ -200,6 +218,40 @@ fn say_variant(project: &Project, mode: Mode) {
     if parts.len() > 1 || mode == Mode::Profile {
         crate::report::say(&format!("Building: {}.", parts.join("; ")));
     }
+}
+
+/// `web` copied into `site`, emptied first: the page, its assets and the compiled application,
+/// without the dotfiles (`.gitignore`) that only the sources need. The page is then the copy's,
+/// for the build to write into.
+fn stage_site(web: &Path, site: &Path) -> Result<std::path::PathBuf, String> {
+    fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                copy(&path, &to.join(entry.file_name()))?;
+            } else {
+                std::fs::copy(&path, to.join(entry.file_name()))?;
+            }
+        }
+        Ok(())
+    }
+    if site.exists() {
+        std::fs::remove_dir_all(site)
+            .map_err(|e| format!("could not empty {}: {e}", site.display()))?;
+    }
+    copy(web, site).map_err(|e| {
+        format!(
+            "could not copy {} into {}: {e}",
+            web.display(),
+            site.display()
+        )
+    })?;
+    Ok(site.to_path_buf())
 }
 
 fn size(path: &Path) -> String {

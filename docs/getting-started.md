@@ -589,7 +589,7 @@ phone. `frus build` builds in release:
 ```sh
 frus build apk       # the APK to install or upload
 frus build desktop   # the program for this computer
-frus build web       # the site: web/, with the application in web/pkg/
+frus build web       # the application into web/pkg/; the site to deploy in target/frus-web/<package>/
 ```
 
 By hand, the APK is `cargo apk build --lib --release`, and `--lib` is not decoration. A

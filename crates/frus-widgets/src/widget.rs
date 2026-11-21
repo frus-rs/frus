@@ -551,6 +551,15 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// What this widget **says**, for the page's own text on the web (milestone 830): a
+    /// [`Text`](crate::Text) or a [`RichText`](crate::RichText) with words in it, and nothing
+    /// that is not made of words. Asked only while the shell records the page's text
+    /// ([`Runtime::page_text`](crate::Runtime::page_text)), of the texts laid out — those
+    /// scrolled out of view included.
+    fn page_words(&self) -> Option<crate::PageWords> {
+        None
+    }
+
     /// The **bar** a [`SelectionArea`](crate::SelectionArea) offers over its selection, for
     /// `context`, when the application has said what it holds
     /// ([`SelectionArea::selection_toolbar`](crate::SelectionArea::selection_toolbar)): `Some`
@@ -2340,6 +2349,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn selectable_text(&self) -> Option<std::rc::Rc<dyn crate::SelectableText>> {
         (**self).selectable_text()
+    }
+    fn page_words(&self) -> Option<crate::PageWords> {
+        (**self).page_words()
     }
     fn region_toolbar(
         &self,

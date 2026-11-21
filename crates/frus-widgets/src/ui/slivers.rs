@@ -223,6 +223,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     keep_alive: false,
                     find_child_index: None,
                     hold_position: false,
+                    item_text: None,
                 };
                 self.keep_rows_alive(*list_id, &description, rows);
             }

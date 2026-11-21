@@ -171,6 +171,7 @@ mod otpinput;
 mod overflowbar;
 mod overscroll;
 mod pageselector;
+mod pagetext;
 mod pagetransitions;
 mod pageview;
 mod pagination;
@@ -578,6 +579,7 @@ pub use overscroll::{
     cross_axis as glow_cross_axis, edge_for, GlowEdge, OverscrollGlow, ScrollGlows,
 };
 pub use pageselector::{TabPageSelector, PAGE_DOT_GAP, PAGE_DOT_SIZE};
+pub use pagetext::{PageList, PageText, PageWords};
 pub use pagetransitions::{
     PagePose, PageTransitionsBuilder, PageTransitionsTheme, TransitionFrame,
     CUPERTINO_BARRIER_OPACITY,

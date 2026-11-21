@@ -45,6 +45,8 @@ pub struct VirtualList<'a, Msg = crate::callback::Callback> {
     /// Whether the rows in view stay where they are when items arrive before them; see
     /// [`ListView::hold_position`].
     pub hold_position: bool,
+    /// What each item says without being built; see [`ListView::item_text`].
+    pub item_text: Option<&'a std::rc::Rc<dyn Fn(usize) -> String>>,
 }
 
 /// A row a list keeps alive while it is out of view (milestone 748): its identity, the key
@@ -282,6 +284,8 @@ pub struct ListView<Msg = crate::callback::Callback> {
     /// A request to glide back to the start, by generation: each new number is one request
     /// (milestone 815).
     to_start: Option<u32>,
+    /// What each item says without being built; see [`ListView::item_text`].
+    item_text: Option<std::rc::Rc<dyn Fn(usize) -> String>>,
 }
 
 /// A scroll report that may say nothing.
@@ -330,6 +334,7 @@ impl<Msg> ListView<Msg> {
             hold_position: false,
             scroll_filter: None,
             to_start: None,
+            item_text: None,
         }
     }
 
@@ -605,6 +610,33 @@ impl<Msg> ListView<Msg> {
         self
     }
 
+    /// **What item `index` says**, without building it (milestone 830): the words the page
+    /// offers the browser for the rows not built.
+    ///
+    /// A list builds only the rows in view, so on the web the rest of its text is nowhere —
+    /// find-in-page cannot reach it, a printed page stops where the window does, and a search
+    /// engine never sees it. Told what each row says, the page has all of it: printing and the
+    /// page's text for search engines take every row, and find-in-page (Ctrl+F) reaches the
+    /// rows out of view, the list scrolling to the one found.
+    ///
+    /// Asked only on the web, and only when needed — when find-in-page is opened, the page
+    /// printed, or its text taken for search engines — never once a frame: a list of ten
+    /// thousand rows costs nothing until then. Elsewhere it is never asked.
+    ///
+    /// ```
+    /// use frus_widgets::{ListView, Text};
+    ///
+    /// let names: Vec<String> = (0..10_000).map(|i| format!("Contact {i}")).collect();
+    /// let words = names.clone();
+    /// let list: ListView = ListView::new(names.len(), 56.0, move |i| Text::new(names[i].clone()))
+    ///     .item_text(move |i| words[i].clone());
+    /// # let _ = list;
+    /// ```
+    pub fn item_text(mut self, words: impl Fn(usize) -> String + 'static) -> Self {
+        self.item_text = Some(std::rc::Rc::new(words));
+        self
+    }
+
     /// Reports no more often than every `px` of movement — and **always** reports where
     /// it comes to rest, however short the last step was.
     pub fn notify_every(mut self, px: f32) -> Self {
@@ -680,6 +712,7 @@ impl<Msg> Widget<Msg> for ListView<Msg> {
             keep_alive: self.keep_alive,
             find_child_index: self.find_child_index.as_deref(),
             hold_position: self.hold_position,
+            item_text: self.item_text.as_ref(),
         })
     }
 

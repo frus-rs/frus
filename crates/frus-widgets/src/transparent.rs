@@ -335,6 +335,10 @@ macro_rules! forward_transparent {
                 self.inner.selectable_text()
             }
 
+            fn page_words(&self) -> Option<$crate::PageWords> {
+                self.inner.page_words()
+            }
+
             fn region_toolbar(
                 &self,
                 context: $crate::ToolbarContext,

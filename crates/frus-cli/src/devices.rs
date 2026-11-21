@@ -419,6 +419,15 @@ pub(crate) fn emulator() -> Option<PathBuf> {
         .or_else(|| on_path(exe))
 }
 
+/// The program of the first browser frus knows how to open a page in, if one is installed:
+/// what `frus build web` runs the page in to take its text (milestone 830).
+pub(crate) fn browser_exe() -> Option<PathBuf> {
+    browsers().into_iter().find_map(|device| match device.kind {
+        Kind::Browser { exe } => Some(exe),
+        _ => None,
+    })
+}
+
 /// The browsers frus knows how to open a page in, those installed here.
 fn browsers() -> Vec<Device> {
     let candidates: &[(&str, &str, &[&str])] = if cfg!(windows) {

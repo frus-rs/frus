@@ -579,6 +579,7 @@ impl<Msg: Clone + 'static> Widget<Msg> for GridView<Msg> {
             keep_alive: false,
             find_child_index: None,
             hold_position: false,
+            item_text: None,
         })
     }
 

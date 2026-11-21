@@ -38,6 +38,7 @@ mod json;
 mod keys;
 mod locate;
 mod mcp;
+mod pagetext;
 mod permissions;
 mod platforms;
 mod png;
@@ -185,7 +186,8 @@ Usage:
 Targets:
   apk        the Android package (cargo-apk; a release needs a signing key)
   appbundle  the Android App Bundle (.aab) a store takes, signed with the release key
-  web        the site: web/, with the application compiled into web/pkg/
+  web        the application compiled into web/pkg/, and the site to deploy (a copy of
+             web/ with the first screen's text) in target/frus-web/<package>/
   desktop    the program for this computer (also: windows, linux, macos)
   installer  the program in this system's installer: a setup program (Windows),
              a .deb (Linux), a disk image (macOS); others with --format
@@ -214,6 +216,10 @@ Options:
                            each the characters the application can show (Latin, the
                            scripts of its languages, the text of its sources; more in
                            [package.metadata.frus.fonts], see `frus help fonts`)
+      --no-page-text       with web: do not write the first screen's text into
+                           the site's page; a build otherwise runs the page in Chrome or
+                           Edge, with no window, and writes it there for search engines
+                           and link previews
   -h, --help               print this
 
 Examples:
@@ -762,6 +768,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
     let mut analyze = false;
     let mut compare = None;
     let mut font_subset = true;
+    let mut page_text = true;
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -785,6 +792,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
             "--split-per-abi" if inline.is_none() => split_per_abi = true,
             "--analyze-size" if inline.is_none() => analyze = true,
             "--no-font-subset" if inline.is_none() => font_subset = false,
+            "--no-page-text" if inline.is_none() => page_text = false,
             "--compare" => set_once(
                 &mut compare,
                 PathBuf::from(value("--compare")?),
@@ -829,6 +837,7 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         format,
         variant,
         font_subset,
+        page_text,
     }))
 }
 
