@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.2.0
+
+Released with frus 0.6.0.
+
+- **Links to the frus organisation**: the plugin's page names [frus.dev](https://frus.dev), the
+  repository at [github.com/frus-rs/frus](https://github.com/frus-rs/frus) and its issues.
+- **Tools › frus › Open DevTools** opens the running application's DevTools in the browser:
+  the live widget tree, the frames and the log.
 - **Hot reload is on by default**, passed as `--hot`, so that it is on with frus 0.5.0 too,
   whose own default is off. The run configuration's choices are On (`--hot`, the default), Off
   (`--no-hot`, left out for a frus that does not know it) and Let frus decide; the old "frus

@@ -20,13 +20,35 @@ renderer, running natively on Windows, macOS, Linux, Android and the web.</p>
       every state kept. <b>Restart</b> brings every state back afresh.</li>
   <li><b>The framework's tools</b> under Tools › frus: debug paint, the inspector, the
       performance overlay, another platform's look, light and dark, the widget, focus and
-      semantics trees, screenshots.</li>
+      semantics trees, screenshots, and DevTools in the browser.</li>
   <li><b>New frus Project</b>, <b>frus Doctor</b> and <b>Update frus</b>.</li>
 </ul>
 
 <p>Only Rust needs installing by hand (<a href="https://rustup.rs">rustup.rs</a>): the plugin
 fetches the <code>frus</code> tool, and <code>frus</code> fetches what each platform needs.</p>
+
+<p><a href="https://frus.dev">Website</a> ·
+<a href="https://github.com/frus-rs/frus">Source code</a> ·
+<a href="https://github.com/frus-rs/frus/issues">Issues</a></p>
 ]]></description>
+
+    <change-notes><![CDATA[
+<h3>0.2.0</h3>
+<ul>
+  <li>Links to <a href="https://frus.dev">frus.dev</a> and the repository at
+      <a href="https://github.com/frus-rs/frus">github.com/frus-rs/frus</a>.</li>
+  <li><b>Tools › frus › Open DevTools</b>: the running application's widget tree, frames and log,
+      in the browser.</li>
+  <li>Hot reload is on by default (<code>--hot</code>), with every frus. The run configuration's
+      choices are On, Off and Let frus decide.</li>
+  <li>Every run ends with a line in the console: its exit code and, when it failed, the last
+      error it printed.</li>
+  <li>Until a device is chosen, runs go to a phone plugged in, else a running emulator, else this
+      computer; simulated devices are listed last.</li>
+</ul>
+<h3>0.1.0</h3>
+<p>The first release.</p>
+]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
 

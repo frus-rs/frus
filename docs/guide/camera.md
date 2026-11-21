@@ -5,9 +5,9 @@ reads QR codes and barcodes from it. Two cargo features turn it on:
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["camera"] }    # the camera
+frus = { version = "0.6", features = ["camera"] }    # the camera
 # or
-frus = { version = "0.5", features = ["scanner"] }   # the camera and the QR code reader
+frus = { version = "0.6", features = ["scanner"] }   # the camera and the QR code reader
 ```
 
 | | Android | Windows | Web | macOS, Linux, iOS |

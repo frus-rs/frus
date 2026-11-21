@@ -70,7 +70,8 @@ Inspect a running application without leaving the editor: **Toggle Debug Paint**
 Inspector**, **Toggle Performance Overlay**, **Toggle Platform** (see it as on another
 platform), **Toggle Brightness** (light and dark), **Print Widget Tree**, **Print Focus Tree**,
 **Print Semantics Tree** (what a screen reader sees) and **Save Screenshot**. What they print
-appears in the Debug Console.
+appears in the Debug Console. **Open DevTools** opens the application's DevTools in the
+browser: the live widget tree, each frame's cost and the log.
 
 ## Keys while it runs
 
@@ -132,8 +133,8 @@ restarts from the new one and the next F5 uses it.
 
 ## Links
 
-- **frus**: [repository](https://github.com/frus-rs/frus) ·
-  [getting started](https://github.com/frus-rs/frus/blob/master/docs/getting-started.md) ·
+- **frus**: [website](https://frus.dev) · [repository](https://github.com/frus-rs/frus) ·
+  [getting started](https://frus.dev/docs/getting-started) ·
   [crates.io](https://crates.io/crates/frus)
 - **Found a bug or missing something?** [Open an issue](https://github.com/frus-rs/frus/issues).
 - **Like it?** A rating on the Marketplace helps other people find it.

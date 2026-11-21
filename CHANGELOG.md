@@ -13,6 +13,47 @@ any release may break.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-21
+
+The platform inside the page, a much larger widget set, and the tools around an application. A
+frus page can hold video, the camera, a web view and the platform's own views; an application
+reaches purchases, storage, background work and more than one window; and `frus run` patches
+every saved change into the running application by default. In short:
+
+- **The platform inside the page**: video playback, the camera and code scanning, one web view
+  API on Android, Windows and the web, native views on Android, Windows and the web, external
+  textures that reach the GPU without a copy on Android, and custom fragment shaders and GPU
+  passes.
+- **What an application reaches**: in-app purchases; network images cached on disk; SQLite with
+  migrations; signing in with PKCE; preferences and a secure store; haptics and connectivity;
+  opening an address and the share sheet; permissions declared once in `Cargo.toml` (macOS
+  included); state restored after the system ends the process; Rust code that runs with no
+  window, scheduled by the system; more windows than one.
+- **Widgets**: slivers, Material 3 widgets (the expressive ones included) and the Material motion
+  system, Apple-style widgets, new input, display and overlay widgets (`CommandPalette`,
+  `HoverCard`, `ContextMenu`, `ResizablePanels`), `BottomNavigationBar`, tabs with their own
+  stacks, wheels that coast. A widget measures its children before placing them (#52 is done).
+- **State**: a component's own state builds that component, not the whole tree; state can be
+  scoped to a subtree, where only its readers are built again; translations and routes are
+  checked by the compiler (`messages!`, `#[derive(Routes)]`, in the new `frus-macros` crate).
+- **Text**: OpenType features, variable font axes, a language per span and dictionary line
+  breaking, in frus's copy of cosmic-text, now published as `frus-cosmic-text`; a release build
+  keeps only the glyphs the application can show; the framework's words in German, Spanish,
+  Japanese, Thai and Vietnamese; the system's spell checker and text services on Android.
+- **The web**: WebGL 2 where there is no WebGPU, a canvas that fits a phone's screen and
+  keyboard, and real text on the page for find-in-page, printing and search engines: `frus build
+  web` writes the site to deploy to `target/frus-web/<package>/`, the first screen's text in it.
+- **Tools**: hot reload is how `frus run` runs (desktop, Android, the web); DevTools; `frus mcp`
+  for AI agents; build modes, flavors, defines and release artifacts; `frus create --template
+  package|plugin`; several devices at once; a plugin for Android Studio and the JetBrains IDEs; a
+  guide for every subsystem and `LIMITATIONS.md`.
+- **Lighter**: 690 KB off every Android application, less work for a phone's GPU, transformed
+  layers drawn around what they hold.
+
+**Breaking:** `Edit` and `Status` have an `affinity` field and `Widget::cursor_at` returns a
+`TextPosition`; `PagePose` and `PageTransitionsBuilder` gained fields and variants (exhaustive
+matches and struct literals).
+
 - **A transformed layer is drawn around what it holds** (J831). A layer with a transform (a
   wheel's rows, `Transform`, `RotatedBox`, a page sliding in, the overscroll stretch) was given
   a texture and a composite quad the size of the whole screen, whatever it held. The wheel
@@ -7262,7 +7303,7 @@ opened while an Android application is already running, or a macOS build that re
   `cargo run -p frus-demo --features shots --bin shots -- docs/media`. Regenerating a
   picture after a change is now a command rather than an afternoon, which is the only
   way a README's screenshots stay true. New: `Snapshot::write_png`.
-- **Fourteen issues, written to be startable** (J304), now [open on the tracker](https://github.com/KalybosPro/frus/issues). `.github/issues/` and
+- **Fourteen issues, written to be startable** (J304), now [open on the tracker](https://github.com/frus-rs/frus/issues). `.github/issues/` and
   `scripts/seed-issues.sh` — each one says why it matters, where in the code to look,
   how to know it is done, and where the obvious wrong turn is. They live in the
   repository so they can be reviewed like anything else, and so a fork does not start
@@ -7543,9 +7584,11 @@ For releases, use this shape:
 ### Security
 -->
 
-[Unreleased]: https://github.com/KalybosPro/frus/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/KalybosPro/frus/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/KalybosPro/frus/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/KalybosPro/frus/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/KalybosPro/frus/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/KalybosPro/frus/releases/tag/v0.1.0
+[Unreleased]: https://github.com/frus-rs/frus/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/frus-rs/frus/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/frus-rs/frus/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/frus-rs/frus/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/frus-rs/frus/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/frus-rs/frus/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/frus-rs/frus/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/frus-rs/frus/releases/tag/v0.1.0

@@ -6,7 +6,7 @@ database on the device, and a sign-in through the system's browser.
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["net", "sqlite", "auth"] }
+frus = { version = "0.6", features = ["net", "sqlite", "auth"] }
 ```
 
 | | Feature | Desktop | Android | Web |

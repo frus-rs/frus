@@ -107,7 +107,7 @@ An application that brings its own font can drop the ones it does not need. Turn
 defaults off drops images too, so name what you keep:
 
 ```toml
-frus = { version = "0.5", default-features = false, features = ["bundled-sans", "images"] }
+frus = { version = "0.6", default-features = false, features = ["bundled-sans", "images"] }
 ```
 
 Dropping a face never panics: text falls back to the next font that has its letters.

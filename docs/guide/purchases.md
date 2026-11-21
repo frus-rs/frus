@@ -8,7 +8,7 @@ Turn on the `purchases` feature:
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["purchases"] }
+frus = { version = "0.6", features = ["purchases"] }
 ```
 
 | Platform | Store |

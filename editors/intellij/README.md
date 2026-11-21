@@ -120,6 +120,12 @@ It needs a JDK 21 (Android Studio's own, in its `jbr` folder, will do).
 `-PlocalIde="C:/Program Files/Android/Android Studio"` builds and runs against an installed
 IDE instead of downloading one.
 
+## Links
+
+- **frus**: [website](https://frus.dev) · [repository](https://github.com/frus-rs/frus) ·
+  [getting started](https://frus.dev/docs/getting-started) · [crates.io](https://crates.io/crates/frus)
+- **Found a bug or missing something?** [Open an issue](https://github.com/frus-rs/frus/issues).
+
 ## Licence
 
 MIT or Apache-2.0, at your choice.

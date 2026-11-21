@@ -9,7 +9,7 @@ Most are optional features, so an application that does not use them does not ca
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["file-dialogs", "notifications", "tray", "taskbar", "global-shortcuts", "secure-store"] }
+frus = { version = "0.6", features = ["file-dialogs", "notifications", "tray", "taskbar", "global-shortcuts", "secure-store"] }
 ```
 
 | Service | Feature | Desktop | Android | Web |

@@ -21,7 +21,7 @@ exclude = ["tests/limitations.rs"]
 # ~3.4 MB of faces, about 40% of a minimal frus app once compressed into the APK, so
 # an application that ships its own can drop the ones it does not need:
 #
-#     frus = { version = "0.5", default-features = false, features = ["bundled-sans"] }
+#     frus = { version = "0.6", default-features = false, features = ["bundled-sans"] }
 #
 # Dropping one is never a panic: italic falls back to upright, a missing script falls
 # back to the sans, and a missing sans falls back to the platform's own.
@@ -30,7 +30,7 @@ exclude = ["tests/limitations.rs"]
 # bundled; each of these adds one more blob of artwork, which is why none is on by
 # default:
 #
-#     frus = { version = "0.5", features = ["icons-outlined"] }
+#     frus = { version = "0.6", features = ["icons-outlined"] }
 #
 # Without one, its constants do not exist and `Icons::by_name` answers `None` for its
 # names rather than quietly handing back a different drawing.
@@ -121,17 +121,17 @@ icons-sharp = ["frus-widgets/icons-sharp"]
 
 # The facade only re-exports: no `cdylib` of its own. The app stays `rlib` + `cdylib`.
 [dependencies]
-frus-shell = { path = "../frus-shell", version = "0.5", default-features = false }
-frus-widgets = { path = "../frus-widgets", version = "0.5", default-features = false }
+frus-shell = { path = "../frus-shell", version = "0.6", default-features = false }
+frus-widgets = { path = "../frus-widgets", version = "0.6", default-features = false }
 # Directly, for `frus::fonts`: registering the application's own faces.
-frus-text = { path = "../frus-text", version = "0.5", default-features = false }
+frus-text = { path = "../frus-text", version = "0.6", default-features = false }
 # `l10n` only: Fluent files, and `messages!`.
-frus-l10n = { path = "../frus-l10n", version = "0.5", optional = true }
+frus-l10n = { path = "../frus-l10n", version = "0.6", optional = true }
 
 [dev-dependencies]
 # The guide's network examples decode JSON into their own types.
 serde = { version = "1", features = ["derive"] }
 # And its testing chapter renders a widget offscreen.
-frus-test = { path = "../frus-test", version = "0.5" }
+frus-test = { path = "../frus-test", version = "0.6" }
 # The languages guide (`docs/guide/localization.md`) shows the application's own words.
-frus-l10n = { path = "../frus-l10n", version = "0.5" }
+frus-l10n = { path = "../frus-l10n", version = "0.6" }

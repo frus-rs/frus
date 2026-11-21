@@ -21,7 +21,7 @@ none of it:
 
 ```toml
 [dependencies]
-frus = { version = "0.5", features = ["webview"] }
+frus = { version = "0.6", features = ["webview"] }
 ```
 
 `frus build` and `frus run` declare the `android.permission.INTERNET` permission a page from
