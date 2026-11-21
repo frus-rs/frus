@@ -262,10 +262,12 @@ layer then holds 5004 texts.
     box, the find scrolls it to 823 px, the application follows (the accessibility tree has
     "Vibrate 400 ms" afterwards) and the match is highlighted over the button (446 highlight
     pixels). Without the repaint after the scroll, the button showed no highlight.
-  - **A finger** dragged over a region (`input motionevent`): every pointer and touch event
-    targets the canvas (1 down, 14 moves, 1 up), and the box and the page do not scroll.
-    The demo did not scroll for that injected drag either, with the layer hidden too, so the
-    application's own response to it is not shown here.
+  - **A finger** dragged over a region: every pointer and touch event targets the canvas, and
+    the page does not scroll. A touch drag sent through the DevTools protocol
+    (`Input.dispatchTouchEvent`, so `pointerType` is `"touch"`) scrolls the application, and the
+    box follows (0 to 350 px). `adb shell input` drags cannot show this on Android 10: Chrome
+    reports their `pointerType` as `""`, so winit delivers them as a mouse, and a mouse drag does
+    not scroll. Master's demo behaves the same for both kinds of drag.
 - **The routine check**, on Windows: `cargo fmt --check`; clippy `-D warnings` on the host
   (all targets) and for wasm32; the tests of `frus-shell`, `frus-widgets`, `frus-cli`, `frus`
   and `frus-demo`; `cargo doc` with `-D warnings`; the eight frus-examples and the gallery's
@@ -280,9 +282,6 @@ layer then holds 5004 texts.
 - **A desktop's find bar was not driven.** Chrome's bar on Android was (above); on the desktop
   the script's `scrollIntoView` stands in for the bar. Firefox and Safari were not tried
   (Firefox has no `::search-text`, so its default highlight shows), nor printing on the phone.
-- **The phone's drag.** An injected drag (`adb input`) did not scroll the demo in Chrome, with
-  or without the layer; whether that is the injection or the application's touch handling on
-  the web is for another look. The layer is not in its way: every event went to the canvas.
 - **Opening find from the browser's menu** does not lay a lazy list's rows in: no event says
   it happened. Ctrl+F (or Cmd+F) does.
 - **Highlights are approximate.** The browser lays the words out in its own font, so a long
