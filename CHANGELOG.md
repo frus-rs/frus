@@ -8,10 +8,17 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 833 so far, each documenting the objective, the alternatives
+> record — one per step, 835 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Shadows and flat fills cost the GPU less** (J835). Where a shadow's column lies wholly
+  between the box's corners, the rect shader now takes one row of the blurred box instead of
+  four, which gives the same sum and is checked by a test of the constant. A flat fill is
+  converted to linear light once a rect, in the vertex shader, instead of once a pixel. On
+  the test phone (Mali-G51) the demo's home page scrolls with frames 50 ms apart instead of
+  82 ms (median), and its render time per frame falls from 53 ms to 23 ms, with the same pixels.
 
 - **Every route has its own page for search engines; the real find bar, Firefox and WebKit**
   (J833). `frus build web` now writes, for an application whose addresses are paths
