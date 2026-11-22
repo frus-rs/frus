@@ -45,6 +45,10 @@ struct VertexOutput {
     @location(10) frag_px: vec2<f32>,
     @location(11) @interpolate(flat) clip: vec4<f32>,
     @location(12) @interpolate(flat) shade: vec2<f32>,
+    // The fill already in linear light, when it is one flat colour with no border: what
+    // every pixel of it would otherwise convert again (milestone 835). Alpha below nought
+    // when the fill is anything else.
+    @location(13) @interpolate(flat) flat_linear: vec4<f32>,
 };
 
 // **The deviation of a shadow's gaussian, from its blur radius**: the convention every
@@ -91,6 +95,16 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.shade = vec2<f32>(inst.params.x, inst.params.w);
     out.frag_px = pos_px;
     out.clip = inst.clip;
+    // A flat fill, one colour with no border, is converted to linear light once here and
+    // not once a pixel: a page's background and its cards are most of its pixels, and the
+    // conversion's three powers are a large part of what a pixel costs a phone's GPU.
+    let flat_fill = inst.params.x < 0.5
+        && inst.params.y <= 0.0
+        && (all(inst.color == inst.color2) || all(inst.gradient.xy == vec2<f32>(0.0, 0.0)));
+    out.flat_linear = vec4<f32>(0.0, 0.0, 0.0, -1.0);
+    if (flat_fill) {
+        out.flat_linear = vec4<f32>(srgb_to_linear(inst.color.rgb), inst.color.a);
+    }
     return out;
 }
 
@@ -201,6 +215,11 @@ fn erf2(x: vec2<f32>) -> vec2<f32> {
     return s - s / (t * t);
 }
 
+// **The four samples' weight in the straight band** (milestone 835): `gaussian(y, sigma) *
+// step` summed at y = ±0.75σ and ±2.25σ with step = 1.5σ, which is the same at any deviation.
+// `painter::tests::the_straight_band_weighs_what_the_four_samples_weigh` holds it to that sum.
+const STRAIGHT_BAND_WEIGHT: f32 = 0.99863125;
+
 fn gaussian(x: f32, sigma: f32) -> f32 {
     return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.50662827 * sigma);
 }
@@ -219,6 +238,15 @@ fn shadow_row(x: f32, y: f32, sigma: f32, corner: f32, half_size: vec2<f32>) -> 
 // four samples of the gaussian down the column — a fade that is smooth everywhere and
 // reaches nothing three deviations out, with no edge of its own.
 fn blurred_box(p: vec2<f32>, half_size: vec2<f32>, corner: f32, sigma: f32) -> f32 {
+    // **The straight band** (milestone 835): when every row the column samples lies where
+    // the box is at its full width, between its corners, the four rows are the same row,
+    // and the four samples of the gaussian are the four below at any deviation (the column
+    // spans three deviations either side, in steps of one and a half). One row, then,
+    // rather than four: the same sum, at a quarter of the cost, over most of a large
+    // card's shadow.
+    if (abs(p.y) + 3.0 * sigma <= half_size.y - corner) {
+        return shadow_row(p.x, 0.0, sigma, corner, half_size) * STRAIGHT_BAND_WEIGHT;
+    }
     let low = p.y - half_size.y;
     let high = p.y + half_size.y;
     let start = clamp(-3.0 * sigma, low, high);
@@ -271,6 +299,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     alpha = alpha * inside_clip;
+
+    if (in.flat_linear.a >= 0.0) {
+        return vec4<f32>(in.flat_linear.rgb, in.flat_linear.a * alpha);
+    }
 
     // The fill: a gradient from the ramps, or the legacy two-colour fade (solid when
     // dir = 0 and color2 = color).

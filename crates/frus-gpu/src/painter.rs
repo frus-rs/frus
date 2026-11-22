@@ -596,6 +596,47 @@ mod tests {
     use super::*;
     use crate::{Color, Rect};
 
+    /// **The straight band weighs what the four samples weigh** (milestone 835): where every
+    /// row a shadow's column samples is the same row, the shader takes that row once, times
+    /// `STRAIGHT_BAND_WEIGHT`, instead of four times, each times its sample of the gaussian.
+    /// The two agree only if the constant is the four weights' sum, and that sum must be the
+    /// same at every deviation. A wrong constant by a fraction of a percent is under a level
+    /// of the rendered picture, so the golden comparison cannot see it; this test can.
+    #[test]
+    fn the_straight_band_weighs_what_the_four_samples_weigh() {
+        let source = include_str!("shaders/quad.wgsl");
+        let constant: f64 = source
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("const STRAIGHT_BAND_WEIGHT: f32 = ")
+            })
+            .and_then(|rest| rest.trim_end_matches(';').trim().parse().ok())
+            .expect("quad.wgsl declares STRAIGHT_BAND_WEIGHT");
+        // The shader's column, in f64: from -3σ to 3σ in four steps, each sample at the
+        // middle of its step, weighed by `gaussian(y, sigma) * step`.
+        let four_samples = |sigma: f64| {
+            let step = 6.0 * sigma / 4.0;
+            (0..4)
+                .map(|i| {
+                    let y = -3.0 * sigma + step * (i as f64 + 0.5);
+                    (-(y * y) / (2.0 * sigma * sigma)).exp()
+                        / ((2.0 * std::f64::consts::PI).sqrt() * sigma)
+                        * step
+                })
+                .sum::<f64>()
+        };
+        for sigma in [0.5, 1.0, 7.4, 12.0, 40.0, 300.0] {
+            let sum = four_samples(sigma);
+            assert!(
+                (constant - sum).abs() < 1e-7,
+                "at σ = {sigma}, the four samples weigh {sum}, the band {constant}"
+            );
+        }
+        // Not simply one: a band that forgot to weigh its row would be told apart.
+        assert!((1.0 - constant).abs() > 1e-3, "{constant}");
+    }
+
     /// Instantiates a surfaceless (headless) wgpu device. `None` when there is no GPU.
     fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

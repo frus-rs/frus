@@ -132,3 +132,115 @@ fn a_surface_twenty_four_high_fades_into_the_page_with_no_rim() {
     let last_lit = row.iter().rposition(|&v| v > 0).expect("a shadow");
     assert!(row[last_lit] <= 2, "it fades out, not off: {row:?}");
 }
+
+/// The error function as the renderer computes it (Abramowitz and Stegun 7.1.27).
+fn erf(x: f32) -> f32 {
+    let a = x.abs();
+    let mut t = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    t *= t;
+    x.signum() * (1.0 - 1.0 / (t * t))
+}
+
+/// One row of a rounded box blurred along x, as the renderer computes it.
+fn shadow_row(x: f32, y: f32, sigma: f32, corner: f32, half: (f32, f32)) -> f32 {
+    let delta = (half.1 - corner - y.abs()).min(0.0);
+    let curved = half.0 - corner + (corner * corner - delta * delta).max(0.0).sqrt();
+    let k = std::f32::consts::FRAC_1_SQRT_2 / sigma;
+    0.5 * (erf((x + curved) * k) - erf((x - curved) * k))
+}
+
+/// The renderer's blurred box summed over its four rows, everywhere: what every pixel was
+/// before the straight band took one row for four.
+fn four_rows(p: (f32, f32), half: (f32, f32), corner: f32, sigma: f32) -> f32 {
+    let start = (-3.0 * sigma).clamp(p.1 - half.1, p.1 + half.1);
+    let end = (3.0 * sigma).clamp(p.1 - half.1, p.1 + half.1);
+    let step = (end - start) / 4.0;
+    let mut y = start + step * 0.5;
+    let mut value = 0.0;
+    for _ in 0..4 {
+        let g = (-(y * y) / (2.0 * sigma * sigma)).exp() / (2.506_628_3 * sigma);
+        value += shadow_row(p.0, p.1 - y, sigma, corner, half) * g * step;
+        y += step;
+    }
+    value
+}
+
+fn to_srgb_level(linear: f32) -> f32 {
+    let c = linear.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    s * 255.0
+}
+
+/// **A large shadow's straight middle is the same with one row as with four** (milestone
+/// 835): between the corners every row of the column is the same row, and the renderer
+/// takes one for four. Across the shadow's edge, at rows inside that band, just outside it
+/// and round the corner, the rendered shadow matches the four-row sum to within a level,
+/// with no step where the band ends.
+#[test]
+fn a_shadows_straight_middle_matches_the_four_row_sum() {
+    // A 200×200 shape with corners of 8, blurred by 12: its rect reaches 12 further out.
+    let shape = Rect::new(60.0, 40.0, 200.0, 200.0);
+    let blur = 12.0;
+    let shadow = BoxShadow::new(0.0, 0.0, blur, Color::WHITE);
+    let bounds = shadow.bounds(shape);
+    let mut scene = Scene::new();
+    scene.shadow(
+        bounds,
+        Color::WHITE,
+        BorderRadius::uniform(8.0).inflate(blur),
+        blur,
+    );
+    let Some(shot) = render_scene(&scene, 320, 280, Color::BLACK) else {
+        eprintln!("no GPU adapter available: test skipped");
+        return;
+    };
+    let sigma = blur * 0.57735 + 0.5;
+    let half = (100.0, 100.0);
+    let corner = 8.0;
+    let centre = (160.0, 140.0);
+    // The band: |y| + 3σ ≤ 100 − 8, so up to about 69.7 pixels from the centre.
+    let band = half.1 - corner - 3.0 * sigma;
+    let mut worst = 0.0f32;
+    let mut inside = 0;
+    let mut outside = 0;
+    for y in (140..240).step_by(3) {
+        let py = y as f32 + 0.5 - centre.1;
+        if py.abs() <= band {
+            inside += 1;
+        } else {
+            outside += 1;
+        }
+        // Out across the right edge, from well inside the shape to past the fade.
+        for x in 240..282 {
+            let px = x as f32 + 0.5 - centre.0;
+            let expected = to_srgb_level(four_rows((px, py), half, corner, sigma));
+            let got = shot.pixel(x, y)[0] as f32;
+            worst = worst.max((got - expected).abs());
+            assert!(
+                (got - expected).abs() <= 1.5,
+                "at ({x}, {y}), {py} from the centre (band ends at {band}): {got} rendered, {expected} summed over four rows"
+            );
+        }
+    }
+    assert!(
+        inside > 5 && outside > 5,
+        "rows on both sides of the band's end"
+    );
+    eprintln!("largest difference from the four-row sum: {worst:.2} levels");
+    // No step where the band ends: down the column at the shape's edge, neighbours differ
+    // by a few levels at most.
+    let column: Vec<u8> = (140..215).map(|y| shot.pixel(260, y)[0]).collect();
+    let steepest = column
+        .windows(2)
+        .map(|pair| (pair[0] as i32 - pair[1] as i32).abs())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        steepest <= 3,
+        "no step down the column ({steepest}): {column:?}"
+    );
+}
