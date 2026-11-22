@@ -1188,6 +1188,22 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// For a widget that answers [`Widget::layout_builder`]: a number that stays the same for
+    /// as long as the factory does, and that no other factory has carried before it.
+    ///
+    /// A factory is not fingerprinted by what it builds, so the relayout cache cannot tell by
+    /// looking whether it would build something else this frame. With an identity it does not
+    /// have to: the same factory, under the same constraints and on the same surface, is taken
+    /// to build the same thing, and its geometry is reused (milestone 836). That is the
+    /// contract a layout callback has anyway: it runs again when its box changes or when the
+    /// widget is built again, and a factory built again is a new one with a new number.
+    ///
+    /// `None`, the default, keeps the old answer for a factory with no identity: the root
+    /// holding it is laid out again every frame.
+    fn layout_builder_identity(&self) -> Option<u64> {
+        None
+    }
+
     /// If the widget draws something **over its scroll region**, returns the
     /// `offset → overlay` factory. See [`crate::ScrollOverlay`].
     ///
@@ -2614,6 +2630,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn layout_builder(&self) -> Option<&dyn Fn(Size) -> Box<dyn Widget<Msg>>> {
         (**self).layout_builder()
+    }
+    fn layout_builder_identity(&self) -> Option<u64> {
+        (**self).layout_builder_identity()
     }
     fn scroll_overlay(&self) -> Option<&crate::scrolloverlay::OverlayBuilder<Msg>> {
         (**self).scroll_overlay()

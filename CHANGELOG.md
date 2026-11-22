@@ -8,10 +8,20 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 835 so far, each documenting the objective, the alternatives
+> record — one per step, 836 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Scrolling a page with a `LayoutBuilder` on it no longer lays the page out every frame**
+  (J836). A `LayoutBuilder` marked every layout root above it as never reusable, so the demo's
+  home page was laid out from scratch on each frame of a scroll: 16 to 17 ms a frame on a
+  desktop. Each `LayoutBuilder` now carries an identity (`Widget::layout_builder_identity`,
+  new): kept in the tree from one frame to the next, under the same constraints and on the same
+  surface, it is not asked again and its geometry is reused; one made again is asked again. The
+  relayout cache also keeps two entries per root, so a root laid out under two constraints in
+  one frame stops evicting its own answers. The same frame now costs 2.3 to 2.7 ms on the
+  desktop.
 
 - **Shadows and flat fills cost the GPU less** (J835). Where a shadow's column lies wholly
   between the box's corners, the rect shader now takes one row of the blurred box instead of

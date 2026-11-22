@@ -2564,3 +2564,85 @@ fn the_conversation_fills_the_screen_above_its_composer() {
         "the list reaches down to the rule above the composer: {list:?}, {divider:?}"
     );
 }
+
+/// The home page with a few tasks, settled, on a phone-sized surface; and the frame the shell
+/// builds while its list scrolls, with no rebuild: the retained tree laid out and painted at
+/// `offset`.
+fn home_scrolling() -> (Bench, Box<dyn Widget>, Vec<frus_widgets::WidgetId>) {
+    let bench = Bench::new(393.0, 851.0).with_tasks(&[
+        "Buy milk",
+        "Call the plumber about the kitchen sink",
+        "Write the quarterly report",
+        "Book flights",
+        "Water the plants",
+        "Read a chapter",
+    ]);
+    let (tree, ui) = bench.frame();
+    let regions = ui.scroll_regions().iter().map(|r| r.id).collect();
+    (bench, tree, regions)
+}
+
+fn scrolled_frame(
+    bench: &mut Bench,
+    tree: &dyn Widget,
+    regions: &[frus_widgets::WidgetId],
+    offset: f32,
+) -> Ui {
+    let theme = bench
+        .app
+        .resolved_theme(frus_widgets::Brightness::Dark, false)
+        .with_platform(bench.platform);
+    for id in regions {
+        bench.runtime.scroll.insert(*id, (0.0, offset));
+    }
+    MediaQuery::new(bench.size).scope(|| {
+        bench.runtime.states.begin_build();
+        let ui = build_ui(tree, bench.size, &bench.runtime, &theme);
+        bench.runtime.states.end_frame();
+        ui
+    })
+}
+
+/// **Scrolling the home page lays nothing out again** (milestone 836). The page holds a
+/// `LayoutBuilder` (the summary under the list), which used to mark every layout root above it
+/// as never reusable: each frame of a scroll laid the whole page out from scratch, twenty to
+/// thirty milliseconds a frame on the test phone. Once the first frames have been laid out,
+/// a frame that only moves the scroll offset reuses every root.
+#[test]
+fn scrolling_the_home_page_lays_nothing_out_again() {
+    let (mut bench, tree, regions) = home_scrolling();
+    assert!(!regions.is_empty(), "the home page scrolls");
+    for i in 0..6 {
+        let _ = scrolled_frame(&mut bench, tree.as_ref(), &regions, i as f32 * 40.0);
+        bench.runtime.advance(1.0 / 60.0);
+    }
+    let (hits, misses) = bench.runtime.layout_cache.borrow().last_frame_stats();
+    assert!(hits > 0, "the frame went through the cache");
+    assert_eq!(misses, 0, "a scrolled frame laid {misses} roots out again");
+}
+
+/// Profiling aid (milestone 836): what a frame of the home page costs while its list scrolls,
+/// built the way the shell builds a frame with no rebuild. Run with
+/// `FRAMES=400 cargo test --release -p frus-demo home_frame_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn home_frame_cost() {
+    let (mut bench, tree, regions) = home_scrolling();
+    let n: u32 = std::env::var("FRAMES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(400);
+    let start = std::time::Instant::now();
+    for i in 0..n {
+        let ui = scrolled_frame(&mut bench, tree.as_ref(), &regions, (i % 100) as f32 * 3.0);
+        let _ = ui.scene().scaled(2.75);
+        bench.runtime.advance(1.0 / 60.0);
+    }
+    let took = start.elapsed();
+    println!(
+        "home frame: {:.3} ms per frame over {n} frames; layout cache (hits, misses) on the \
+         last: {:?}",
+        took.as_secs_f64() * 1000.0 / f64::from(n),
+        bench.runtime.layout_cache.borrow().last_frame_stats()
+    );
+}

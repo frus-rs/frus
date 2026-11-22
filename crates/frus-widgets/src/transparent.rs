@@ -673,6 +673,10 @@ macro_rules! forward_transparent {
                 self.inner.layout_builder()
             }
 
+            fn layout_builder_identity(&self) -> Option<u64> {
+                self.inner.layout_builder_identity()
+            }
+
             fn scroll_overlay(
                 &self,
             ) -> Option<&$crate::scrolloverlay::OverlayBuilder<Msg>> {

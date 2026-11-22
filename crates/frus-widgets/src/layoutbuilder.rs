@@ -27,10 +27,17 @@
 //!   the paint, and again for each intrinsic question the engine asks. It must therefore
 //!   be cheap and free of side effects, which it must be anyway: it is called with no
 //!   retained state.
-//! - **A subtree holding one is not layout-cached.** The relayout cache reuses geometry
-//!   when a fingerprint of the styles and the structure has not moved, and a closure has
-//!   no fingerprint: two frames that look identical to it can still want different
-//!   boxes. So the root is recomputed every frame rather than risk a stale one.
+//! - **Its layout is cached for as long as it lives** (milestone 836). The relayout cache
+//!   reuses geometry when a fingerprint of the styles and the structure has not moved, and a
+//!   closure has no fingerprint of what it builds. Each `LayoutBuilder` carries a number of
+//!   its own instead: kept in the tree from one frame to the next, under the same
+//!   constraints and on the same surface, it is not asked again, and the frame reuses the
+//!   geometry it gave. A `LayoutBuilder` made again (its component rebuilt, the view
+//!   rebuilt) is a new one and is asked again. So the closure must build from the box it is
+//!   given and from what it captured, not from state it reads behind the tree's back: what
+//!   changes what it builds has to rebuild the widget that holds it. Until milestone 836 the
+//!   whole root holding one was laid out again every frame, which made scrolling a page
+//!   with one on it cost ten times what it should have.
 
 use frus_core::{Rect, Scene, Size};
 use frus_layout::{Dimension, Style};
@@ -48,7 +55,14 @@ pub struct LayoutBuilder<Msg = crate::callback::Callback> {
     /// than the size of what it built (milestone 586).
     fills: bool,
     build: Box<dyn Fn(Size) -> Box<dyn Widget<Msg>>>,
+    /// What the relayout cache knows this factory by: see
+    /// [`Widget::layout_builder_identity`].
+    identity: u64,
 }
+
+/// The next [`LayoutBuilder`]'s identity. Never reused, so a factory made later can never be
+/// taken for one the cache saw before, wherever it is allocated.
+static NEXT_IDENTITY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl<Msg> LayoutBuilder<Msg> {
     /// Builds from a `size → widget` factory. The size received is the **real box**
@@ -60,6 +74,7 @@ impl<Msg> LayoutBuilder<Msg> {
             flex_grow: 0.0,
             fills: false,
             build: Box::new(move |size| Box::new(build(size)) as Box<dyn Widget<Msg>>),
+            identity: NEXT_IDENTITY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -111,6 +126,10 @@ impl<Msg> Widget<Msg> for LayoutBuilder<Msg> {
 
     fn layout_builder(&self) -> Option<&dyn Fn(Size) -> Box<dyn Widget<Msg>>> {
         Some(&*self.build)
+    }
+
+    fn layout_builder_identity(&self) -> Option<u64> {
+        Some(self.identity)
     }
 
     fn fill_axes(&self, _theme: &Theme) -> crate::widget::FillAxes {

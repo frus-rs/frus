@@ -125,7 +125,11 @@ struct Entry {
 /// The relayout cache, retained in the [`crate::Runtime`] from one frame to the next.
 #[derive(Default)]
 pub struct LayoutCache {
-    entries: HashMap<WidgetId, Entry>,
+    /// Up to two entries per root, the most recent first. Two, because a frame may lay the
+    /// same root out under two constraints, once asked how big it would be with an axis free
+    /// and once handed its box: with one entry each question evicted the other's answer, and
+    /// both were computed again every frame (milestone 836).
+    entries: HashMap<WidgetId, [Option<Entry>; 2]>,
     /// Roots touched during the current frame (to evict the vanished ones).
     touched: HashSet<WidgetId>,
     /// Diagnostic: reuses and recomputations of the **last** frame.
@@ -150,11 +154,15 @@ impl LayoutCache {
         self.touched.insert(key);
         let (signature, volatile) = signature_of(root, key, runtime, theme);
         if !volatile {
-            if let Some(entry) = self.entries.get(&key) {
-                if entry.signature == signature && entry.constraints == c {
-                    self.hits += 1;
-                    return (entry.rects.clone(), entry.overflows.clone());
-                }
+            let found = self.entries.get(&key).and_then(|slots| {
+                slots
+                    .iter()
+                    .flatten()
+                    .find(|entry| entry.signature == signature && entry.constraints == c)
+            });
+            if let Some(entry) = found {
+                self.hits += 1;
+                return (entry.rects.clone(), entry.overflows.clone());
             }
         }
         self.misses += 1;
@@ -165,15 +173,19 @@ impl LayoutCache {
             self.entries.remove(&key);
             return (rects, overflows);
         }
-        self.entries.insert(
-            key,
-            Entry {
-                signature,
-                constraints: c,
-                rects: rects.clone(),
-                overflows: overflows.clone(),
-            },
-        );
+        let entry = Entry {
+            signature,
+            constraints: c,
+            rects: rects.clone(),
+            overflows: overflows.clone(),
+        };
+        let slots = self.entries.entry(key).or_default();
+        // The other constraints' answer is kept only while it describes the same tree: a
+        // new signature makes every older entry stale.
+        let kept = slots[0]
+            .take()
+            .filter(|old| old.signature == signature && old.constraints != c);
+        *slots = [Some(entry), kept];
         (rects, overflows)
     }
 
@@ -230,12 +242,14 @@ fn compute_rects<Msg>(
 /// they only affect painting — and whether that fingerprint can be **trusted between
 /// frames**.
 ///
-/// A `LayoutBuilder`'s box is the size of what its closure built, and a closure cannot be
-/// fingerprinted: two frames whose styles and structure are identical can still want
-/// different geometry, because the application changed what it builds. So a root holding
-/// one is marked *volatile* and recomputed every frame — the cache's contract is that a
-/// hit is **bit-for-bit** what the full computation would have produced, and the only
-/// honest way to keep that here is to take the miss.
+/// A layout builder's box is the size of what its closure built, and a closure cannot be
+/// fingerprinted by what it builds. A `LayoutBuilder` is fingerprinted by its identity
+/// instead (milestone 836): kept from one frame to the next, it builds the same thing under
+/// the same constraints, and one made again is a new identity. A factory with no identity
+/// marks the root *volatile*, recomputed every frame: two frames whose styles and structure
+/// are identical can still want different geometry from it, and the only honest way to keep
+/// the cache's contract (a hit is **bit-for-bit** what the full computation would have
+/// produced) is to take the miss.
 fn signature_of<Msg>(
     root: &dyn Widget<Msg>,
     id: WidgetId,
@@ -393,13 +407,22 @@ fn hash_node<Msg, H: Hasher>(
         }
         return;
     }
-    // A `LayoutBuilder` hashes like a leaf and poisons the entry: its box comes from a
-    // closure, and a closure cannot be hashed. Two frames whose trees fingerprint alike
-    // could build two different children.
+    // A layout builder hashes like a leaf: its box comes from a closure, and a closure cannot
+    // be hashed by what it builds. One with an identity is hashed by that, and by the surface
+    // the closure may read: the same factory, retained from the last frame, under the same
+    // constraints, builds the same thing (milestone 836). One without poisons the entry, as
+    // every one did before: two frames whose trees fingerprint alike could build two
+    // different children.
     if widget.layout_builder().is_some() {
         1u8.hash(hasher);
         effective_style(widget, id, runtime, theme).layout_hash(hasher);
-        *volatile = true;
+        match widget.layout_builder_identity() {
+            Some(identity) => {
+                identity.hash(hasher);
+                crate::MediaQuery::of().measure_hash(hasher);
+            }
+            None => *volatile = true,
+        }
         return;
     }
     if widget.overlay().is_some() {
@@ -563,13 +586,87 @@ mod tests {
         assert_eq!(rewidth.0.last().unwrap().width, 280.0);
     }
 
-    /// A `LayoutBuilder` still cannot be trusted between frames.
+    /// **A `LayoutBuilder` kept from one frame to the next is not asked again** (milestone
+    /// 836). It used to poison its root, so a page with one anywhere on it was laid out from
+    /// scratch every frame, scrolling included, and its closure ran each time.
     #[test]
-    fn a_layout_builder_still_poisons_its_root() {
+    fn a_retained_layout_builder_is_laid_out_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
         let rt = Runtime::default();
         let theme = crate::theme::Theme::default();
         let c = Constraints::definite(Size::new(300.0, 200.0));
-        let tree: crate::LayoutBuilder<()> = crate::LayoutBuilder::new(|_| Container::new());
+        let asked = Rc::new(Cell::new(0));
+        let builder = |asked: &Rc<Cell<u32>>| -> Flex<()> {
+            let asked = asked.clone();
+            Flex::column().child(crate::LayoutBuilder::new(move |size: Size| {
+                asked.set(asked.get() + 1);
+                Container::new().width(size.width / 2.0).height(30.0)
+            }))
+        };
+        let tree = builder(&asked);
+        let mut cache = LayoutCache::default();
+        let first = cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
+        let after_first = asked.get();
+        assert!(after_first > 0, "the first frame asks the closure");
+        let second = cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
+        assert_eq!(first, second);
+        assert_eq!(
+            (cache.hits, cache.misses),
+            (1, 1),
+            "the second frame is reused"
+        );
+        assert_eq!(asked.get(), after_first, "and the closure is not run again");
+
+        // New constraints ask again.
+        let wider = Constraints::definite(Size::new(400.0, 200.0));
+        cache.rects(WidgetId::ROOT, &tree, &rt, &theme, wider);
+        assert_eq!(cache.misses, 2, "a new box asks the closure again");
+
+        // So does a new surface: the closure may read it.
+        let surface = crate::MediaQuery::new(Size::new(800.0, 600.0));
+        surface.scope(|| cache.rects(WidgetId::ROOT, &tree, &rt, &theme, wider));
+        assert_eq!(cache.misses, 3, "a new surface asks the closure again");
+
+        // A tree built again holds a new builder, which is asked again, though it reads alike.
+        let rebuilt = builder(&asked);
+        let before = asked.get();
+        cache.rects(WidgetId::ROOT, &rebuilt, &rt, &theme, wider);
+        assert_eq!(cache.misses, 4, "a builder made again is a new builder");
+        assert!(asked.get() > before);
+    }
+
+    /// A factory with no identity still cannot be trusted between frames: its root is laid out
+    /// again every frame.
+    #[test]
+    fn a_factory_without_an_identity_still_poisons_its_root() {
+        struct Anonymous(Box<dyn Fn(Size) -> Box<dyn Widget<()>>>);
+        impl Widget<()> for Anonymous {
+            fn style(&self) -> frus_layout::Style {
+                frus_layout::Style::default()
+            }
+            fn children(&self) -> &[Box<dyn Widget<()>>] {
+                &[]
+            }
+            fn paint(
+                &self,
+                _: Rect,
+                _: crate::interaction::Status,
+                _: &crate::theme::Theme,
+                _: &mut frus_core::Scene,
+            ) {
+            }
+            fn on_click(&self) -> Option<()> {
+                None
+            }
+            fn layout_builder(&self) -> Option<&dyn Fn(Size) -> Box<dyn Widget<()>>> {
+                Some(&*self.0)
+            }
+        }
+        let rt = Runtime::default();
+        let theme = crate::theme::Theme::default();
+        let c = Constraints::definite(Size::new(300.0, 200.0));
+        let tree = Anonymous(Box::new(|_| Box::new(Container::<()>::new())));
         let mut cache = LayoutCache::default();
         cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
         cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
@@ -617,6 +714,38 @@ mod tests {
             (0, 2),
             "size changed → recomputed"
         );
+    }
+
+    /// **A root laid out under two constraints in one frame keeps both answers** (milestone
+    /// 836): asked how big it would be with an axis free, then handed its box. With one entry
+    /// per root, each question evicted the other's answer, and both were computed every frame.
+    #[test]
+    fn two_constraints_a_frame_are_both_kept() {
+        let mut cache = LayoutCache::default();
+        let rt = Runtime::default();
+        let theme = crate::theme::Theme::default();
+        let tree: Flex<()> = Flex::row().child(Container::new().width(80.0).height(64.0));
+        let free = Constraints::axes(0.0, 64.0, [true, false], [false, false]);
+        let given = Constraints::axes(109.0, 64.0, [false, false], [false, false]);
+        for _ in 0..3 {
+            cache.rects(WidgetId::ROOT, &tree, &rt, &theme, free);
+            cache.rects(WidgetId::ROOT, &tree, &rt, &theme, given);
+            cache.end_frame();
+        }
+        assert_eq!(
+            (cache.last_hits, cache.last_misses),
+            (2, 0),
+            "the third frame reuses both"
+        );
+
+        // A changed tree is a new answer under either constraint, and the old one is gone.
+        let wider: Flex<()> = Flex::row().child(Container::new().width(90.0).height(64.0));
+        cache.rects(WidgetId::ROOT, &wider, &rt, &theme, free);
+        cache.rects(WidgetId::ROOT, &wider, &rt, &theme, given);
+        assert_eq!((cache.hits, cache.misses), (0, 2));
+        let back = cache.rects(WidgetId::ROOT, &tree, &rt, &theme, free);
+        assert_eq!(cache.misses, 3, "the old tree's answer was not kept");
+        assert_eq!(back.0[1].width, 80.0);
     }
 
     #[test]

@@ -492,6 +492,12 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.layout_builder())
     }
 
+    fn layout_builder_identity(&self) -> Option<u64> {
+        self.inner
+            .as_ref()
+            .and_then(|w| w.layout_builder_identity())
+    }
+
     fn scroll_overlay(&self) -> Option<&crate::scrolloverlay::OverlayBuilder<Msg>> {
         self.inner.as_ref().and_then(|w| w.scroll_overlay())
     }
