@@ -1222,6 +1222,9 @@ struct Config {
     /// How many popped pages are kept alive for a return ([`GoRouter::keep_popped_pages`]).
     keep_popped: usize,
     shells: HashMap<u64, Rc<ShellSpec>>,
+    /// Locations a built site writes a page for beside the routes without a parameter
+    /// ([`GoRouter::prerender_paths`]).
+    prerender: Vec<String>,
 }
 
 struct Inner {
@@ -1302,6 +1305,7 @@ impl GoRouter {
                     animate: true,
                     keep_popped: 0,
                     shells,
+                    prerender: Vec::new(),
                 }),
                 stack: RefCell::new(Stack::default()),
                 started: Cell::new(false),
@@ -1397,6 +1401,73 @@ impl GoRouter {
         });
         *self.inner.refresh.borrow_mut() = Some(subscription);
         self
+    }
+
+    /// **Locations a built site writes a page for**, beside the routes it can name on its own.
+    ///
+    /// `frus build web` writes a page of its own for every location
+    /// [`prerendered_paths`](Self::prerendered_paths) lists, holding what the application shows
+    /// there, so a search engine that reads the site without running it finds each page's
+    /// words at its address (an application whose addresses are paths: see
+    /// `LocationStrategy::Path`). A route with a parameter, `/products/:id`, stands for
+    /// locations nobody can list from its pattern; name the ones worth a page here.
+    ///
+    /// ```
+    /// use frus_widgets::{text, GoRoute, GoRouter};
+    ///
+    /// let router = GoRouter::new(vec![
+    ///     GoRoute::new("/", |_, _| text("home")),
+    ///     GoRoute::new("/products/:id", |_, _| text("a product")),
+    /// ])
+    /// .prerender_paths((1..=3).map(|id| format!("/products/{id}")));
+    /// assert_eq!(
+    ///     router.prerendered_paths(),
+    ///     ["/", "/products/1", "/products/2", "/products/3"]
+    /// );
+    /// ```
+    ///
+    /// Nothing is done with them while the application runs: they are read once, by the build.
+    pub fn prerender_paths<S: Into<String>>(self, paths: impl IntoIterator<Item = S>) -> Self {
+        self.inner
+            .config
+            .borrow_mut()
+            .prerender
+            .extend(paths.into_iter().map(Into::into));
+        self
+    }
+
+    /// Every route's path, as declared, its parameters included (`/products/:id`), parents
+    /// before their sub-routes, in declaration order.
+    pub fn paths(&self) -> Vec<String> {
+        fn walk(nodes: &[Rc<Node>], out: &mut Vec<String>) {
+            for node in nodes {
+                // A shell is a frame around its branches' routes, not a place of its own.
+                if node.spec.is_none() && !out.contains(&node.full_path) {
+                    out.push(node.full_path.clone());
+                }
+                walk(&node.children, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.inner.config.borrow().nodes, &mut out);
+        out
+    }
+
+    /// The locations a built site writes a page for: every route whose path has no parameter
+    /// and no `*`, then the ones given to [`prerender_paths`](Self::prerender_paths), each
+    /// once.
+    pub fn prerendered_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .paths()
+            .into_iter()
+            .filter(|path| !path.contains(':') && !path.contains('*'))
+            .collect();
+        for path in &self.inner.config.borrow().prerender {
+            if !out.contains(path) {
+                out.push(path.clone());
+            }
+        }
+        out
     }
 
     // ---- reading -----------------------------------------------------------------------
@@ -3054,6 +3125,53 @@ mod tests {
 
     fn router() -> GoRouter {
         GoRouter::new(routes()).animate(false)
+    }
+
+    /// The paths a build writes a page for: every route without a parameter, sub-routes and
+    /// a shell's branches included, then the listed ones, each once (milestone 833).
+    #[test]
+    fn prerendered_paths_are_the_routes_without_parameters_and_the_listed_ones() {
+        let mut all = routes();
+        all.push(GoRoute::shell(
+            |_, _, body| body,
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/a", page)]),
+                ShellBranch::new(vec![
+                    GoRoute::new("/b", page).routes(vec![GoRoute::new("more", page)])
+                ]),
+            ],
+        ));
+        let router = GoRouter::new(all);
+        assert_eq!(
+            router.paths(),
+            [
+                "/",
+                "/users/:id",
+                "/users/:id/posts/:post",
+                "/files/*",
+                "/settings",
+                "/a",
+                "/b",
+                "/b/more"
+            ]
+        );
+        assert_eq!(
+            router.prerendered_paths(),
+            ["/", "/settings", "/a", "/b", "/b/more"]
+        );
+        let router = router.prerender_paths(["/users/1", "/settings", "/users/2"]);
+        assert_eq!(
+            router.prerendered_paths(),
+            [
+                "/",
+                "/settings",
+                "/a",
+                "/b",
+                "/b/more",
+                "/users/1",
+                "/users/2"
+            ]
+        );
     }
 
     fn keys(router: &GoRouter) -> Vec<String> {

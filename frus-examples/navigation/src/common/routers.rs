@@ -16,7 +16,7 @@ use crate::features::product::pages::sizepage::SizePage;
 use crate::features::search::pages::searchpage::SearchPage;
 use crate::features::search::states::searchstate::Sort;
 use crate::models::order::Order;
-use crate::models::product::Product;
+use crate::models::product::{Product, CATALOG};
 
 /// Every page of the shop, by location.
 ///
@@ -93,6 +93,9 @@ pub fn router(cart: Cart) -> GoRouter {
     .redirect(move |state| guard_redirect(guard.is_empty(), state.location()))
     // …and again whenever the cart becomes empty, with nobody navigating.
     .refresh_listenable(cart.emptied())
+    // `frus build web` writes a page with its own text for every route without a parameter;
+    // `/products/:id` stands for locations only the app can list.
+    .prerender_paths(CATALOG.iter().map(|product| format!("/products/{}", product.id)))
 }
 
 /// Where the app opens.

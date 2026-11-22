@@ -158,19 +158,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --lib --target wasm32-unknown-unknown --profile web-release
-      # The command-line tool must be the very version of the `wasm-bindgen` crate the build
-      # resolved, or it refuses the module.
-      - name: Generate the JavaScript glue
+      # `frus build web`, as on your machine: the release build, the JavaScript glue (it
+      # installs the wasm-bindgen the build needs), the fonts cut down, and the page's text
+      # written into the site for search engines and link previews, read from the page run in
+      # the runner's Chrome with no window. The command line is the version of frus the
+      # application uses.
+      - name: Build the site
         run: |
           name="${{ needs.meta.outputs.name }}"
-          bindgen=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
-          cargo install wasm-bindgen-cli --version "$bindgen" --locked
-          wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-            "target/wasm32-unknown-unknown/web-release/${name//-/_}.wasm"
+          frus=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "frus") | .version')
+          cargo install frus-cli --version "$frus" --locked || cargo install frus-cli --locked
+          frus build web
+          if ! grep -q "frus:page-text" "target/frus-web/$name/index.html"; then
+            echo "::warning::the page's text was not written into the site (see the build's output)"
+          fi
           dir="$name-${{ needs.meta.outputs.version }}-web"
           mkdir -p dist
-          cp -r web "dist/$dir"
+          cp -r "target/frus-web/$name" "dist/$dir"
           (cd dist && zip -qr "$dir.zip" "$dir" && rm -r "$dir")
       - uses: actions/upload-artifact@v4
         with:

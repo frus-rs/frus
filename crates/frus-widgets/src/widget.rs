@@ -560,6 +560,15 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// Whether the texts inside this widget are a **heading** on the page (milestone 833): the
+    /// title of an app bar, announced as the screen's heading, is printed and indexed as one,
+    /// and the page `frus build web` writes for a route takes its first heading for its title.
+    /// [`Semantics::heading`](crate::Semantics::heading) answers `true`. Asked only while the
+    /// shell records the page's text.
+    fn page_heading(&self) -> bool {
+        false
+    }
+
     /// The **bar** a [`SelectionArea`](crate::SelectionArea) offers over its selection, for
     /// `context`, when the application has said what it holds
     /// ([`SelectionArea::selection_toolbar`](crate::SelectionArea::selection_toolbar)): `Some`
@@ -2352,6 +2361,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn page_words(&self) -> Option<crate::PageWords> {
         (**self).page_words()
+    }
+    fn page_heading(&self) -> bool {
+        (**self).page_heading()
     }
     fn region_toolbar(
         &self,

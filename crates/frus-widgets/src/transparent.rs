@@ -339,6 +339,10 @@ macro_rules! forward_transparent {
                 self.inner.page_words()
             }
 
+            fn page_heading(&self) -> bool {
+                self.inner.page_heading()
+            }
+
             fn region_toolbar(
                 &self,
                 context: $crate::ToolbarContext,

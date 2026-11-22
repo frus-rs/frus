@@ -17,9 +17,11 @@ frus test                                  # the cart, the guard, search and the
 ```
 
 On the **web** you do not need the command line: the router's location *is* the address bar.
-`https://host/app/#/products/3` opens that page with the shop underneath, moving between pages
+`https://host/products/3` opens that page with the shop underneath, moving between pages
 changes the address and adds a history entry, the browser's back and forward buttons move the
-router, and a reload comes back to the same page. `FrusApp::router(..)` does all of it.
+router, and a reload comes back to the same page. `FrusApp::router(..)` does all of it; the
+locations are written as paths (`LocationStrategy::Path` in `src/lib.rs`) rather than after a
+`#`, so every page is an address a server sees.
 
 ## Web
 
@@ -27,6 +29,14 @@ router, and a reload comes back to the same page. `FrusApp::router(..)` does all
 frus run -d web          # build, serve on http://localhost:8080 and open the browser
 frus build web           # release: the application into web/pkg/, the site to deploy in target/frus-web/<package>/
 ```
+
+`frus build web` writes a page of its own for every route without a parameter (`cart/index.html`
+for `/cart`, `search/index.html`, ...) and for each product the router lists with
+`prerender_paths` (`products/1/index.html`, ...), each holding the words that page shows, a
+title and a description, so a search engine reading `/products/3` without running anything
+finds that product. `/checkout` gets none: with an empty cart it redirects to `/cart`. An
+address the build wrote no page for needs the host to answer it with `index.html` (a
+"single-page application" rule) and a `<base href="/">` in `web/index.html`.
 
 By hand, once: `rustup target add wasm32-unknown-unknown` and
 `cargo install wasm-bindgen-cli --version 0.2.127` (the version must match `wasm-bindgen` in
@@ -41,8 +51,10 @@ python -m http.server 8080 --directory web     # http://localhost:8080
 frus draws through WebGPU where the browser offers it and through WebGL 2 elsewhere; WebGPU is
 only offered on `https` pages and on `localhost`.
 
-On the Web the router's location **is** the address: `http://localhost:8080/#/products/3` opens
-that page with the shop beneath it, and the browser's back and forward buttons move the router.
+On the Web the router's location **is** the address: `http://localhost:8080/products/3/` opens
+that page with the shop beneath it (`python -m http.server` answers only the addresses that have
+a file, so serve the site `frus build web` made, which has one per page), and the browser's back
+and forward buttons move the router.
 
 
 ## The map

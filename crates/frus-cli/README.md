@@ -215,8 +215,13 @@ Release by default; `--debug` for a debug build.
 `frus build web` compiles the application into `web/pkg/`, then copies `web/` to
 `target/frus-web/<package>/`: that copy is the site to deploy. Its `index.html` gets the first
 screen's text, read from the built page in Chrome or Edge with no window, for search engines and
-link previews; `web/index.html` in your sources is never written. `--no-page-text` skips that
-step, and without Chrome or Edge the page stays as `web/` has it, with a warning.
+link previews; `web/index.html` in your sources is never written. An application whose
+addresses are paths (`LocationStrategy::Path`) also gets a page of its own for every route
+without a parameter and every location listed with `GoRouter::prerender_paths`
+(`settings/index.html` for `/settings`), each with its text, title and description; a route
+that redirects gets none. `--no-page-text` skips that step, and without Chrome or Edge the page
+stays as `web/` has it, with a warning. On a machine with no GPU (a CI runner), the browser's
+software renderer is enough to read the text.
 
 A release build cuts every font embedded with `frus::fonts::include_font!`, frus's bundled faces
 included, down to the characters the application can show: Latin, the scripts of its languages,

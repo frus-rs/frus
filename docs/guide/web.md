@@ -16,7 +16,8 @@ frus build web           # the site, in target/frus-web/<package>/, ready for an
 into the page (see [Running and hot reload](running.md)). `frus build web` compiles and shrinks
 the application into `web/pkg/`, then copies `web/` to `target/frus-web/<package>/`: that copy is
 the site, and its `index.html` gets the first screen's text for search engines and link
-previews, so the build never writes into your page. Copy that folder to any static host: GitHub
+previews (and, with path addresses, every route a page of its own: see
+[below](#find-printing-and-search-engines)), so the build never writes into your page. Copy that folder to any static host: GitHub
 Pages, a bucket, nginx. `web/` itself still runs as a site too, only without that text. `frus create` makes the page with the
 application's name, a loading indicator, and a message for a browser that can draw neither with
 WebGPU nor with WebGL 2; edit it freely, keeping the canvas styles.
@@ -51,6 +52,58 @@ fn app() -> FrusApp {
 A page served under a folder (`https://example.com/app/`) sets `<base href="/app/">` in
 `index.html`, and the paths are read under it. Routes and redirects are in
 [Screens, navigation and dialogs](navigation.md).
+
+## Find, printing and search engines
+
+The canvas has pixels, not words, so frus gives the page its text three ways, with nothing to
+write in the application:
+
+- **Find in page.** A transparent layer over the canvas holds each text where it is drawn, the
+  ones scrolled out of view included. The browser's find bar (Ctrl+F, Cmd+F) searches it,
+  draws its highlight over the canvas, and a match out of view scrolls the application to it.
+  A lazy `ListView` that says what its rows say (`ListView::item_text`) has every row found,
+  built or not.
+- **Printing.** Ctrl+P prints the page's text as a document: headings, paragraphs and every row
+  of such a list, black on white, not a picture of the window.
+- **Search engines and link previews.** `frus build web` opens the built site in Chrome or Edge
+  with no window and writes what the application shows into the site's `index.html`, with a
+  description made of its first words when the page has none.
+
+**Every route gets a page of its own** when the addresses are paths
+(`LocationStrategy::Path`): the build opens the application at each route and writes
+`settings/index.html` for `/settings`, with that page's text, a title (its first heading, which
+an `AppBar`'s title is, before the site's title) and a description. A static host
+serves those files as they are, so a search engine that reads `/settings` without running
+anything finds the words of that page. A route with a parameter (`/products/:id`) cannot be
+listed from its pattern; list the locations worth a page on the router:
+
+```rust
+use frus::{text, GoRoute, GoRouter};
+
+fn router() -> GoRouter {
+    GoRouter::new(vec![
+        GoRoute::new("/", |_, _| text("Home")),
+        GoRoute::new("/products/:id", |_, state| text(format!("Product {}", state.param("id").unwrap_or_default()))),
+    ])
+    .prerender_paths((1..=20).map(|id| format!("/products/{id}")))
+}
+# let _ = router;
+```
+
+A route that redirects elsewhere (a guard sending an empty cart from `/checkout` to `/cart`)
+gets no page, and neither does a location the site already has a file for. Each list gives
+its first 200 rows to these pages, and a page holds at most 256 KB of text. Addresses that come
+after a `#` (the default) are all one page to a server: only the first screen is written then.
+
+A host that answers every unknown address with `index.html` (a "single-page application"
+rule, or GitHub Pages' `404.html`) keeps working: the files the build wrote are found first,
+and any other address gets `index.html`, which then needs a `<base href="/">` (or the site's
+folder) so its relative URLs still resolve. `frus run -d web` answers every address that is not
+a file with the page too, so a reload at `/settings` works there.
+
+`frus build web --no-page-text` skips all of it, and a machine with neither Chrome nor Edge
+builds the site without it, with a warning. On a build machine with no GPU, the browser draws
+with its software renderer, which is enough to read the text.
 
 ## Text input
 

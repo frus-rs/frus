@@ -119,3 +119,30 @@ pub(crate) fn listen(window: Arc<Window>, strategy: LocationStrategy, base: Stri
 pub(crate) fn take_popped() -> Vec<(String, Option<usize>)> {
     POPPED.with(|queue| queue.borrow_mut().drain(..).collect())
 }
+
+/// Answers `frus build web`'s question, when the page it runs asks it (milestone 833): the page
+/// it serves defines `window.__frusPrerender` before the application starts, and is given the
+/// strategy (`"path"` or `"hash"`) and the locations to write a page for. Any other page has no
+/// such object, and `paths` is never called.
+#[inline(never)]
+pub(crate) fn answer_prerender(strategy: LocationStrategy, paths: impl FnOnce() -> Vec<String>) {
+    let Some(browser) = web_sys::window() else {
+        return;
+    };
+    let Ok(question) = js_sys::Reflect::get(&browser, &"__frusPrerender".into()) else {
+        return;
+    };
+    if !question.is_object() {
+        return;
+    }
+    let list = js_sys::Array::new();
+    for path in paths() {
+        list.push(&JsValue::from_str(&path));
+    }
+    let strategy = match strategy {
+        LocationStrategy::Path => "path",
+        LocationStrategy::Hash => "hash",
+    };
+    let _ = js_sys::Reflect::set(&question, &"strategy".into(), &strategy.into());
+    let _ = js_sys::Reflect::set(&question, &"paths".into(), &list);
+}

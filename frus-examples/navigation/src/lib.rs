@@ -15,7 +15,7 @@
 //! - the pages under `features/` — `push` vs `go` vs `replace` vs `pop`, named routes,
 //!   query parameters, `extra`, and a page that returns a result.
 
-use frus::FrusApp;
+use frus::{FrusApp, LocationStrategy};
 
 use crate::common::{cart::Cart, routers::router};
 
@@ -27,6 +27,10 @@ frus::main!({
     // **One cart for the whole app**, handed to the router, which hands it to the pages.
     let cart = Cart::new();
     // `FrusApp::router` makes the router the root, and reachable from every page with
-    // `cx.router()`. On the web it also ties the router to the address bar.
-    FrusApp::router(router(cart)).title("Corner Shop")
+    // `cx.router()`. On the web it also ties the router to the address bar, where the
+    // locations are written as paths (`/products/3`, not `/#/products/3`): each page is an
+    // address a server sees, and `frus build web` writes one with its own text for each.
+    FrusApp::router(router(cart))
+        .title("Corner Shop")
+        .location_strategy(LocationStrategy::Path)
 });

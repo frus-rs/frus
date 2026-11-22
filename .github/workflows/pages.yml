@@ -55,17 +55,27 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
 
-      - name: Build
-        run: cargo build --lib --target wasm32-unknown-unknown --profile web-release
+      # The site is built the way an application's is, with `frus build web`: the release
+      # build, the JavaScript glue, and the gallery's text written into the page for search
+      # engines and link previews, read from the page run in the runner's Chrome with no
+      # window (it draws with the software renderer: the runner has no GPU). The command line
+      # is this checkout's; it has no dependencies, and builds in seconds.
+      - name: The frus command line
+        working-directory: .
+        run: cargo build --release --locked -p frus-cli
 
-      - name: Generate the JavaScript glue
-        run: >
-          wasm-bindgen --target web --no-typescript --out-dir web/pkg
-          target/wasm32-unknown-unknown/web-release/widgets.wasm
+      - name: Build the site
+        run: |
+          "$GITHUB_WORKSPACE/target/release/frus" build web 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test "${PIPESTATUS[0]}" = 0
+          # Without its text the site still works; say so on the run rather than fail it.
+          if ! grep -q "frus:page-text" target/frus-web/widgets/index.html; then
+            echo "::warning::the gallery's text was not written into its page (see the build's output)"
+          fi
 
       - name: Publish to gh-pages
         run: |
-          cp -r web "$RUNNER_TEMP/site"
+          cp -r target/frus-web/widgets "$RUNNER_TEMP/site"
           cd "$RUNNER_TEMP/site"
           # Served as is, not through Jekyll.
           touch .nojekyll

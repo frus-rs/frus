@@ -216,10 +216,11 @@ Options:
                            each the characters the application can show (Latin, the
                            scripts of its languages, the text of its sources; more in
                            [package.metadata.frus.fonts], see `frus help fonts`)
-      --no-page-text       with web: do not write the first screen's text into
-                           the site's page; a build otherwise runs the page in Chrome or
-                           Edge, with no window, and writes it there for search engines
-                           and link previews
+      --no-page-text       with web: do not write the page's text into the site; a
+                           build otherwise runs the page in Chrome or Edge, with no
+                           window, and writes the first screen's text into index.html
+                           (and, with path addresses, each route's into a page of its
+                           own) for search engines and link previews
   -h, --help               print this
 
 Examples:
@@ -820,7 +821,8 @@ fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, String> 
         }
         if split_per_abi || format.is_some() || variant != variant::Variant::default() {
             return Err(
-                "--analyze-size measures the plain release build: leave out --split-per-abi,                  --format, --flavor, --define and the version"
+                "--analyze-size measures the plain release build: leave out --split-per-abi, \
+                 --format, --flavor, --define and the version"
                     .into(),
             );
         }
@@ -1272,6 +1274,11 @@ mod tests {
         );
         assert!(error("build installer --format zip").contains("not `zip`"));
         assert!(error("build installer --format deb --format rpm").contains("given twice"));
+        // The page's text is written unless asked not to (milestones 830, 833).
+        assert!(build_request("build web").page_text);
+        assert!(!build_request("build web --no-page-text").page_text);
+        assert!(!build_request("build --no-page-text --debug web").page_text);
+        assert!(error("build web --no-page-text=yes").contains("no option"));
     }
 
     #[test]

@@ -633,6 +633,13 @@ impl Application for FrusApp {
         self.strategy
     }
 
+    fn prerendered_paths(&self) -> Vec<String> {
+        self.router
+            .as_ref()
+            .map(GoRouter::prerendered_paths)
+            .unwrap_or_default()
+    }
+
     fn instance_id(&self) -> Option<String> {
         self.instance.clone()
     }

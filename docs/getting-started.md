@@ -596,8 +596,10 @@ frus build web       # the application into web/pkg/; the site to deploy in targ
 `target/frus-web/<package>/`: **that copy is the site to deploy**. Its `index.html` gets the
 first screen's text, read from the built page in Chrome or Edge with no window, so that search
 engines and link previews find words where the canvas has pixels; your `web/index.html` is
-never written. `--no-page-text` skips that step, and a machine with neither browser leaves the
-page as `web/` has it, with a warning. See [the web](guide/web.md).
+never written. With addresses written as paths (`LocationStrategy::Path`), every route gets a
+page of its own with its text (`settings/index.html` for `/settings`). `--no-page-text` skips
+that step, and a machine with neither browser leaves the page as `web/` has it, with a warning.
+See [the web](guide/web.md#find-printing-and-search-engines).
 
 By hand, the APK is `cargo apk build --lib --release`, and `--lib` is not decoration. A
 frus crate carries **both** a library (the `cdylib` Android loads, holding your

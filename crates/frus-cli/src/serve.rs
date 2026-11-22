@@ -33,20 +33,53 @@ const DEVTOOLS_PATH: &str = "/__frus/devtools";
 /// Where the page posts its text for `frus build web` (milestone 830).
 const PAGE_TEXT_PATH: &str = "/__frus/page-text";
 
-/// The script added to the page `frus build web` takes the text of (milestone 830): once the
-/// application answers `window.__frusPageText()` with the same text three times in a row, a
-/// quarter of a second apart, the text is posted to `/__frus/page-text`.
+/// The script added to the page `frus build web` takes the text of (milestones 830, 833).
+///
+/// It asks the application which locations to write a page for (`window.__frusPrerender`,
+/// answered by the shell before the first frame). Once `window.__frusPageText()` gives the same
+/// text three times in a row, a quarter of a second apart, the first screen's is posted to
+/// `/__frus/page-text` with that answer. For an application whose addresses are paths, the
+/// script then moves it to each location as the browser's back button would (the address
+/// changed, then `popstate`), takes the text there the same way, and posts it with where the
+/// application ended up (a redirect lands elsewhere). `{"kind":"done"}` ends it. A list gives
+/// at most `ROWS` rows; no more than `LIMIT` locations are visited.
 const PAGE_TEXT_PROBE: &str = r#"<script>(() => {
-  let last = null, steady = 0;
-  const ask = setInterval(() => {
-    if (typeof window.__frusPageText !== 'function') return;
-    const text = window.__frusPageText();
-    if (!text || text === '<main></main>') return;
-    if (text === last) steady += 1; else { last = text; steady = 0; }
-    if (steady < 3) return;
-    clearInterval(ask);
-    fetch('/__frus/page-text', { method: 'POST', body: text }).catch(() => {});
-  }, 250);
+  window.__frusPrerender = {};
+  const ROWS = 200, LIMIT = 500;
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+  const post = (body) => fetch('/__frus/page-text', { method: 'POST', body: JSON.stringify(body) })
+    .catch(() => {});
+  const where = () => location.pathname + location.search;
+  const settle = async (patience) => {
+    let last = null, steady = 0;
+    for (const until = Date.now() + patience; Date.now() < until; ) {
+      await sleep(250);
+      if (typeof window.__frusPageText !== 'function') continue;
+      const text = window.__frusPageText(ROWS);
+      if (!text || text === '<main></main>') continue;
+      if (text === last) steady += 1; else { last = text; steady = 0; }
+      if (steady >= 3) return text;
+    }
+    return last;
+  };
+  (async () => {
+    const first = await settle(600000);
+    const ask = window.__frusPrerender;
+    const paths = Array.isArray(ask.paths) ? ask.paths : [];
+    await post({ kind: 'page', path: null, location: where(), title: document.title, text: first,
+      strategy: ask.strategy || '', paths });
+    if (ask.strategy === 'path') {
+      for (const path of paths.slice(0, LIMIT)) {
+        if (typeof path !== 'string' || !path.startsWith('/')) continue;
+        history.pushState(null, '', path);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        await sleep(300);
+        const text = await settle(20000);
+        await post({ kind: 'page', path, location: where(), title: document.title, text });
+      }
+    }
+    await post({ kind: 'done' });
+  })();
 })();</script>"#;
 
 /// The script added to the page under `frus run --hot`: it asks for the latest patch until the
@@ -185,9 +218,9 @@ pub(crate) struct Site {
     /// The simulated device the page stands in for, under `frus run -d <device> --web`
     /// (milestone 724): told to the shell before the application loads.
     pub device: Option<String>,
-    /// Under `frus build web` (milestone 830): the page is asked for its text, which is put
-    /// here. The page then has nothing else added.
-    pub page_text: Option<Arc<Mutex<Option<String>>>>,
+    /// Under `frus build web` (milestones 830, 833): the page is asked for its text, and each
+    /// answer it posts is put here, in order. The page then has nothing else added.
+    pub page_text: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 /// The latest hot-reload patch, as the engine sent it, and how many there were: what a page
@@ -343,7 +376,7 @@ fn handle(
         reader.read_exact(&mut body)?;
         if let Some(slot) = &site.page_text {
             if let Ok(mut slot) = slot.lock() {
-                *slot = Some(String::from_utf8_lossy(&body).into_owned());
+                slot.push(String::from_utf8_lossy(&body).into_owned());
             }
         }
         return respond(&mut stream, "204 No Content", "text/plain", b"");
@@ -385,9 +418,18 @@ fn handle(
     if method != "GET" && method != "HEAD" {
         return respond(&mut stream, "405 Method Not Allowed", "text/plain", b"");
     }
-    match site_file(site, path) {
+    let (file, fallback) = match site_file(site, path) {
+        Some(file) => (Some(file), false),
+        None => (page_for_address(&site.dir, path), true),
+    };
+    match file {
         Some(file) => match std::fs::read(&file) {
             Ok(mut bytes) => {
+                if fallback {
+                    // Answered at a deeper address than its own, the page's relative URLs
+                    // (`./pkg/app.js`) are made to mean what they mean at `/`.
+                    bytes = with_root_base(&String::from_utf8_lossy(&bytes)).into_bytes();
+                }
                 if site.page_text.is_some()
                     && file.file_name().is_some_and(|name| name == "index.html")
                 {
@@ -490,6 +532,33 @@ pub(crate) fn file_for(dir: &Path, path: &str) -> Option<PathBuf> {
     }
     let file = dir.join(relative);
     file.is_file().then_some(file)
+}
+
+/// The page that answers an address no file has (milestone 833): `index.html`, for a path
+/// whose last segment has no extension (`/settings`, `/products/3`), the way a static host's
+/// "single-page application" rule answers it. An application whose addresses are paths
+/// (`LocationStrategy::Path`) is then reloaded at any of its addresses; a missing file
+/// (`/pkg/missing.js`, `/favicon.ico`) is still not found.
+pub(crate) fn page_for_address(dir: &Path, path: &str) -> Option<PathBuf> {
+    let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if last.contains('.') || path.starts_with("/__frus/") {
+        return None;
+    }
+    file_for(dir, "/")
+}
+
+/// `page` with `<base href="/">` at the top of its `<head>`, unless it has a `<base>` of its own.
+pub(crate) fn with_root_base(page: &str) -> String {
+    if page.to_ascii_lowercase().contains("<base ") {
+        return page.to_string();
+    }
+    match page.find("<head>") {
+        Some(at) => {
+            let at = at + "<head>".len();
+            format!("{}\n    <base href=\"/\">{}", &page[..at], &page[at..])
+        }
+        None => format!("<base href=\"/\">\n{page}"),
+    }
 }
 
 /// `index.html` with the console bridge at the top of its `<head>`, so it runs before the
@@ -644,6 +713,18 @@ mod tests {
         assert_eq!(file_for(&dir, "/missing.js"), None);
         assert_eq!(file_for(&dir, "/../secret"), None);
         assert_eq!(file_for(&dir, "/pkg/../../secret"), None);
+        // An address is answered with the page; a missing file is not (milestone 833).
+        assert_eq!(
+            page_for_address(&dir, "/settings"),
+            Some(dir.join("index.html"))
+        );
+        assert_eq!(
+            page_for_address(&dir, "/products/3/"),
+            Some(dir.join("index.html"))
+        );
+        assert_eq!(page_for_address(&dir, "/pkg/missing.js"), None);
+        assert_eq!(page_for_address(&dir, "/favicon.ico"), None);
+        assert_eq!(page_for_address(&dir, "/__frus/nothing"), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -770,7 +851,15 @@ mod tests {
         assert!(page.contains("/__frus/log"), "{page}");
         let posted = ask("POST /__frus/log?level=info HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello");
         assert!(posted.starts_with("HTTP/1.1 204"), "{posted}");
-        assert!(ask("GET /nope HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 404"));
+        assert!(ask("GET /nope.js HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 404"));
+        // An address with no file is answered with the page, its URLs read from the root
+        // (milestone 833): a reload at a path address works.
+        let deep = ask("GET /settings/advanced HTTP/1.1\r\n\r\n");
+        assert!(deep.starts_with("HTTP/1.1 200 OK"), "{deep}");
+        assert!(
+            deep.contains("<base href=\"/\">") && deep.contains("/__frus/log"),
+            "{deep}"
+        );
         // The build the page polls moves on when a restart has made a new one.
         assert!(ask("GET /__frus/build HTTP/1.1\r\n\r\n").ends_with("\r\n\r\n0"));
         server.rebuilt(false);

@@ -8629,6 +8629,9 @@ impl<A: Application> App<A> {
         }
         crate::address::listen(window.clone(), strategy, base.clone());
         self.address = (strategy, base);
+        // `frus build web` asks which locations to write a page for (milestone 833); a page
+        // nobody builds from never has the question, and the routes are never listed.
+        crate::address::answer_prerender(strategy, || self.app.prerendered_paths());
         if let Some(location) = location {
             let command = self.app.open_location(&location);
             self.run_command(command);
