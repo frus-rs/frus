@@ -19,6 +19,13 @@ any release may break.
   converted to linear light once a rect, in the vertex shader, instead of once a pixel. On
   the test phone (Mali-G51) the demo's home page scrolls with frames 50 ms apart instead of
   82 ms (median), and its render time per frame falls from 53 ms to 23 ms, with the same pixels.
+- **Animations keep real time on slow frames** (J834). The shell used to move animations by at
+  most 50 ms a frame, so on a page drawn at four frames a second every animation ran several
+  times slower than written. A frame of a running motion now moves its animations by the whole
+  time that passed, up to half a second; a longer gap (a breakpoint, a frozen process) counts as
+  one frame, and the first frame after the screen was at rest moves one frame instead of the time
+  spent at rest. `spring_step` takes a long step in pieces of at most `SPRING_SUBSTEP` (20 ms),
+  so a stiff spring stays stable at any frame rate.
 
 - **Every route has its own page for search engines; the real find bar, Firefox and WebKit**
   (J833). `frus build web` now writes, for an application whose addresses are paths

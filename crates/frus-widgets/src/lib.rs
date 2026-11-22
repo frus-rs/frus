@@ -636,7 +636,7 @@ pub use router::{
 pub use rowcolumn::{Column, MainAxisSize, Row, VerticalDirection};
 pub use runtime::{
     spring_ease, spring_step, Anim, Edit, Runtime, ScrollBallistic, ScrollState, ScrollbarFade,
-    SelectionHandle, ToolbarMark, TransformValues, ValueAnim,
+    SelectionHandle, ToolbarMark, TransformValues, ValueAnim, SPRING_SUBSTEP,
 };
 pub use safearea::SafeArea;
 pub use scaffold::{
