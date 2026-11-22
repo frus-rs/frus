@@ -31,9 +31,11 @@ struct InstanceInput {
 };
 
 struct VertexOutput {
+    // In the fragment stage, the pixel's centre in the target, which is where every other
+    // position of a pixel is taken from (milestone 837).
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) local_px: vec2<f32>,
-    @location(1) uv: vec2<f32>,
+    // The rect's centre: a pixel's position from it is its position less this.
+    @location(0) @interpolate(flat) center: vec2<f32>,
     @location(2) @interpolate(flat) half_size: vec2<f32>,
     @location(3) @interpolate(flat) radii: vec4<f32>,
     @location(4) @interpolate(flat) border_width: f32,
@@ -42,7 +44,6 @@ struct VertexOutput {
     @location(7) @interpolate(flat) color2: vec4<f32>,
     @location(8) @interpolate(flat) border: vec4<f32>,
     @location(9) @interpolate(flat) gradient: vec4<f32>,
-    @location(10) frag_px: vec2<f32>,
     @location(11) @interpolate(flat) clip: vec4<f32>,
     @location(12) @interpolate(flat) shade: vec2<f32>,
     // The fill already in linear light, when it is one flat colour with no border: what
@@ -68,7 +69,16 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
         margin = max(3.0 * blur_sigma(blur) - blur, 0.0) + 1.0;
     }
     let size = inst.rect.zw + vec2<f32>(2.0 * margin, 2.0 * margin);
-    let pos_px = inst.rect.xy - vec2<f32>(margin, margin) + vert.unit_pos * size;
+    // **The quad is held to the clip** (milestone 837), grown by a pixel so that every
+    // sample of a pixel whose centre is inside the clip is still covered. The fragment
+    // stage gives a pixel outside the clip no coverage at all, so what lies beyond it was
+    // shaded for nothing: a card taller than the list it scrolls in shaded its whole height,
+    // and its shadows theirs, where only the part inside the list shows.
+    let pos_px = clamp(
+        inst.rect.xy - vec2<f32>(margin, margin) + vert.unit_pos * size,
+        inst.clip.xy - vec2<f32>(1.0, 1.0),
+        inst.clip.xy + inst.clip.zw + vec2<f32>(1.0, 1.0),
+    );
 
     let ndc = vec2<f32>(
         pos_px.x / viewport.size.x * 2.0 - 1.0,
@@ -77,13 +87,10 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
 
     var out: VertexOutput;
     out.clip_position = vec4<f32>(ndc, 0.0, 1.0);
-    out.local_px = (vert.unit_pos - vec2<f32>(0.5, 0.5)) * size;
-    // Across the rect itself, whatever the quad's margin; exactly the corner's own when
-    // there is none.
-    out.uv = vert.unit_pos;
-    if (margin > 0.0) {
-        out.uv = out.local_px / max(inst.rect.zw, vec2<f32>(1e-6, 1e-6)) + vec2<f32>(0.5, 0.5);
-    }
+    // A pixel's place in the rect is read from its own centre in the fragment stage, not
+    // carried across the quad: the quad's corners move with the clip, and a position
+    // interpolated between moved corners would round differently from one clip to the next.
+    out.center = inst.rect.xy + inst.rect.zw * 0.5;
     out.half_size = inst.rect.zw * 0.5;
     out.radii = inst.radii;
     out.border_width = inst.params.y;
@@ -93,7 +100,6 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.border = inst.border;
     out.gradient = inst.gradient;
     out.shade = vec2<f32>(inst.params.x, inst.params.w);
-    out.frag_px = pos_px;
     out.clip = inst.clip;
     // A flat fill, one colour with no border, is converted to linear light once here and
     // not once a pixel: a page's background and its cards are most of its pixels, and the
@@ -263,16 +269,18 @@ fn blurred_box(p: vec2<f32>, half_size: vec2<f32>, corner: f32, sigma: f32) -> f
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let frag_px = in.clip_position.xy;
+    let local_px = frag_px - in.center;
     // Clipping.
     let inside_clip = f32(
-        in.frag_px.x >= in.clip.x
-        && in.frag_px.x <= in.clip.x + in.clip.z
-        && in.frag_px.y >= in.clip.y
-        && in.frag_px.y <= in.clip.y + in.clip.w
+        frag_px.x >= in.clip.x
+        && frag_px.x <= in.clip.x + in.clip.z
+        && frag_px.y >= in.clip.y
+        && frag_px.y <= in.clip.y + in.clip.w
     );
 
-    let r = min(corner_radius(in.local_px, in.radii), min(in.half_size.x, in.half_size.y));
-    let d = sdf_round_box(in.local_px, in.half_size, r);
+    let r = min(corner_radius(local_px, in.radii), min(in.half_size.x, in.half_size.y));
+    let d = sdf_round_box(local_px, in.half_size, r);
 
     // A hard edge, half a pixel either side of it, or, for a shadow, its shape blurred by a
     // gaussian. The shadow's rect reaches `blur` beyond the shape, its corners `blur` rounder,
@@ -285,11 +293,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.blur > 0.0) {
         let shape_half = max(in.half_size - vec2<f32>(in.blur, in.blur), vec2<f32>(0.0, 0.0));
         let shape_r = min(max(r - in.blur, 0.0), min(shape_half.x, shape_half.y));
-        alpha = blurred_box(in.local_px, shape_half, shape_r, blur_sigma(in.blur));
+        alpha = blurred_box(local_px, shape_half, shape_r, blur_sigma(in.blur));
         // The blur style (milestone 645), read where a flat fill leaves the ramp row
         // free: what of the blur to keep, inside the shape or outside it.
         let style = i32(round(in.shade.y));
-        let inside = 1.0 - smoothstep(-0.5, 0.5, sdf_round_box(in.local_px, shape_half, shape_r));
+        let inside = 1.0 - smoothstep(-0.5, 0.5, sdf_round_box(local_px, shape_half, shape_r));
         if (code == 0 && style == 1) {
             alpha = max(alpha, inside);
         } else if (code == 0 && style == 2) {
@@ -308,10 +316,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // dir = 0 and color2 = color).
     var fill: vec4<f32>;
     if (code == 0) {
-        let t = clamp(dot(in.uv - vec2<f32>(0.5, 0.5), in.gradient.xy) + 0.5, 0.0, 1.0);
+        // Across the rect itself, whatever the quad's margin.
+        let uv = local_px / max(2.0 * in.half_size, vec2<f32>(1e-6, 1e-6)) + vec2<f32>(0.5, 0.5);
+        let t = clamp(dot(uv - vec2<f32>(0.5, 0.5), in.gradient.xy) + 0.5, 0.0, 1.0);
         fill = mix(in.color, in.color2, t);
     } else {
-        fill = gradient_fill(code, in.local_px, in.gradient, in.color2, in.shade.y);
+        fill = gradient_fill(code, local_px, in.gradient, in.color2, in.shade.y);
     }
 
     // The border: a ring along the edge.
