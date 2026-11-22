@@ -162,6 +162,11 @@ impl<Msg: Clone> Widget<Msg> for Semantics<Msg> {
 
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {}
 
+    /// A heading's words are a heading on the page too (milestone 833).
+    fn page_heading(&self) -> bool {
+        self.props.role == Role::Heading
+    }
+
     /// It states what its child **is**, never what it does: an annotation that swallowed a
     /// click would put a hit target over the widget it was describing.
     fn on_click(&self) -> Option<Msg> {

@@ -8,10 +8,27 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 832 so far, each documenting the objective, the alternatives
+> record — one per step, 833 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Every route has its own page for search engines; the real find bar, Firefox and WebKit**
+  (J833). `frus build web` now writes, for an application whose addresses are paths
+  (`LocationStrategy::Path`), a page of its own for every route without a parameter and every
+  location listed with the new `GoRouter::prerender_paths` (`settings/index.html` for
+  `/settings`), each with that page's text, a title and a description; a route that redirects
+  gets none; an `AppBar`'s title is now a heading on the page, and the route's title. Lists
+  give 200 rows and a page holds 256 KB at most. `GoRouter::paths`,
+  `GoRouter::prerendered_paths` and `Application::prerendered_paths` say which; nothing of it
+  runs in a released application. `frus run -d web` answers any address with no file with the
+  page, so a reload at a path address works. The browser's real find bar, driven on a windowed
+  Edge, found a bug the headless check could not: a desktop find scrolls smoothly, and the
+  layer put each box back before the scroll's event came, so the find bar left the journal at
+  row 39 instead of row 4321; a box the browser moved is now a request the frame sees itself.
+  Checked in Edge (real Ctrl+F), Firefox (real Ctrl+F, printing) and WebKit (Playwright). The
+  gallery's Pages workflow and the `release.yml` that `frus create` writes build their sites
+  with `frus build web`, and so get the page's text.
 
 ## [0.6.0] - 2026-11-21
 

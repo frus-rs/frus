@@ -164,6 +164,20 @@ pub trait Application {
         LocationStrategy::Hash
     }
 
+    /// **The locations a built site writes a page for** (milestone 833): `frus build web`
+    /// opens the application at each, takes what it shows there, and writes it into a page of
+    /// its own (`settings/index.html` for `/settings`), so a search engine reading the site
+    /// without running it finds every page's words at its address. Only for an application
+    /// whose addresses are paths ([`LocationStrategy::Path`]): behind a `#`, every address is
+    /// the one page to a server. Empty, the default, writes the first screen only.
+    ///
+    /// A router answers its routes without a parameter and the ones it was given
+    /// ([`GoRouter::prerendered_paths`](frus_widgets::GoRouter::prerendered_paths)). Asked
+    /// only by the build: a running application never calls it.
+    fn prerendered_paths(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// **Continuous** sources of messages — timers and so on — declared from the
     /// state. The framework starts and stops them by diffing every cycle.
     fn subscription(&self) -> Subscription<Self::Message> {

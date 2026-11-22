@@ -287,6 +287,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.page_words())
     }
 
+    fn page_heading(&self) -> bool {
+        self.inner.as_ref().is_some_and(|w| w.page_heading())
+    }
+
     fn region_toolbar(
         &self,
         context: crate::ToolbarContext,

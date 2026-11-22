@@ -131,6 +131,33 @@ mod tests {
         );
     }
 
+    /// **An app bar's title is a heading on the page** (milestone 833), as it is to a screen
+    /// reader: the page a build writes for a route takes it for its title. The texts beside it
+    /// are not.
+    #[test]
+    fn an_app_bars_title_is_a_heading_on_the_page() {
+        let mut runtime = Runtime::default();
+        runtime.page_text = true;
+        let tree = Flex::column()
+            .child(crate::AppBar::new().title(Text::new("Cart")))
+            .child(Text::new("Your cart is empty").no_wrap())
+            .child(crate::Semantics::heading(Text::new("Section").no_wrap()));
+        let ui = frame(&tree, &runtime);
+        let texts: Vec<(&str, bool)> = ui
+            .page_text()
+            .iter()
+            .map(|t| (t.words.words.as_str(), t.words.heading))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("Cart", true),
+                ("Your cart is empty", false),
+                ("Section", true)
+            ]
+        );
+    }
+
     /// **A list that says what its rows say is recorded**, where it comes in reading order —
     /// and its words are not asked for: that waits for a find, a print or a build.
     #[test]

@@ -3084,6 +3084,9 @@ struct Builder<'a, Msg> {
     focus_scope_start: Option<usize>,
     /// Set while inside an `ExcludeFocus`: nothing in here registers a focus stop.
     focus_excluded: bool,
+    /// Set while inside a widget whose texts are a heading on the page
+    /// ([`Widget::page_heading`]), when the page's text is recorded (milestone 833).
+    page_heading: bool,
     /// Where a press or a drag can land, when that is less than what is drawn: inside a
     /// stack that lets its layers hang over its edges, its own box (milestone 639).
     touch_clip: Option<Rect>,
@@ -3931,6 +3934,11 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if widget.backdrop_group() {
             self.backdrop_group = Some(id.as_u64());
         }
+        // Whether the page's texts in here are a heading, scoped the same way (milestone 833).
+        let outer_heading = self.page_heading;
+        if self.runtime.page_text && widget.page_heading() {
+            self.page_heading = true;
+        }
         // The form a field belongs to, scoped the same way (milestone 512).
         let outer_form = self.autofill_group;
         if widget.autofill_group() {
@@ -3948,6 +3956,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         ) = outer;
         self.backdrop_group = outer_group;
         self.autofill_group = outer_form;
+        self.page_heading = outer_heading;
         self.close_scope(widget, stops_before);
     }
 
@@ -4637,7 +4646,8 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             && draw_rect.width > 0.0
             && draw_rect.height > 0.0
         {
-            if let Some(words) = widget.page_words() {
+            if let Some(mut words) = widget.page_words() {
+                words.heading |= self.page_heading;
                 self.page_text.push(crate::PageText {
                     id,
                     rect: draw_rect,
@@ -7734,6 +7744,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         semantics: Vec::new(),
         system_ui: Vec::new(),
         focus_excluded: false,
+        page_heading: false,
         touch_clip: None,
         backdrop_group: None,
         focus_skipped: false,

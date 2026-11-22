@@ -155,6 +155,20 @@ pub(crate) fn row_boxes(
         .collect()
 }
 
+/// Whether the browser moved a region's box since this module last scrolled it to
+/// `expected` (milestone 833): it is now at `now`, and could scroll as far as `room`, on one
+/// axis, in CSS pixels. A box the browser only stopped short, because its content shrank, did
+/// not move; a pixel of rounding is no move either.
+///
+/// A find scrolls the box to its match, and on a desktop it does so **smoothly**: the box
+/// moves over a few frames, and the `scroll` event of each step comes after the frame that
+/// follows it. A frame that put the box back where the application was, before that event,
+/// stopped the animation and made the event read as an echo: Edge's find bar was left a few
+/// rows into its way to row 4321 of the journal. Such a move is seen by the frame itself.
+pub(crate) fn moved_by_browser(now: f64, expected: f64, room: f64) -> bool {
+    (now - expected.clamp(0.0, room.max(0.0))).abs() > 1.0
+}
+
 /// `text` made safe to put in HTML, its line breaks kept.
 pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -197,18 +211,21 @@ pub(crate) type DocumentText<'a> = (Option<WidgetId>, &'a str, bool);
 /// The page's text as a **plain document**, for printing and for search engines: the texts in
 /// reading order, a heading as `<h2>` and the rest as paragraphs, and each list that says what
 /// its rows say as a `<ul>` of **all** its rows, where the list is — its rows built this frame
-/// left out, being among them. `parents` says which region each region is in.
+/// left out, being among them. `parents` says which region each region is in. `max_rows`
+/// caps the rows each list gives: a print takes them all, a build's page a first part
+/// (milestone 833), so a list of a million rows does not make a page of a hundred megabytes.
 pub(crate) fn document_html<'a>(
     texts: impl IntoIterator<Item = Option<DocumentText<'a>>>,
     lists: &[PageList],
     parents: &HashMap<WidgetId, Option<WidgetId>>,
+    max_rows: usize,
 ) -> String {
     let listed: HashSet<WidgetId> = lists.iter().map(|list| list.id).collect();
     let mut out = String::from("<main>");
     let mut pending = lists.iter().peekable();
     let write_list = |out: &mut String, list: &PageList| {
         out.push_str("<ul>");
-        for index in 0..list.count {
+        for index in 0..list.count.min(max_rows) {
             out.push_str("<li>");
             out.push_str(&escape((list.item_text)(index).trim()));
             out.push_str("</li>");
@@ -271,7 +288,7 @@ mod live {
 
     use frus_widgets::{PageList, PageText, WidgetId};
 
-    use super::{box_style, document_html, place, px, row_boxes, Region};
+    use super::{box_style, document_html, moved_by_browser, place, px, row_boxes, Region};
 
     /// The id of the layer, of its style sheet, of the printed document and of the page's
     /// text written in at build time.
@@ -421,7 +438,7 @@ background:#fff!important;display:block!important}\
     }
 
     impl State {
-        fn document(&self) -> String {
+        fn document(&self, max_rows: usize) -> String {
             document_html(
                 self.order.iter().map(|(id, scroll)| {
                     self.texts
@@ -430,6 +447,7 @@ background:#fff!important;display:block!important}\
                 }),
                 &self.lists,
                 &self.parents,
+                max_rows,
             )
         }
 
@@ -448,7 +466,7 @@ background:#fff!important;display:block!important}\
         scrolls: Scrolls,
         window: Arc<Window>,
         _print: [Closure<dyn FnMut(web_sys::Event)>; 2],
-        _text: Closure<dyn FnMut() -> JsValue>,
+        _text: Closure<dyn FnMut(JsValue) -> JsValue>,
     }
 
     impl TextLayer {
@@ -500,7 +518,7 @@ background:#fff!important;display:block!important}\
                     let Ok(mut state) = state.try_borrow_mut() else {
                         return;
                     };
-                    let html = state.document();
+                    let html = state.document(usize::MAX);
                     if let Some(old) = state.print.take() {
                         old.remove();
                     }
@@ -532,15 +550,20 @@ background:#fff!important;display:block!important}\
             let _ = target
                 .add_event_listener_with_callback("afterprint", after.as_ref().unchecked_ref());
 
-            // The plain document, for `frus build web` to write into the page it builds.
+            // The plain document, for `frus build web` to write into the page it builds; its
+            // argument, when it is a number, caps the rows each list gives (milestone 833).
             let text = {
                 let state = state.clone();
-                Closure::wrap(Box::new(move || {
+                Closure::wrap(Box::new(move |max_rows: JsValue| {
+                    let max_rows = max_rows
+                        .as_f64()
+                        .filter(|n| *n >= 0.0)
+                        .map_or(usize::MAX, |n| n as usize);
                     state
                         .try_borrow()
-                        .map(|state| JsValue::from_str(&state.document()))
+                        .map(|state| JsValue::from_str(&state.document(max_rows)))
                         .unwrap_or(JsValue::NULL)
-                }) as Box<dyn FnMut() -> JsValue>)
+                }) as Box<dyn FnMut(JsValue) -> JsValue>)
             };
             let _ = js_sys::Reflect::set(&page, &"__frusPageText".into(), text.as_ref());
 
@@ -690,11 +713,24 @@ background:#fff!important;display:block!important}\
                     (number(el, "scrollWidth") - number(el, "clientWidth")).max(0.0),
                     (number(el, "scrollHeight") - number(el, "clientHeight")).max(0.0),
                 );
+                // Moved by the browser since this module last scrolled it (a find, smoothly,
+                // its scroll event still to come): the move is the request, and the box stays
+                // where the browser has it, so that its scroll goes on.
+                let now = (number(el, "scrollLeft"), number(el, "scrollTop"));
+                let expected = live.expected.get();
+                if moved_by_browser(now.0, expected.0, room.0)
+                    || moved_by_browser(now.1, expected.1, room.1)
+                {
+                    live.expected.set(now);
+                    self.scrolls.borrow_mut().push((region.id, now));
+                    self.window.request_redraw();
+                    repaint_later(el);
+                    continue;
+                }
                 let want = (
                     f64::from(x * k).clamp(0.0, room.0),
                     f64::from(y * k).clamp(0.0, room.1),
                 );
-                let now = (number(el, "scrollLeft"), number(el, "scrollTop"));
                 if (now.0 - want.0).abs() > 0.5 || (now.1 - want.1).abs() > 0.5 {
                     live.expected.set(want);
                     set_number(el, "scrollLeft", want.0);
@@ -1044,10 +1080,25 @@ mod tests {
                 .map(|t| Some((t.scroll, t.words.words.as_str(), t.words.heading))),
             &lists,
             &parents,
+            usize::MAX,
         );
         assert_eq!(
             html,
             "<main><h2>Contacts</h2><ul><li>Row 0</li><li>Row 1</li><li>Row 2</li></ul>\
+             <p>Tom &amp; &lt;Jerry&gt;<br>second line</p></main>"
+        );
+        // A build's page takes the first rows of each list only (milestone 833).
+        let capped = document_html(
+            texts
+                .iter()
+                .map(|t| Some((t.scroll, t.words.words.as_str(), t.words.heading))),
+            &lists,
+            &parents,
+            2,
+        );
+        assert_eq!(
+            capped,
+            "<main><h2>Contacts</h2><ul><li>Row 0</li><li>Row 1</li></ul>\
              <p>Tom &amp; &lt;Jerry&gt;<br>second line</p></main>"
         );
     }
@@ -1061,8 +1112,30 @@ mod tests {
             item_text: Rc::new(|_| "only".into()),
             at: 1,
         }];
-        let html = document_html([Some((None, "  ", false)), None], &lists, &HashMap::new());
+        let html = document_html(
+            [Some((None, "  ", false)), None],
+            &lists,
+            &HashMap::new(),
+            usize::MAX,
+        );
         assert_eq!(html, "<main><ul><li>only</li></ul></main>");
+    }
+
+    /// **A box the browser moved is a request, even before its scroll event** (milestone 833):
+    /// a find's smooth scroll, part way; not the box stopped short by a shorter content, nor a
+    /// pixel of rounding.
+    #[test]
+    fn a_box_the_browser_moved_is_told_from_one_this_module_moved() {
+        // Left at 1688, now at 2400 on its way to a match: moved.
+        assert!(moved_by_browser(2400.0, 1688.0, 219_662.0));
+        // Where it was left, or a browser's rounding of it: not moved.
+        assert!(!moved_by_browser(1688.0, 1688.0, 219_662.0));
+        assert!(!moved_by_browser(1688.6, 1688.0, 219_662.0));
+        // The content shrank under it: the browser stopped it at the new end.
+        assert!(!moved_by_browser(300.0, 500.0, 300.0));
+        assert!(!moved_by_browser(0.0, 500.0, 0.0));
+        // Stopped short of the end, though: moved.
+        assert!(moved_by_browser(120.0, 500.0, 300.0));
     }
 
     #[test]
