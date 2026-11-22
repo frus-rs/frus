@@ -8,10 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 836 so far, each documenting the objective, the alternatives
+> record — one per step, 837 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **The GPU no longer shades shadows hidden under the surface that casts them, nor anything
+  outside a rect's clip** (J837). A rect's quad is now held to its clip in the vertex stage,
+  where the clip used to be tested only per pixel; and a shadow followed in its batch by an
+  opaque rect is drawn as the ring around the part that rect covers fully, since what it put
+  there is painted over anyway. The picture does not change (a GPU test compares every pixel
+  with and without the cut, and the goldens pass unchanged). On the demo's home page, whose
+  task list is one card taller than the screen with three shadows, about 5.5 million shaded
+  shadow pixels a frame go.
 
 - **Scrolling a page with a `LayoutBuilder` on it no longer lays the page out every frame**
   (J836). A `LayoutBuilder` marked every layout root above it as never reusable, so the demo's

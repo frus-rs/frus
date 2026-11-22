@@ -94,6 +94,146 @@ struct Viewport {
     _pad: [f32; 2],
 }
 
+/// The deviation of a shadow's gaussian from its blur radius, as `quad.wgsl` computes it.
+fn blur_sigma(blur: f32) -> f32 {
+    blur * 0.57735 + 0.5
+}
+
+/// How far a shadow's quad reaches beyond its rect, as `quad.wgsl`'s vertex stage grows it.
+fn shadow_margin(blur: f32) -> f32 {
+    if blur > 0.0 {
+        (3.0 * blur_sigma(blur) - blur).max(0.0) + 1.0
+    } else {
+        0.0
+    }
+}
+
+/// Whether `instance` leaves nothing of what is under it wherever it covers a pixel fully:
+/// one opaque colour (or an opaque two-colour fade), an opaque border or none, no blur.
+fn is_opaque(instance: &Instance) -> bool {
+    let [code, border_width, blur, _] = instance.params;
+    code < 0.5
+        && blur <= 0.0
+        && instance.color[3] >= 1.0
+        && ((instance.gradient[0] == 0.0 && instance.gradient[1] == 0.0)
+            || instance.color2[3] >= 1.0)
+        && (border_width <= 0.0 || instance.border_color[3] >= 1.0)
+}
+
+/// `[x0, y0, x1, y1]` of an `[x, y, width, height]` rectangle.
+fn edges(r: [f32; 4]) -> [f32; 4] {
+    [r[0], r[1], r[0] + r[2], r[1] + r[3]]
+}
+
+/// **Where an opaque rect covers every pixel fully**, held to its clip: the rect less its
+/// largest corner and a pixel more all round, where the shader's coverage is exactly one.
+/// Edges on whole pixels, inward, so that no pixel centre lies on one.
+fn fully_covered(instance: &Instance) -> [f32; 4] {
+    let inset = instance.radii.iter().fold(0.0f32, |a, &r| a.max(r)) + 1.0;
+    let [x0, y0, x1, y1] = edges(instance.rect);
+    let [cx0, cy0, cx1, cy1] = edges(instance.clip);
+    [
+        (x0 + inset).max(cx0).ceil(),
+        (y0 + inset).max(cy0).ceil(),
+        (x1 - inset).min(cx1).floor(),
+        (y1 - inset).min(cy1).floor(),
+    ]
+}
+
+/// The smallest hidden part worth cutting out of a shadow, in pixels on each side: below
+/// it, four quads cost more than the pixels they save.
+const SMALLEST_HIDDEN: f32 = 16.0;
+
+/// How far after a shadow the rect that covers it is looked for: a surface's shadows come
+/// right before it, one to three of them.
+const COVER_LOOKAHEAD: usize = 6;
+
+/// **Shadows are not shaded where the surface over them hides them** (milestone 837).
+///
+/// An elevated surface paints its shadows and then itself, over them, in the same batch: a
+/// card in a list is three blurred rects the size of the card, then the card. Wherever the
+/// card is opaque and covers a pixel fully, what the shadows put there is painted over, and
+/// a shadow's pixel is the dearest pixel the rect shader computes. On the test phone a card
+/// taller than the screen shaded about two screens of hidden shadow every frame.
+///
+/// So a shadow instance followed in its batch (within [`COVER_LOOKAHEAD`]) by an opaque
+/// rect is replaced by up to four: the same shadow, each clipped to one band of the ring
+/// left around the part the rect covers fully. The vertex stage holds each quad to its
+/// clip, so the hidden part is never rasterised. The bands' shared edges lie on whole
+/// pixels, so every pixel centre outside the hidden part is in exactly one band, and the
+/// clip test gives it the same colour it had: the picture does not change.
+///
+/// Within one draw, instances are drawn in order, and nothing of another batch comes
+/// between two instances of the same batch, so the opaque rect is the last word on those
+/// pixels whatever came between.
+fn cut_hidden_shadows(instances: &mut Vec<Instance>, start: usize, out: &mut Vec<Instance>) {
+    let batch = &instances[start..];
+    let worth = batch.iter().enumerate().any(|(i, s)| {
+        s.params[2] > 0.0 && batch[i + 1..].iter().take(COVER_LOOKAHEAD).any(is_opaque)
+    });
+    if !worth {
+        return;
+    }
+    out.clear();
+    for (i, shadow) in batch.iter().enumerate() {
+        let cover = (shadow.params[2] > 0.0)
+            .then(|| {
+                batch[i + 1..]
+                    .iter()
+                    .take(COVER_LOOKAHEAD)
+                    .find(|c| is_opaque(c))
+            })
+            .flatten();
+        let Some(cover) = cover else {
+            out.push(*shadow);
+            continue;
+        };
+        let [cx0, cy0, cx1, cy1] = edges(shadow.clip);
+        let [hx0, hy0, hx1, hy1] = fully_covered(cover);
+        // Held to the shadow's own clip and to its quad, which is all it shades.
+        let m = shadow_margin(shadow.params[2]);
+        let [qx0, qy0, qx1, qy1] = edges(shadow.rect);
+        let (hx0, hy0) = (
+            hx0.max(cx0.ceil()).max((qx0 - m).ceil()),
+            hy0.max(cy0.ceil()).max((qy0 - m).ceil()),
+        );
+        let (hx1, hy1) = (
+            hx1.min(cx1.floor()).min((qx1 + m).floor()),
+            hy1.min(cy1.floor()).min((qy1 + m).floor()),
+        );
+        if hx1 - hx0 < SMALLEST_HIDDEN || hy1 - hy0 < SMALLEST_HIDDEN {
+            out.push(*shadow);
+            continue;
+        }
+        // The ring around the hidden part, in the shadow's clip: above, below, left, right.
+        // The shader tests `x <= clip.x + clip.width`: a band whose far edge does not come
+        // back exactly from its width would move a pixel centre lying on that edge, and the
+        // shadow is then left whole.
+        let bands = [
+            [cx0, cy0, cx1, hy0],
+            [cx0, hy1, cx1, cy1],
+            [cx0, hy0, hx0, hy1],
+            [hx1, hy0, cx1, hy1],
+        ]
+        .map(|[x0, y0, x1, y1]| (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0]));
+        let exact = bands
+            .iter()
+            .zip([[cx1, hy0], [cx1, cy1], [hx0, hy1], [cx1, hy1]])
+            .all(|(band, [x1, y1])| band.is_none_or(|b| b[0] + b[2] == x1 && b[1] + b[3] == y1));
+        if !exact {
+            out.push(*shadow);
+            continue;
+        }
+        for clip in bands.into_iter().flatten() {
+            out.push(Instance { clip, ..*shadow });
+        }
+        #[cfg(test)]
+        tests::CUTS.with(|c| c.set(c.get() + 1));
+    }
+    instances.truncate(start);
+    instances.extend_from_slice(out);
+}
+
 /// How many instances the buffer allocates to begin with.
 const INITIAL_INSTANCE_CAPACITY: usize = 128;
 
@@ -114,6 +254,8 @@ pub(crate) struct Painter {
     ramp_texture: wgpu::Texture,
     ramp_bind_group: wgpu::BindGroup,
     ramp_rows: Vec<[u8; RAMP_WIDTH as usize * 4]>,
+    /// A reused buffer for [`cut_hidden_shadows`].
+    cut: Vec<Instance>,
 }
 
 /// How many colours a gradient is baked into.
@@ -380,6 +522,7 @@ impl Painter {
             ramp_texture,
             ramp_bind_group,
             ramp_rows: Vec::new(),
+            cut: Vec::new(),
         }
     }
 
@@ -483,6 +626,13 @@ impl Painter {
             if batch.kind == Kind::Rect {
                 for &index in &batch.members {
                     self.push(&scene.primitives()[index]);
+                }
+                #[cfg(test)]
+                let cut = !tests::NO_CUT.with(|c| c.get());
+                #[cfg(not(test))]
+                let cut = true;
+                if cut {
+                    cut_hidden_shadows(&mut self.instances, start as usize, &mut self.cut);
                 }
             }
             ranges.push(start..self.instances.len() as u32);
@@ -595,6 +745,138 @@ impl Painter {
 mod tests {
     use super::*;
     use crate::{Color, Rect};
+
+    thread_local! {
+        /// Turns [`cut_hidden_shadows`] off on this thread, to render the uncut picture to compare against.
+        pub(super) static NO_CUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// How many shadows [`cut_hidden_shadows`] has cut on this thread.
+        pub(super) static CUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn rect_instance(rect: [f32; 4], alpha: f32, blur: f32, clip: [f32; 4]) -> Instance {
+        Instance {
+            rect,
+            color: [0.2, 0.3, 0.4, alpha],
+            color2: [0.2, 0.3, 0.4, alpha],
+            border_color: [0.0; 4],
+            params: [0.0, 0.0, blur, 0.0],
+            gradient: [0.0; 4],
+            clip,
+            radii: [10.0; 4],
+        }
+    }
+
+    /// Whether a pixel centre is inside an instance's clip, as the shader tests it.
+    fn in_clip(i: &Instance, x: f32, y: f32) -> bool {
+        x >= i.clip[0] && x <= i.clip[0] + i.clip[2] && y >= i.clip[1] && y <= i.clip[1] + i.clip[3]
+    }
+
+    /// **A shadow under an opaque card becomes the ring around what the card hides**
+    /// (milestone 837): every pixel centre the shadow could shade is in exactly one band,
+    /// except those the card covers fully, which are in none.
+    #[test]
+    fn a_hidden_shadow_is_cut_to_a_ring() {
+        let clip = [0.0, 50.0, 400.0, 300.25];
+        let shadow = rect_instance([40.0, 20.0, 300.0, 500.0], 0.2, 8.0, clip);
+        let card = rect_instance([48.0, 28.0, 284.0, 484.0], 1.0, 0.0, clip);
+        let mut instances = vec![shadow, card];
+        let mut scratch = Vec::new();
+        cut_hidden_shadows(&mut instances, 0, &mut scratch);
+        // The card runs past the clip's top: nothing is left above it, and three bands are.
+        assert_eq!(
+            instances.len(),
+            4,
+            "the shadow's three bands, then the card"
+        );
+        let hidden = fully_covered(&card);
+        for y in 0..400 {
+            for x in 0..400 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let bands = instances[..3].iter().filter(|b| in_clip(b, px, py)).count();
+                let inside = px > hidden[0] && px < hidden[2] && py > hidden[1] && py < hidden[3];
+                let want = usize::from(in_clip(&shadow, px, py) && !inside);
+                assert_eq!(bands, want, "pixel {x},{y}");
+            }
+        }
+        assert_eq!(instances[3].clip, card.clip, "the card is left as it was");
+    }
+
+    /// A translucent card, a blurred one, a card too far after the shadow and a
+    /// shadow with nothing over it are all left whole.
+    #[test]
+    fn a_shadow_that_shows_is_left_whole() {
+        let clip = [0.0, 0.0, 400.0, 400.0];
+        let shadow = rect_instance([40.0, 20.0, 300.0, 300.0], 0.2, 8.0, clip);
+        let card = rect_instance([48.0, 28.0, 284.0, 284.0], 1.0, 0.0, clip);
+        let cases = [
+            vec![
+                shadow,
+                rect_instance([48.0, 28.0, 284.0, 284.0], 0.9, 0.0, clip),
+            ],
+            vec![
+                shadow,
+                rect_instance([48.0, 28.0, 284.0, 284.0], 1.0, 4.0, clip),
+            ],
+            vec![shadow],
+            vec![card, shadow],
+            std::iter::once(shadow)
+                .chain(std::iter::repeat_n(
+                    rect_instance([0.0; 4], 0.5, 0.0, clip),
+                    COVER_LOOKAHEAD,
+                ))
+                .chain(std::iter::once(card))
+                .collect(),
+        ];
+        for case in cases {
+            let mut instances = case.clone();
+            cut_hidden_shadows(&mut instances, 0, &mut Vec::new());
+            assert_eq!(instances.len(), case.len());
+        }
+    }
+
+    /// **The cut does not change the picture** (milestone 837): cards with shadows, under
+    /// clips that cut them on fractional pixels, rendered with and without the cut, are the
+    /// same pixel for pixel.
+    #[test]
+    fn cutting_hidden_shadows_changes_no_pixel() {
+        let mut scene = Scene::new();
+        scene.fill_rect(
+            Rect::new(0.0, 0.0, 200.0, 240.0),
+            Color::rgb(0.95, 0.95, 0.97),
+        );
+        scene.set_clip(Rect::new(3.25, 20.5, 190.0, 200.75));
+        for (i, (x, y)) in [(10.0, -30.0), (110.0, 60.5)].into_iter().enumerate() {
+            let card = Rect::new(x, y, 80.0 + i as f32 * 0.4, 200.0);
+            let grow = |r: Rect, by: f32| {
+                Rect::new(r.x - by, r.y - by, r.width + 2.0 * by, r.height + 2.0 * by)
+            };
+            scene.shadow(grow(card, 4.0), Color::rgba(0.0, 0.0, 0.0, 0.2), 14.0, 4.0);
+            scene.shadow(grow(card, 9.0), Color::rgba(0.0, 0.0, 0.0, 0.12), 19.0, 9.0);
+            scene.draw_rect(card, Color::WHITE, 10.0, 1.0, Color::rgb(0.8, 0.8, 0.8));
+        }
+        CUTS.with(|c| c.set(0));
+        let Some(cut) = crate::render_offscreen(&scene, 200, 240, Color::BLACK) else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        assert_eq!(CUTS.with(|c| c.get()), 4, "all four shadows are cut");
+        NO_CUT.with(|c| c.set(true));
+        let whole = crate::render_offscreen(&scene, 200, 240, Color::BLACK).unwrap();
+        NO_CUT.with(|c| c.set(false));
+        let differ = cut
+            .rgba
+            .chunks(4)
+            .zip(whole.rgba.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(differ, 0, "pixels changed by the cut");
+        // And the shadows do show around the cards.
+        let i = ((100 * 200 + 5) * 4) as usize;
+        assert!(
+            cut.rgba[i] < 240,
+            "the shadow left of the first card is drawn"
+        );
+    }
 
     /// **The straight band weighs what the four samples weigh** (milestone 835): where every
     /// row a shadow's column samples is the same row, the shader takes that row once, times
