@@ -117,7 +117,25 @@ about 5.5 M shaded shadow pixels a frame go.
 
 ## Measured
 
-PHONE-SECTION
+**Not measured on the phone.** The test phone was disconnected when the first run began, came
+back once for long enough to install the APK, and went away again for the rest of the
+milestone (more than 30 minutes of waiting). No property was left set on it. The release APKs
+for the comparison are built (base = master with milestone 836; new = this change, built from
+separate target directories, with different contents) and the interleaved script is ready, but
+it has not been run. The elimination runs planned with a temporary switch (no shadows, MSAA 1×,
+no rects, no text) did not run either. That switch is not in the change.
+
+What is known without the phone:
+
+- The arithmetic above: of the about 10.5 M pixels the home page's pass shaded per frame, about
+  6 M were shadow pixels and about 1.3 M were outside their rect's clip. After the change about
+  0.5 M shadow pixels are left, in the card's ring.
+- The frame structure: one pass, no memory round trip (see above). So no pass, load or store is
+  left to remove, and what the GPU does is what it shades.
+
+Without the phone, the share of the 45 ms these pixels cost is an estimate, not a measurement.
+Milestone 835 halved the GPU part of the frame by making the same shadow pixels cheaper, which
+suggests that shadow pixels are the larger part of it.
 
 ## Not done
 
