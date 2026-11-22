@@ -747,7 +747,7 @@ mod tests {
     use crate::{Color, Rect};
 
     thread_local! {
-        /// Turns [`cut_hidden_shadows`] off on this thread, to render the reference picture.
+        /// Turns [`cut_hidden_shadows`] off on this thread, to render the uncut picture to compare against.
         pub(super) static NO_CUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         /// How many shadows [`cut_hidden_shadows`] has cut on this thread.
         pub(super) static CUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
