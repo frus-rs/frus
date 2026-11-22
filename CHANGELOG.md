@@ -8,10 +8,18 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 833 so far, each documenting the objective, the alternatives
+> record — one per step, 834 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Animations keep real time on slow frames** (J834). The shell used to move animations by at
+  most 50 ms a frame, so on a page drawn at four frames a second every animation ran several
+  times slower than written. A frame of a running motion now moves its animations by the whole
+  time that passed, up to half a second; a longer gap (a breakpoint, a frozen process) counts as
+  one frame, and the first frame after the screen was at rest moves one frame instead of the time
+  spent at rest. `spring_step` takes a long step in pieces of at most `SPRING_SUBSTEP` (20 ms),
+  so a stiff spring stays stable at any frame rate.
 
 - **Every route has its own page for search engines; the real find bar, Firefox and WebKit**
   (J833). `frus build web` now writes, for an application whose addresses are paths

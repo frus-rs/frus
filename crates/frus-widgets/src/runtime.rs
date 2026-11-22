@@ -613,6 +613,10 @@ fn lerp_radius(a: BorderRadius, b: BorderRadius, t: f32) -> BorderRadius {
     a.lerp(b, t)
 }
 
+/// The longest single integration step [`spring_step`] takes, in seconds: 20 ms, more than
+/// a frame at 60 Hz, so that an ordinary frame is still one step (milestone 834).
+pub const SPRING_SUBSTEP: f32 = 0.02;
+
 /// One damped-spring step (semi-implicit Euler) driving `progress` towards
 /// `target`, primed by `velocity`. `stiffness`/`damping` set the stiffness and the
 /// damping (≈ `2·√stiffness` = critical damping, no overshoot).
@@ -620,6 +624,10 @@ fn lerp_radius(a: BorderRadius, b: BorderRadius, t: f32) -> BorderRadius {
 ///
 /// A general-purpose motion helper: used by screen transitions and by gestures
 /// (a settle primed by the finger's velocity).
+///
+/// A long `dt` (a slow frame moves animations by the whole time that passed) is taken in
+/// steps of at most [`SPRING_SUBSTEP`], where the integration stays stable: one Euler step
+/// of a fifth of a second would throw a stiff spring past its target and further each frame.
 pub fn spring_step(
     progress: f32,
     velocity: f32,
@@ -628,9 +636,18 @@ pub fn spring_step(
     stiffness: f32,
     damping: f32,
 ) -> (f32, f32, bool) {
-    let accel = stiffness * (target - progress) - damping * velocity;
-    let velocity = velocity + accel * dt;
-    let progress = progress + velocity * dt;
+    let (mut progress, mut velocity) = (progress, velocity);
+    let mut left = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+    // A thousand steps at most, whatever is asked: 20 s of motion.
+    let mut steps = 0;
+    while left > 0.0 && steps < 1000 {
+        let h = left.min(SPRING_SUBSTEP);
+        let accel = stiffness * (target - progress) - damping * velocity;
+        velocity += accel * h;
+        progress += velocity * h;
+        left -= h;
+        steps += 1;
+    }
     let at_rest = (progress - target).abs() < 0.004 && velocity.abs() < 0.06;
     (progress, velocity, at_rest)
 }
@@ -3084,6 +3101,36 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spring_stays_stable_through_slow_frames() {
+        // Frames a quarter of a second apart, as a slow phone draws a heavy page: the
+        // spring the scroll settles with must still come to rest on its target, never
+        // swinging wider each frame (milestone 834).
+        let (mut p, mut v) = (0.0f32, 0.0f32);
+        let mut rest = false;
+        for _ in 0..12 {
+            let (np, nv, r) = spring_step(p, v, 1.0, 0.25, SCROLL_K, SCROLL_C);
+            assert!(np.abs() < 2.0, "the spring blew up: {np}");
+            (p, v, rest) = (np, nv, r);
+        }
+        assert!(rest, "at rest after 3 s: {p} at {v}");
+        // The same motion in frames of 1/60 s ends in the same place.
+        let (mut q, mut w) = (0.0f32, 0.0f32);
+        for _ in 0..180 {
+            (q, w, _) = spring_step(q, w, 1.0, 1.0 / 60.0, SCROLL_K, SCROLL_C);
+        }
+        assert!((p - q).abs() < 0.01, "{p} against {q}");
+        // An ordinary frame is still one step.
+        let accel = SCROLL_K * 1.0;
+        let one = spring_step(0.0, 0.0, 1.0, 1.0 / 60.0, SCROLL_K, SCROLL_C);
+        let expected = accel / 60.0;
+        assert!(
+            (one.1 - expected).abs() < 1e-5,
+            "{} against {expected}",
+            one.1
+        );
+    }
 
     /// A vertical scroll region `max` px long, in a 400 px viewport, with no
     /// physics of its own.

@@ -1305,6 +1305,9 @@ struct WindowState<A: Application> {
     goal_x: Option<f32>,
     /// The last frame's instant, for the animations' dt.
     last_frame: Option<Instant>,
+    /// The last frame asked for another: the next one goes on with the same motion, and its
+    /// gap is animation time; after a frame at rest it is not (milestone 834).
+    clock_running: bool,
     /// The **build** phase is dirty: the app's state, or the size, changed and the
     /// `view` must be rebuilt. The view is a pure function of `(state, theme, size)` —
     /// never of hover, scroll or focus, which live in the `Runtime` — so a frame that
@@ -1536,6 +1539,7 @@ impl<A: Application> WindowState<A> {
             themes: crate::theming::ThemeFade::default(),
             goal_x: None,
             last_frame: None,
+            clock_running: false,
             build_dirty: true,
             components_dirty: false,
             app_was_animating: false,
@@ -4377,19 +4381,22 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     self.app.on_insets(insets);
                 }
 
-                // The elapsed dt, clamped, for every animation.
+                // The time the animations move by: the time that really passed since the
+                // frame before, when that frame asked for this one, so that an animation
+                // ends on time however slow the frames are; one frame after a screen at rest;
+                // one frame after a stall (milestone 834). A frame that waited for
+                // decoration's rate takes its whole step, so that a spinner turns at the
+                // same speed at any rate (milestone 783).
                 let now = Instant::now();
-                // A frame that waited for decoration's rate takes its whole step, so that a
-                // spinner turns at the same speed at any rate (milestone 783).
-                let longest = self
-                    .win
-                    .decoration_period
-                    .map_or(0.05, |period| (1.5 * period).max(0.05));
-                let dt = self
-                    .win
-                    .last_frame
-                    .map(|prev| (now - prev).as_secs_f32().min(longest))
-                    .unwrap_or(0.0);
+                let running = self.win.clock_running;
+                let period = self.win.decoration_period;
+                let dt = crate::pacing::frame_step(
+                    self.win
+                        .last_frame
+                        .map(|prev| now.saturating_duration_since(prev).as_secs_f32()),
+                    running,
+                    period,
+                );
                 self.win.last_frame = Some(now);
                 // This frame draws the decoration too: its next one is decided at the end.
                 self.win.decoration_due = None;
@@ -4404,7 +4411,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.win.runtime.time = self.win.elapsed;
 
                 // The caret's blink (milestone 513), on the wall clock: the animation
-                // clock above is clamped per frame and stands still between frames, and a
+                // clock above stands still while nothing moves and skips a stall, and a
                 // caret at rest is exactly when there are none. Solid while the window is
                 // not the one in front, where nothing wakes the loop for it.
                 let caret_now = Instant::now();
@@ -4423,7 +4430,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 // otherwise move them twice as fast (milestone 827).
                 let app_dt = match self.app_clock.replace(now) {
                     Some(last) if !self.parked.is_empty() => {
-                        frus_widgets::dilate_frame_time((now - last).as_secs_f32().min(longest))
+                        frus_widgets::dilate_frame_time(crate::pacing::frame_step(
+                            Some(now.saturating_duration_since(last).as_secs_f32()),
+                            running,
+                            period,
+                        ))
                     }
                     _ => dt,
                 };
@@ -5371,13 +5382,18 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 ) {
                     crate::pacing::NextFrame::Now => {
                         self.win.decoration_period = None;
+                        self.win.clock_running = true;
                         self.request_redraw();
                     }
                     crate::pacing::NextFrame::At(at, period) => {
                         self.win.decoration_due = Some(at);
                         self.win.decoration_period = Some(period);
+                        self.win.clock_running = true;
                     }
-                    crate::pacing::NextFrame::Idle => self.win.decoration_period = None,
+                    crate::pacing::NextFrame::Idle => {
+                        self.win.decoration_period = None;
+                        self.win.clock_running = false;
+                    }
                 }
                 if let Some(start) = frame_start {
                     use crate::frame_stats::Why;
