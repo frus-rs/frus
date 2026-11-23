@@ -60,6 +60,20 @@ fn blur_sigma(blur: f32) -> f32 {
 
 @vertex
 fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
+    return vertex(vert, inst, 1.0);
+}
+
+// **The inside of an opaque rect, drawn without blending** (milestone 838): its clip is
+// the part the rect covers fully, on whole pixels, and its quad is held to that clip
+// exactly. Grown by a pixel, as a blended quad is, it would write the pixels round it,
+// which the clip gives no coverage, as nothing.
+@vertex
+fn vs_opaque(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
+    return vertex(vert, inst, 0.0);
+}
+
+// The vertex stage, the quad held to the clip grown by `grow` pixels.
+fn vertex(vert: VertexInput, inst: InstanceInput, grow: f32) -> VertexOutput {
     // A shadow's rect reaches `blur` beyond its shape; a gaussian of that blur reaches three
     // deviations beyond it, further out. The quad grows by the difference, so the fade is
     // never cut where the rect ends (milestone 746).
@@ -76,8 +90,8 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     // and its shadows theirs, where only the part inside the list shows.
     let pos_px = clamp(
         inst.rect.xy - vec2<f32>(margin, margin) + vert.unit_pos * size,
-        inst.clip.xy - vec2<f32>(1.0, 1.0),
-        inst.clip.xy + inst.clip.zw + vec2<f32>(1.0, 1.0),
+        inst.clip.xy - vec2<f32>(grow, grow),
+        inst.clip.xy + inst.clip.zw + vec2<f32>(grow, grow),
     );
 
     let ndc = vec2<f32>(

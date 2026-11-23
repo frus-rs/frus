@@ -110,14 +110,28 @@ fn shadow_margin(blur: f32) -> f32 {
 
 /// Whether `instance` leaves nothing of what is under it wherever it covers a pixel fully:
 /// one opaque colour (or an opaque two-colour fade), an opaque border or none, no blur.
+///
+/// A rect with a border is shaded as `mix(color, color2, t)` even when its direction is
+/// nought (then at `t = 0.5`), so its second colour must be opaque as well; a flat one with
+/// no border and no direction is shaded from its first colour alone.
 fn is_opaque(instance: &Instance) -> bool {
     let [code, border_width, blur, _] = instance.params;
+    let flat = border_width <= 0.0 && instance.gradient[0] == 0.0 && instance.gradient[1] == 0.0;
     code < 0.5
         && blur <= 0.0
         && instance.color[3] >= 1.0
-        && ((instance.gradient[0] == 0.0 && instance.gradient[1] == 0.0)
-            || instance.color2[3] >= 1.0)
+        && (flat || instance.color2[3] >= 1.0)
         && (border_width <= 0.0 || instance.border_color[3] >= 1.0)
+}
+
+/// Whether `instance` paints nothing at all: no colour, no border colour, whatever its
+/// blur. Blended at alpha nought, it leaves every pixel as it was.
+fn is_invisible(instance: &Instance) -> bool {
+    let [code, border_width, _, _] = instance.params;
+    code < 0.5
+        && instance.color[3] == 0.0
+        && instance.color2[3] == 0.0
+        && (border_width <= 0.0 || instance.border_color[3] == 0.0)
 }
 
 /// `[x0, y0, x1, y1]` of an `[x, y, width, height]` rectangle.
@@ -126,10 +140,12 @@ fn edges(r: [f32; 4]) -> [f32; 4] {
 }
 
 /// **Where an opaque rect covers every pixel fully**, held to its clip: the rect less its
-/// largest corner and a pixel more all round, where the shader's coverage is exactly one.
-/// Edges on whole pixels, inward, so that no pixel centre lies on one.
+/// largest corner (or its border, when that is wider) and a pixel more all round, where the
+/// shader's coverage is exactly one and its border is not mixed in. Edges on whole pixels,
+/// inward, so that no pixel centre lies on one.
 fn fully_covered(instance: &Instance) -> [f32; 4] {
-    let inset = instance.radii.iter().fold(0.0f32, |a, &r| a.max(r)) + 1.0;
+    let corner = instance.radii.iter().fold(0.0f32, |a, &r| a.max(r));
+    let inset = corner.max(instance.params[1]) + 1.0;
     let [x0, y0, x1, y1] = edges(instance.rect);
     let [cx0, cy0, cx1, cy1] = edges(instance.clip);
     [
@@ -140,95 +156,174 @@ fn fully_covered(instance: &Instance) -> [f32; 4] {
     ]
 }
 
-/// The smallest hidden part worth cutting out of a shadow, in pixels on each side: below
+/// The smallest hidden part worth cutting out of a rect, in pixels on each side: below
 /// it, four quads cost more than the pixels they save.
 const SMALLEST_HIDDEN: f32 = 16.0;
 
-/// How far after a shadow the rect that covers it is looked for: a surface's shadows come
-/// right before it, one to three of them.
-const COVER_LOOKAHEAD: usize = 6;
+/// The smallest inside of an opaque rect worth drawing on its own, without blending, in
+/// pixels on each side: below it, the extra draw costs more than it saves.
+const SMALLEST_OPAQUE: f32 = 32.0;
 
-/// **Shadows are not shaded where the surface over them hides them** (milestone 837).
+/// How many of the opaque rects after an instance are weighed as the one to cut it by.
+const COVER_SCAN: usize = 8;
+
+/// The bands of `clip` (edges `[x0, y0, x1, y1]`) around `hole`, which lies inside it on
+/// whole pixels: above, below, left, right, each as a clip rectangle, or none where empty.
 ///
-/// An elevated surface paints its shadows and then itself, over them, in the same batch: a
-/// card in a list is three blurred rects the size of the card, then the card. Wherever the
-/// card is opaque and covers a pixel fully, what the shadows put there is painted over, and
-/// a shadow's pixel is the dearest pixel the rect shader computes. On the test phone a card
-/// taller than the screen shaded about two screens of hidden shadow every frame.
-///
-/// So a shadow instance followed in its batch (within [`COVER_LOOKAHEAD`]) by an opaque
-/// rect is replaced by up to four: the same shadow, each clipped to one band of the ring
-/// left around the part the rect covers fully. The vertex stage holds each quad to its
-/// clip, so the hidden part is never rasterised. The bands' shared edges lie on whole
-/// pixels, so every pixel centre outside the hidden part is in exactly one band, and the
-/// clip test gives it the same colour it had: the picture does not change.
-///
-/// Within one draw, instances are drawn in order, and nothing of another batch comes
-/// between two instances of the same batch, so the opaque rect is the last word on those
-/// pixels whatever came between.
-fn cut_hidden_shadows(instances: &mut Vec<Instance>, start: usize, out: &mut Vec<Instance>) {
-    let batch = &instances[start..];
-    let worth = batch.iter().enumerate().any(|(i, s)| {
-        s.params[2] > 0.0 && batch[i + 1..].iter().take(COVER_LOOKAHEAD).any(is_opaque)
+/// The shader tests `x <= clip.x + clip.width`: a band whose far edge does not come back
+/// exactly from its width would move a pixel centre lying on that edge, so then there are
+/// no bands at all.
+fn ring(clip: [f32; 4], hole: [f32; 4]) -> Option<[Option<[f32; 4]>; 4]> {
+    let [cx0, cy0, cx1, cy1] = clip;
+    let [hx0, hy0, hx1, hy1] = hole;
+    let bands = [
+        [cx0, cy0, cx1, hy0],
+        [cx0, hy1, cx1, cy1],
+        [cx0, hy0, hx0, hy1],
+        [hx1, hy0, cx1, hy1],
+    ]
+    .map(|[x0, y0, x1, y1]| (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0]));
+    let exact = bands
+        .iter()
+        .zip([[cx1, hy0], [cx1, cy1], [hx0, hy1], [cx1, hy1]])
+        .all(|(band, [x1, y1])| band.is_none_or(|b| b[0] + b[2] == x1 && b[1] + b[3] == y1));
+    exact.then_some(bands)
+}
+
+/// **An opaque rect's inside, drawn without blending** (milestone 838): pushes the inside
+/// `own` (the part `inst` covers fully, if it is a cover) to `out`, marked in `opaque`, and
+/// then its ring, blended. `false`, and nothing pushed, when the inside is too small or its
+/// ring cannot be cut exactly.
+fn set_apart_inside(
+    inst: &Instance,
+    own: Option<[f32; 4]>,
+    clip: [f32; 4],
+    start: usize,
+    out: &mut Vec<Instance>,
+    opaque: &mut Vec<u32>,
+) -> bool {
+    let Some(hole) = own else {
+        return false;
+    };
+    if hole[2] - hole[0] < SMALLEST_OPAQUE || hole[3] - hole[1] < SMALLEST_OPAQUE {
+        return false;
+    }
+    let Some(bands) = ring(clip, hole) else {
+        return false;
+    };
+    opaque.push((start + out.len()) as u32);
+    out.push(Instance {
+        clip: [hole[0], hole[1], hole[2] - hole[0], hole[3] - hole[1]],
+        ..*inst
     });
-    if !worth {
+    for clip in bands.into_iter().flatten() {
+        out.push(Instance { clip, ..*inst });
+    }
+    #[cfg(test)]
+    tests::OPAQUE.with(|c| c.set(c.get() + 1));
+    true
+}
+
+/// A reused scratch for [`cut_hidden`].
+#[derive(Default)]
+struct Cut {
+    out: Vec<Instance>,
+    /// The batch's opaque rects worth cutting by: their index in the batch and the part
+    /// they cover fully.
+    covers: Vec<(usize, [f32; 4])>,
+}
+
+/// **Nothing is shaded where an opaque rect drawn later hides it, and the inside of an
+/// opaque rect is drawn without blending** (milestones 837 and 838).
+///
+/// Wherever an opaque rect covers a pixel fully, what the earlier rects of its batch put
+/// there is painted over. Within one draw, instances are drawn in order, and nothing of
+/// another batch comes between two instances of the same batch, so the opaque rect is the
+/// last word on those pixels.
+///
+/// - **An instance hidden in part by an opaque rect after it** (the one, of the next
+///   [`COVER_SCAN`], that hides most of it) is replaced by up to four: itself, each clipped
+///   to one band of the ring around the hidden part. The vertex stage holds each quad to
+///   its clip, so the hidden part is never rasterised. A card's shadows under the card, and
+///   the page's background under the card, are not shaded.
+/// - **An opaque rect with a large inside**, when no later rect cuts it, is replaced by its
+///   inside, drawn by a pipeline that does not blend (its index goes to `opaque`), and its
+///   ring, still blended. The
+///   colour it writes there is the one blending would have given (its alpha is one), and a
+///   tiled GPU drops by itself the hidden pixels of earlier draws under a draw that does not
+///   blend.
+/// - **An instance that paints nothing** (no colour at all) is dropped.
+///
+/// The bands' shared edges lie on whole pixels, so every pixel centre outside a hole is in
+/// exactly one band, and the clip test gives it the same colour it had: the picture does
+/// not change. The last instance that covers a pixel fully is never cut there, which is
+/// why a cover may itself be cut by a later one.
+fn cut_hidden(instances: &mut Vec<Instance>, start: usize, cut: &mut Cut, opaque: &mut Vec<u32>) {
+    let batch = &instances[start..];
+    cut.covers.clear();
+    for (k, c) in batch.iter().enumerate() {
+        if is_opaque(c) {
+            let h = fully_covered(c);
+            if h[2] - h[0] >= SMALLEST_HIDDEN && h[3] - h[1] >= SMALLEST_HIDDEN {
+                cut.covers.push((k, h));
+            }
+        }
+    }
+    if cut.covers.is_empty() && !batch.iter().any(is_invisible) {
         return;
     }
+    let out = &mut cut.out;
     out.clear();
-    for (i, shadow) in batch.iter().enumerate() {
-        let cover = (shadow.params[2] > 0.0)
-            .then(|| {
-                batch[i + 1..]
-                    .iter()
-                    .take(COVER_LOOKAHEAD)
-                    .find(|c| is_opaque(c))
-            })
-            .flatten();
-        let Some(cover) = cover else {
-            out.push(*shadow);
-            continue;
-        };
-        let [cx0, cy0, cx1, cy1] = edges(shadow.clip);
-        let [hx0, hy0, hx1, hy1] = fully_covered(cover);
-        // Held to the shadow's own clip and to its quad, which is all it shades.
-        let m = shadow_margin(shadow.params[2]);
-        let [qx0, qy0, qx1, qy1] = edges(shadow.rect);
-        let (hx0, hy0) = (
-            hx0.max(cx0.ceil()).max((qx0 - m).ceil()),
-            hy0.max(cy0.ceil()).max((qy0 - m).ceil()),
-        );
-        let (hx1, hy1) = (
-            hx1.min(cx1.floor()).min((qx1 + m).floor()),
-            hy1.min(cy1.floor()).min((qy1 + m).floor()),
-        );
-        if hx1 - hx0 < SMALLEST_HIDDEN || hy1 - hy0 < SMALLEST_HIDDEN {
-            out.push(*shadow);
+    let mut next = 0;
+    for (i, inst) in batch.iter().enumerate() {
+        if is_invisible(inst) {
             continue;
         }
-        // The ring around the hidden part, in the shadow's clip: above, below, left, right.
-        // The shader tests `x <= clip.x + clip.width`: a band whose far edge does not come
-        // back exactly from its width would move a pixel centre lying on that edge, and the
-        // shadow is then left whole.
-        let bands = [
-            [cx0, cy0, cx1, hy0],
-            [cx0, hy1, cx1, cy1],
-            [cx0, hy0, hx0, hy1],
-            [hx1, hy0, cx1, hy1],
-        ]
-        .map(|[x0, y0, x1, y1]| (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0]));
-        let exact = bands
-            .iter()
-            .zip([[cx1, hy0], [cx1, cy1], [hx0, hy1], [cx1, hy1]])
-            .all(|(band, [x1, y1])| band.is_none_or(|b| b[0] + b[2] == x1 && b[1] + b[3] == y1));
-        if !exact {
-            out.push(*shadow);
-            continue;
+        while next < cut.covers.len() && cut.covers[next].0 <= i {
+            next += 1;
         }
-        for clip in bands.into_iter().flatten() {
-            out.push(Instance { clip, ..*shadow });
+        let clip = edges(inst.clip);
+
+        // Held to its own clip and to its quad, which is all it shades.
+        let m = shadow_margin(inst.params[2]);
+        let [qx0, qy0, qx1, qy1] = edges(inst.rect);
+        let bound = [
+            clip[0].ceil().max((qx0 - m).ceil()),
+            clip[1].ceil().max((qy0 - m).ceil()),
+            clip[2].floor().min((qx1 + m).floor()),
+            clip[3].floor().min((qy1 + m).floor()),
+        ];
+        let mut best: Option<([f32; 4], f32)> = None;
+        for &(_, h) in cut.covers[next..].iter().take(COVER_SCAN) {
+            let hole = [
+                h[0].max(bound[0]),
+                h[1].max(bound[1]),
+                h[2].min(bound[2]),
+                h[3].min(bound[3]),
+            ];
+            let (w, ht) = (hole[2] - hole[0], hole[3] - hole[1]);
+            if w >= SMALLEST_HIDDEN
+                && ht >= SMALLEST_HIDDEN
+                && best.is_none_or(|(_, area)| w * ht > area)
+            {
+                best = Some((hole, w * ht));
+            }
         }
-        #[cfg(test)]
-        tests::CUTS.with(|c| c.set(c.get() + 1));
+        let own = (next > 0 && cut.covers[next - 1].0 == i).then(|| cut.covers[next - 1].1);
+        match best.and_then(|(hole, _)| ring(clip, hole)) {
+            Some(bands) => {
+                for clip in bands.into_iter().flatten() {
+                    out.push(Instance { clip, ..*inst });
+                }
+                #[cfg(test)]
+                tests::CUTS.with(|c| c.set(c.get() + 1));
+            }
+            None => {
+                if !set_apart_inside(inst, own, clip, start, out, opaque) {
+                    out.push(*inst);
+                }
+            }
+        }
     }
     instances.truncate(start);
     instances.extend_from_slice(out);
@@ -254,8 +349,16 @@ pub(crate) struct Painter {
     ramp_texture: wgpu::Texture,
     ramp_bind_group: wgpu::BindGroup,
     ramp_rows: Vec<[u8; RAMP_WIDTH as usize * 4]>,
-    /// A reused buffer for [`cut_hidden_shadows`].
-    cut: Vec<Instance>,
+    /// A reused scratch for [`cut_hidden`].
+    cut: Cut,
+    /// **The insides of opaque rects, drawn without blending** (milestone 838): the runs
+    /// of the instance buffer the opaque pipeline draws, in order.
+    opaque_runs: Vec<Range<u32>>,
+    /// The instances [`cut_hidden`] marked opaque this frame, before they are gathered
+    /// into runs.
+    opaque: Vec<u32>,
+    /// The same as `pipeline`, with no blending and each quad held to its clip exactly.
+    opaque_pipeline: wgpu::RenderPipeline,
 }
 
 /// How many colours a gradient is baked into.
@@ -462,38 +565,49 @@ impl Painter {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("frus.pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(QuadVertex::layout()), Some(Instance::layout())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache,
-        });
+        let make_pipeline = |label: &str, vertex: &str, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(vertex),
+                    buffers: &[Some(QuadVertex::layout()), Some(Instance::layout())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: sample_count,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview_mask: None,
+                cache,
+            })
+        };
+        let pipeline = make_pipeline(
+            "frus.pipeline",
+            "vs_main",
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
+        // The insides of opaque rects (milestone 838): where their alpha is one, blending
+        // writes their colour as it is, and a tiled GPU drops the hidden pixels of earlier
+        // draws under a draw that does not blend.
+        let opaque_pipeline = make_pipeline("frus.pipeline.opaque", "vs_opaque", None);
 
         let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("frus.quad_vertex_buffer"),
@@ -522,7 +636,10 @@ impl Painter {
             ramp_texture,
             ramp_bind_group,
             ramp_rows: Vec::new(),
-            cut: Vec::new(),
+            cut: Cut::default(),
+            opaque_runs: Vec::new(),
+            opaque: Vec::new(),
+            opaque_pipeline,
         }
     }
 
@@ -620,6 +737,7 @@ impl Painter {
     ) -> (Vec<Range<u32>>, Range<u32>) {
         self.instances.clear();
         self.ramp_rows.clear();
+        self.opaque.clear();
         let mut ranges = Vec::with_capacity(batches.len());
         for batch in batches {
             let start = self.instances.len() as u32;
@@ -632,7 +750,12 @@ impl Painter {
                 #[cfg(not(test))]
                 let cut = true;
                 if cut {
-                    cut_hidden_shadows(&mut self.instances, start as usize, &mut self.cut);
+                    cut_hidden(
+                        &mut self.instances,
+                        start as usize,
+                        &mut self.cut,
+                        &mut self.opaque,
+                    );
                 }
             }
             ranges.push(start..self.instances.len() as u32);
@@ -655,6 +778,15 @@ impl Painter {
             });
         }
         let decoration_range = decoration_start..self.instances.len() as u32;
+
+        // The opaque instances, gathered into runs: one draw each.
+        self.opaque_runs.clear();
+        for &i in &self.opaque {
+            match self.opaque_runs.last_mut() {
+                Some(run) if run.end == i => run.end = i + 1,
+                _ => self.opaque_runs.push(i..i + 1),
+            }
+        }
 
         // The frame's ramps, uploaded in one go; the texture grows to hold them.
         if !self.ramp_rows.is_empty() {
@@ -732,12 +864,38 @@ impl Painter {
         if range.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         pass.set_bind_group(1, &self.ramp_bind_group, &[]);
         pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        pass.draw(0..QUAD_VERTEX_COUNT, range);
+        // In order: the blended runs between the opaque ones.
+        let first = self.opaque_runs.partition_point(|r| r.end <= range.start);
+        let mut at = range.start;
+        let mut bound = None;
+        let mut draw = |pass: &mut wgpu::RenderPass<'pass>, opaque: bool, run: Range<u32>| {
+            if run.is_empty() {
+                return;
+            }
+            if bound != Some(opaque) {
+                pass.set_pipeline(if opaque {
+                    &self.opaque_pipeline
+                } else {
+                    &self.pipeline
+                });
+                bound = Some(opaque);
+            }
+            pass.draw(0..QUAD_VERTEX_COUNT, run);
+        };
+        for run in self.opaque_runs[first..]
+            .iter()
+            .take_while(|r| r.start < range.end)
+        {
+            let run = run.start.max(range.start)..run.end.min(range.end);
+            draw(pass, false, at..run.start);
+            draw(pass, true, run.clone());
+            at = run.end;
+        }
+        draw(pass, false, at..range.end);
     }
 }
 
@@ -747,10 +905,12 @@ mod tests {
     use crate::{Color, Rect};
 
     thread_local! {
-        /// Turns [`cut_hidden_shadows`] off on this thread, to render the uncut picture to compare against.
+        /// Turns [`cut_hidden`] off on this thread, to render the uncut picture to compare against.
         pub(super) static NO_CUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-        /// How many shadows [`cut_hidden_shadows`] has cut on this thread.
+        /// How many instances [`cut_hidden`] has cut on this thread.
         pub(super) static CUTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        /// How many opaque insides [`cut_hidden`] has set apart on this thread.
+        pub(super) static OPAQUE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
     fn rect_instance(rect: [f32; 4], alpha: f32, blur: f32, clip: [f32; 4]) -> Instance {
@@ -771,43 +931,72 @@ mod tests {
         x >= i.clip[0] && x <= i.clip[0] + i.clip[2] && y >= i.clip[1] && y <= i.clip[1] + i.clip[3]
     }
 
+    /// Runs [`cut_hidden`] on a whole batch: the instances and the opaque ones' indices.
+    fn cut_all(instances: &[Instance]) -> (Vec<Instance>, Vec<u32>) {
+        let mut out = instances.to_vec();
+        let mut opaque = Vec::new();
+        cut_hidden(&mut out, 0, &mut Cut::default(), &mut opaque);
+        (out, opaque)
+    }
+
+    /// Checks over a 400 × 400 sweep that every pixel centre `whole` could shade is in
+    /// exactly one of `pieces`, except those inside `hole`, which are in none.
+    fn assert_partition(whole: &Instance, pieces: &[Instance], hole: Option<[f32; 4]>) {
+        for y in 0..400 {
+            for x in 0..400 {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let n = pieces.iter().filter(|b| in_clip(b, px, py)).count();
+                let inside = hole.is_some_and(|h| px > h[0] && px < h[2] && py > h[1] && py < h[3]);
+                let want = usize::from(in_clip(whole, px, py) && !inside);
+                assert_eq!(n, want, "pixel {x},{y}");
+            }
+        }
+    }
+
     /// **A shadow under an opaque card becomes the ring around what the card hides**
-    /// (milestone 837): every pixel centre the shadow could shade is in exactly one band,
-    /// except those the card covers fully, which are in none.
+    /// (milestone 837), and **the card becomes its inside, drawn without blending, and its
+    /// ring** (milestone 838): every pixel centre is shaded by exactly one piece of each,
+    /// except those the card covers fully, which the shadow does not shade.
     #[test]
     fn a_hidden_shadow_is_cut_to_a_ring() {
         let clip = [0.0, 50.0, 400.0, 300.25];
         let shadow = rect_instance([40.0, 20.0, 300.0, 500.0], 0.2, 8.0, clip);
         let card = rect_instance([48.0, 28.0, 284.0, 484.0], 1.0, 0.0, clip);
-        let mut instances = vec![shadow, card];
-        let mut scratch = Vec::new();
-        cut_hidden_shadows(&mut instances, 0, &mut scratch);
-        // The card runs past the clip's top: nothing is left above it, and three bands are.
+        let (instances, opaque) = cut_all(&[shadow, card]);
+        // The card runs past the clip's top: nothing is left above it, and three bands
+        // are, of the shadow and of the card.
         assert_eq!(
             instances.len(),
-            4,
-            "the shadow's three bands, then the card"
+            7,
+            "the shadow's three bands, the card's inside and its three bands"
         );
         let hidden = fully_covered(&card);
-        for y in 0..400 {
-            for x in 0..400 {
-                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                let bands = instances[..3].iter().filter(|b| in_clip(b, px, py)).count();
-                let inside = px > hidden[0] && px < hidden[2] && py > hidden[1] && py < hidden[3];
-                let want = usize::from(in_clip(&shadow, px, py) && !inside);
-                assert_eq!(bands, want, "pixel {x},{y}");
-            }
-        }
-        assert_eq!(instances[3].clip, card.clip, "the card is left as it was");
+        assert_partition(&shadow, &instances[..3], Some(hidden));
+        assert_eq!(opaque, [3], "the card's inside is drawn without blending");
+        assert_eq!(
+            instances[3].clip,
+            [
+                hidden[0],
+                hidden[1],
+                hidden[2] - hidden[0],
+                hidden[3] - hidden[1]
+            ]
+        );
+        assert_partition(&card, &instances[3..], None);
+        assert!(instances[3..].iter().all(|i| i.rect == card.rect));
     }
 
-    /// A translucent card, a blurred one, a card too far after the shadow and a
-    /// shadow with nothing over it are all left whole.
+    /// A translucent card, a blurred one, one whose border mixes in a translucent colour,
+    /// a card before the shadow and a shadow with nothing over it leave the shadow whole.
     #[test]
     fn a_shadow_that_shows_is_left_whole() {
         let clip = [0.0, 0.0, 400.0, 400.0];
         let shadow = rect_instance([40.0, 20.0, 300.0, 300.0], 0.2, 8.0, clip);
         let card = rect_instance([48.0, 28.0, 284.0, 284.0], 1.0, 0.0, clip);
+        let mut bordered = card;
+        bordered.color2[3] = 0.5;
+        bordered.params[1] = 2.0;
+        bordered.border_color[3] = 1.0;
         let cases = [
             vec![
                 shadow,
@@ -817,33 +1006,74 @@ mod tests {
                 shadow,
                 rect_instance([48.0, 28.0, 284.0, 284.0], 1.0, 4.0, clip),
             ],
+            vec![shadow, bordered],
             vec![shadow],
             vec![card, shadow],
-            std::iter::once(shadow)
-                .chain(std::iter::repeat_n(
-                    rect_instance([0.0; 4], 0.5, 0.0, clip),
-                    COVER_LOOKAHEAD,
-                ))
-                .chain(std::iter::once(card))
-                .collect(),
         ];
         for case in cases {
-            let mut instances = case.clone();
-            cut_hidden_shadows(&mut instances, 0, &mut Vec::new());
-            assert_eq!(instances.len(), case.len());
+            let (instances, _) = cut_all(&case);
+            let shadows: Vec<_> = instances.iter().filter(|i| i.params[2] == 8.0).collect();
+            assert_eq!(shadows.len(), 1);
+            assert_eq!(shadows[0].clip, clip);
         }
     }
 
-    /// **The cut does not change the picture** (milestone 837): cards with shadows, under
-    /// clips that cut them on fractional pixels, rendered with and without the cut, are the
-    /// same pixel for pixel.
+    /// **The page under a card is not shaded where the card hides it** (milestone 838),
+    /// however many rects come between them: a flat rect is cut as a shadow is, and the
+    /// card's inside is drawn without blending.
     #[test]
-    fn cutting_hidden_shadows_changes_no_pixel() {
+    fn a_page_under_a_card_is_cut() {
+        let clip = [0.0, 0.0, 400.0, 400.0];
+        let page = Instance {
+            radii: [0.0; 4],
+            ..rect_instance([0.0, 0.0, 400.0, 400.0], 1.0, 0.0, clip)
+        };
+        let card = rect_instance([40.0, 60.0, 300.0, 300.0], 1.0, 0.0, clip);
+        let mut batch = vec![page];
+        batch.extend(
+            (0..10).map(|i| rect_instance([i as f32 * 30.0, 0.0, 20.0, 20.0], 0.5, 0.0, clip)),
+        );
+        batch.push(card);
+        let (instances, opaque) = cut_all(&batch);
+        let page_pieces = instances.iter().take_while(|i| i.rect == page.rect).count();
+        assert_eq!(page_pieces, 4, "the page is cut to four bands");
+        assert_partition(&page, &instances[..4], Some(fully_covered(&card)));
+        let card_at = instances.len() - 5;
+        assert_eq!(
+            opaque,
+            [card_at as u32],
+            "the card's inside, without blending"
+        );
+        assert_partition(&card, &instances[card_at..], None);
+    }
+
+    /// **A rect that paints nothing is dropped**; one whose border shows is kept.
+    #[test]
+    fn a_rect_that_paints_nothing_is_dropped() {
+        let clip = [0.0, 0.0, 400.0, 400.0];
+        let nothing = rect_instance([10.0, 10.0, 100.0, 100.0], 0.0, 0.0, clip);
+        let mut outline = nothing;
+        outline.params[1] = 2.0;
+        outline.border_color = [0.1, 0.1, 0.1, 1.0];
+        let (instances, opaque) = cut_all(&[nothing, outline]);
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].params[1], 2.0, "the outline is kept");
+        assert!(opaque.is_empty());
+    }
+
+    /// **The cuts and the opaque insides do not change the picture** (milestones 837 and
+    /// 838): a page, cards with shadows, borders, a fade and tiles on a card, under clips
+    /// that cut them on fractional pixels, rendered with and without them, are the same
+    /// pixel for pixel.
+    #[test]
+    fn cutting_hidden_rects_changes_no_pixel() {
         let mut scene = Scene::new();
         scene.fill_rect(
             Rect::new(0.0, 0.0, 200.0, 240.0),
             Color::rgb(0.95, 0.95, 0.97),
         );
+        // Nothing to paint: dropped.
+        scene.fill_rect(Rect::new(20.0, 2.0, 50.0, 12.0), Color::TRANSPARENT);
         scene.set_clip(Rect::new(3.25, 20.5, 190.0, 200.75));
         for (i, (x, y)) in [(10.0, -30.0), (110.0, 60.5)].into_iter().enumerate() {
             let card = Rect::new(x, y, 80.0 + i as f32 * 0.4, 200.0);
@@ -854,12 +1084,44 @@ mod tests {
             scene.shadow(grow(card, 9.0), Color::rgba(0.0, 0.0, 0.0, 0.12), 19.0, 9.0);
             scene.draw_rect(card, Color::WHITE, 10.0, 1.0, Color::rgb(0.8, 0.8, 0.8));
         }
+        // Tiles on the first card: one flat, one with a border wider than its corners,
+        // one an opaque fade, and a translucent one over them.
+        scene.fill_rect(
+            Rect::new(15.5, 30.0, 70.0, 40.25),
+            Color::rgb(0.3, 0.6, 0.9),
+        );
+        scene.draw_rect(
+            Rect::new(14.0, 80.0, 72.0, 56.0),
+            Color::rgb(0.9, 0.8, 0.2),
+            4.0,
+            9.0,
+            Color::rgb(0.2, 0.1, 0.5),
+        );
+        scene.gradient_rect(
+            Rect::new(16.0, 140.0, 66.0, 50.5),
+            Color::rgb(1.0, 0.2, 0.1),
+            Color::rgb(0.1, 0.9, 0.3),
+            [1.0, 0.5],
+            6.0,
+            0.0,
+            Color::TRANSPARENT,
+        );
+        scene.fill_rect(
+            Rect::new(5.0, 60.0, 180.0, 100.0),
+            Color::rgba(0.1, 0.2, 0.9, 0.3),
+        );
         CUTS.with(|c| c.set(0));
+        OPAQUE.with(|c| c.set(0));
         let Some(cut) = crate::render_offscreen(&scene, 200, 240, Color::BLACK) else {
             eprintln!("no GPU adapter available: test skipped");
             return;
         };
-        assert_eq!(CUTS.with(|c| c.get()), 4, "all four shadows are cut");
+        let (cuts, opaque) = (CUTS.with(|c| c.get()), OPAQUE.with(|c| c.get()));
+        assert!(cuts >= 5, "the four shadows and the page are cut: {cuts}");
+        assert!(
+            opaque >= 4,
+            "the cards' and the tiles' insides are drawn without blending: {opaque}"
+        );
         NO_CUT.with(|c| c.set(true));
         let whole = crate::render_offscreen(&scene, 200, 240, Color::BLACK).unwrap();
         NO_CUT.with(|c| c.set(false));
@@ -870,12 +1132,13 @@ mod tests {
             .filter(|(a, b)| a != b)
             .count();
         assert_eq!(differ, 0, "pixels changed by the cut");
-        // And the shadows do show around the cards.
-        let i = ((100 * 200 + 5) * 4) as usize;
+        // And the shadows do show around the cards, and the tiles on the first one.
+        let at = |x: usize, y: usize| &cut.rgba[(y * 200 + x) * 4..(y * 200 + x) * 4 + 4];
         assert!(
-            cut.rgba[i] < 240,
+            at(5, 100)[0] < 240,
             "the shadow left of the first card is drawn"
         );
+        assert!(at(50, 45)[2] > at(50, 45)[0], "the flat tile is drawn");
     }
 
     /// **The straight band weighs what the four samples weigh** (milestone 835): where every
