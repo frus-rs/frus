@@ -315,10 +315,49 @@ fn in_background(job: Job) {
     }
 }
 
+/// Decodes done on a decoding thread, and anywhere else (milestone 840).
+static DECODED_ON_THREADS: AtomicU64 = AtomicU64::new(0);
+static DECODED_IN_PLACE: AtomicU64 = AtomicU64::new(0);
+
+/// Counts a decode about to happen, by where it happens.
+fn count_decode() {
+    let on_thread = std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with("frus-image-"));
+    let counter = if on_thread {
+        &DECODED_ON_THREADS
+    } else {
+        &DECODED_IN_PLACE
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+}
+
+/// **How many images were decoded, and where**, since the process started (milestone 840):
+/// on the decoding threads, or in place — on the thread that asked, which for an image shown
+/// by a widget is the interface's. Only a small picture is decoded in place on purpose (an
+/// icon, under `QUICK_DECODE_PIXELS`); a large one decoded there held a frame up for its
+/// whole decode. The frame statistics print both counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageDecodes {
+    /// Decoded on the thread that asked for them.
+    pub in_place: u64,
+    /// Decoded on a decoding thread.
+    pub on_threads: u64,
+}
+
+/// The [`ImageDecodes`] so far.
+pub fn image_decodes() -> ImageDecodes {
+    ImageDecodes {
+        in_place: DECODED_IN_PLACE.load(Ordering::Relaxed),
+        on_threads: DECODED_ON_THREADS.load(Ordering::Relaxed),
+    }
+}
+
 /// `decode`, with a panic in it turned into a failure: a decoder that panics on a
 /// decoding thread would otherwise leave its picture loading for ever, and the interface
 /// redrawing for ever with it.
 fn guarded(decode: impl FnOnce() -> Result<ImageData, String>) -> Fetched {
+    count_decode();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
         Ok(Ok(data)) => Fetched::Ready(data.into_handle()),
         Ok(Err(why)) => Fetched::Failed(why),
@@ -365,6 +404,7 @@ pub fn cached_at(
         // when it lands.
         Some(Fetched::Loading) | None => {}
     }
+    count_decode();
     let resolved = load(bytes).map(ImageData::into_handle);
     let state = match &resolved {
         Ok(handle) => Fetched::Ready(handle.clone()),
@@ -456,6 +496,44 @@ pub fn trim_image_caches() {
     if let Some(store) = guard.as_mut() {
         evict_over_budget(store, 0);
     }
+}
+
+/// **How much to give back** when memory is short (milestone 840): the argument of
+/// `trim_caches`, and of the renderer's own trim.
+///
+/// The levels are ordered: each gives back what the one before it does, and more.
+///
+/// | Level | Decoded images | GPU |
+/// |---|---|---|
+/// | `Moderate` | the ones nobody shows | nothing |
+/// | `Critical` | the ones nobody shows | what the next frame does not need: the glyph atlas back to its first size, the shapes kept for paths |
+/// | `Hidden` | the ones nobody shows | every texture the next frame can make again: kept layers, images, scratch targets |
+///
+/// A picture on screen is never given back: dropping it would only make the next frame
+/// decode it again. `Critical` is what a system says before it ends a process for memory;
+/// `Hidden` is for an application nobody can see — in the background, a hidden browser tab,
+/// a minimised window — whose next frame is far off and may rebuild what it needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TrimLevel {
+    /// Memory is getting short while the application is used.
+    Moderate,
+    /// Memory is so short that the system may end the process.
+    Critical,
+    /// The application is out of sight.
+    Hidden,
+}
+
+/// The decoded pixels both image stores hold, in bytes: embedded pictures
+/// ([`cached_at`], [`decoded_at`]) and fetched ones ([`fetched_at`]), the ones on screen
+/// included. [`image_cache_bytes`] counts the fetched store alone, which is what its budget
+/// bounds.
+pub fn decoded_image_bytes() -> usize {
+    let embedded: usize = CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map_or(0, |cache| cache.values().map(Fetched::bytes).sum());
+    embedded + image_cache_bytes()
 }
 
 /// What is known about an image that has to be **fetched** before it can be shown.
@@ -1259,6 +1337,30 @@ mod tests {
 
     fn img(w: u32, h: u32) -> ImageData {
         ImageData::from_rgba(w, h, vec![0u8; (w * h * 4) as usize])
+    }
+
+    /// **Each decode is counted where it happened** (milestone 840): one asked for in place
+    /// on this thread, one handed to the decoding threads there. Other tests decode too, so
+    /// the counts only ever grow by at least this test's own.
+    #[test]
+    fn decodes_are_counted_by_where_they_happen() {
+        static IN_PLACE: [u8; 3] = [8, 4, 0];
+        static ON_A_THREAD: [u8; 3] = [8, 4, 1];
+        fn decode(_: &[u8], _: DecodeSize) -> Result<ImageData, String> {
+            Ok(ImageData::from_rgba(2, 2, vec![0; 16]))
+        }
+        let before = image_decodes();
+        cached(&IN_PLACE, |b| decode(b, DecodeSize::FULL)).unwrap();
+        assert!(image_decodes().in_place > before.in_place, "in place");
+        decoded_at(&ON_A_THREAD, DecodeSize::FULL, decode, true);
+        let started = std::time::Instant::now();
+        while image_decodes().on_threads == before.on_threads {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the decoding thread never counted its decode"
+            );
+            std::thread::yield_now();
+        }
     }
 
     #[test]

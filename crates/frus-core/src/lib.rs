@@ -66,12 +66,13 @@ pub use geometry::{
 pub use gradient::{tile, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode};
 pub use hct::{Hct, TonalPalette};
 pub use image::{
-    advance_image_frame, cached, cached_at, clear_fetched_images, decoded_at, fetched, fetched_at,
-    forget_cached_images, forget_fetched_image, forget_fetched_images, image_cache_budget,
-    image_cache_bytes, image_fetcher, image_interest, image_landings, image_seen, image_wanted,
-    images_in_flight, set_image_cache_budget, set_image_fetcher, trim_image_caches, BoxFit,
-    DecodeSize, Fetched, FilterQuality, ImageData, ImageFetcher, ImageHandle, ImageInterest,
-    DEFAULT_IMAGE_CACHE_BYTES, IMAGE_FETCH_CANCELLED,
+    advance_image_frame, cached, cached_at, clear_fetched_images, decoded_at, decoded_image_bytes,
+    fetched, fetched_at, forget_cached_images, forget_fetched_image, forget_fetched_images,
+    image_cache_budget, image_cache_bytes, image_decodes, image_fetcher, image_interest,
+    image_landings, image_seen, image_wanted, images_in_flight, set_image_cache_budget,
+    set_image_fetcher, trim_image_caches, BoxFit, DecodeSize, Fetched, FilterQuality, ImageData,
+    ImageDecodes, ImageFetcher, ImageHandle, ImageInterest, TrimLevel, DEFAULT_IMAGE_CACHE_BYTES,
+    IMAGE_FETCH_CANCELLED,
 };
 pub use path::{FillRule, Path, PathVerb, Stroke, StrokeCap};
 pub use platform::{

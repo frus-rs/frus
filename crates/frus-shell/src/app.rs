@@ -3510,15 +3510,16 @@ fn platform_locales() -> Vec<frus_widgets::Locale> {
     }
 }
 
-/// Gives back the decoded images nobody is showing, and says how much went.
-fn memory_trimmed() {
-    let before = frus_widgets::image_cache_bytes();
-    frus_widgets::trim_image_caches();
-    log::info!(
-        "memory is low: decoded network images trimmed from {} to {} KB",
-        before / 1024,
-        frus_widgets::image_cache_bytes() / 1024
-    );
+/// The level `frus run`'s `trim-memory` command names: `moderate`, `critical` (the default)
+/// or `hidden`.
+fn trim_level_named(name: &str) -> Option<frus_widgets::TrimLevel> {
+    use frus_widgets::TrimLevel;
+    match name.trim() {
+        "moderate" => Some(TrimLevel::Moderate),
+        "" | "critical" => Some(TrimLevel::Critical),
+        "hidden" => Some(TrimLevel::Hidden),
+        _ => None,
+    }
 }
 
 impl<A: Application> ApplicationHandler<A::Message> for App<A> {
@@ -3853,7 +3854,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// warning): the decoded images nobody is showing are given back, rather than left
     /// for the system to reclaim by ending the process.
     fn memory_warning(&mut self, _event_loop: &ActiveEventLoop) {
-        memory_trimmed();
+        self.trim_memory(frus_widgets::TrimLevel::Critical);
     }
 
     /// A message produced by an effect, on a background thread: we apply it and ask
@@ -3925,6 +3926,9 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
     /// (`decide_hold`, milestone 769).
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         self.previous_turn_began = std::mem::replace(&mut self.turn_began, Instant::now());
+        // GPU memory given back, asked for from another thread (Android's `onTrimMemory`, an
+        // application's `trim_caches`), between two frames (milestone 840).
+        self.apply_gpu_trim();
         let timer = matches!(cause, StartCause::ResumeTimeReached { .. });
 
         // Pending IME operations, from the Android input bridge.
@@ -4074,6 +4078,11 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.win.occluded = occluded;
                 if !occluded {
                     self.request_redraw();
+                } else if self.parked.iter().all(|(_, other)| other.occluded) {
+                    // Nothing of the application can be seen — a hidden browser tab, a
+                    // minimised window (milestone 840): what the first frame back can rebuild
+                    // goes until then.
+                    self.trim_memory(frus_widgets::TrimLevel::Hidden);
                 }
             }
 
@@ -5905,6 +5914,38 @@ impl<A: Application> App<A> {
         window.request_redraw();
     }
 
+    /// Gives memory back, from the loop's own thread: the decoded images now, and the GPU's
+    /// textures before the loop goes on (milestone 840).
+    fn trim_memory(&mut self, level: frus_widgets::TrimLevel) {
+        frus_widgets::trim_caches(level);
+        self.apply_gpu_trim();
+    }
+
+    /// Hands the GPU trim asked for since the last turn to the renderer, and to every other
+    /// window's surface. Nothing while nothing renders (in the background on Android, the
+    /// renderer is gone already, and its memory with it).
+    fn apply_gpu_trim(&mut self) {
+        let Some(level) = frus_widgets::take_gpu_trim() else {
+            return;
+        };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let before = renderer.gpu_memory();
+        renderer.trim_caches(level);
+        for surface in std::iter::once(&mut self.win.surface)
+            .chain(self.parked.iter_mut().map(|(_, other)| &mut other.surface))
+            .flatten()
+        {
+            renderer.trim_surface(surface, level);
+        }
+        log::info!(
+            "memory trimmed ({level:?}): GPU textures from {:.1} to {:.1} MB",
+            before.megabytes(),
+            renderer.gpu_memory().megabytes()
+        );
+    }
+
     fn take_dev_commands(&mut self) {
         for command in crate::dev_commands::take_commands() {
             let (name, argument) = command
@@ -6014,8 +6055,15 @@ impl<A: Application> App<A> {
                         "nothing to rotate: the window is not simulating a device (frus run -d)"
                     ),
                 },
-                // The system's low-memory call, on demand (milestone 687).
-                "trim-memory" => memory_trimmed(),
+                // The system's low-memory call, on demand (milestone 687), at the level
+                // named (milestone 840).
+                "trim-memory" => match trim_level_named(argument) {
+                    Some(level) => self.trim_memory(level),
+                    None => log::warn!(
+                        target: "frus::dev",
+                        "trim-memory takes moderate, critical or hidden, not {argument:?}"
+                    ),
+                },
                 // A driver reset, on purpose: what follows is the recovery (milestone 686).
                 "lose-gpu" => {
                     if let Some(renderer) = self.renderer.as_ref() {

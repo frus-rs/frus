@@ -136,6 +136,9 @@ pub(crate) struct FrameStats {
     costs: Vec<FrameCosts>,
     /// For each family of retained motion, how many frames of the run it was still moving in.
     moving: Vec<(&'static str, usize)>,
+    /// The image decodes counted when the last line was written: a line says how many were
+    /// done since, and where (milestone 840).
+    decodes: frus_widgets::ImageDecodes,
 }
 
 impl FrameStats {
@@ -154,6 +157,7 @@ impl FrameStats {
             last_why: Why::NONE,
             costs: Vec::new(),
             moving: Vec::new(),
+            decodes: frus_widgets::image_decodes(),
         }
     }
 
@@ -225,6 +229,12 @@ impl FrameStats {
             report = self.flush(start).or(report);
         }
         if let Some(line) = report.as_mut() {
+            let decodes = frus_widgets::image_decodes();
+            line.push_str(&image_note(
+                frus_widgets::decoded_image_bytes(),
+                decodes,
+                std::mem::replace(&mut self.decodes, decodes),
+            ));
             if let Some(memory) = memory() {
                 line.push_str(&memory_note(&memory));
             }
@@ -305,6 +315,22 @@ impl FrameStats {
             intervals.len() as f32 / seconds,
         ))
     }
+}
+
+/// The decoded images, as a frame statistics line says them (milestone 840): what the image
+/// stores hold, and how many pictures were decoded since `before`, on the thread that asked
+/// (the interface's, for a widget) and on the decoding threads.
+fn image_note(
+    bytes: usize,
+    now: frus_widgets::ImageDecodes,
+    before: frus_widgets::ImageDecodes,
+) -> String {
+    format!(
+        "; decoded images {:.1} MB, {} decoded in place and {} on decoding threads",
+        bytes as f32 / (1024.0 * 1024.0),
+        now.in_place.saturating_sub(before.in_place),
+        now.on_threads.saturating_sub(before.on_threads)
+    )
 }
 
 /// The GPU memory, as a frame statistics line ends with it.
@@ -394,7 +420,10 @@ mod tests {
         assert!(line.contains("build 1.0/1.0 ms"), "{line}");
         assert!(line.contains("render 3.0/3.0 ms"), "{line}");
         assert!(line.contains("interval 16.7/"), "{line}");
-        assert!(line.ends_with("asked by widget 120"), "{line}");
+        assert!(line.contains("asked by widget 120"), "{line}");
+        // The decode counts are process-wide (other tests decode too), so only the note's
+        // presence is checked here; `a_line_says_the_decoded_images` checks its numbers.
+        assert!(line.contains("; decoded images "), "{line}");
     }
 
     /// **Decoration drawn at its own rate is not late** (milestone 783): 30 frames a second of
@@ -468,6 +497,24 @@ mod tests {
                 .is_none());
         }
         assert!(stats.costs.is_empty());
+    }
+
+    /// **A line says what the decoded images hold and where they were decoded** (milestone
+    /// 840): the decodes since the line before, not since the start.
+    #[test]
+    fn a_line_says_the_decoded_images() {
+        let before = frus_widgets::ImageDecodes {
+            in_place: 3,
+            on_threads: 10,
+        };
+        let now = frus_widgets::ImageDecodes {
+            in_place: 3,
+            on_threads: 47,
+        };
+        assert_eq!(
+            image_note(5 * 1024 * 1024 + 512 * 1024, now, before),
+            "; decoded images 5.5 MB, 0 decoded in place and 37 on decoding threads"
+        );
     }
 
     /// **A line ends with the GPU memory** (milestone 796), asked only when a line is

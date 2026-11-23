@@ -148,6 +148,13 @@ impl MeshCache {
         self.frame += 1;
     }
 
+    /// Lets go of every outline kept: memory is short (milestone 840). The next frame
+    /// tessellates what it draws again.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.vertices = 0;
+    }
+
     /// How many outlines are kept.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {

@@ -425,6 +425,13 @@ impl ImagePainter {
         }
     }
 
+    /// Lets go of every image's texture, mip chains included: the application is out of
+    /// sight (milestone 840), and the next frame uploads what it draws again. An external
+    /// texture's stay: its producer wrote its frames there and may not write them again.
+    pub(crate) fn trim(&mut self) {
+        self.cache.retain(|_, c| c.external.is_some());
+    }
+
     /// The texture of `image`, uploaded if it is not yet, and kept for this frame: what a
     /// custom shader samples as `image0`..`image3` (milestone 792).
     pub(crate) fn texture_view(
