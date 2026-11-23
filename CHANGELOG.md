@@ -23,8 +23,10 @@ any release may break.
   trims at `Hidden`. An application can call it too. `frus run`'s `trim-memory` command takes
   a level. Each frame statistics line now says what the decoded images hold and how many
   pictures were decoded on the interface's thread and on the decoding threads
-  (`image_decodes()`, `decoded_image_bytes()`, new). The measurement of a 200-photograph grid
-  on a phone is still owed.
+  (`image_decodes()`, `decoded_image_bytes()`, new). On a phone, a grid of 200 photographs of
+  4000x3000 decodes nothing on the interface's thread, holds at most the 100 MiB image cache
+  budget of decoded pictures, and peaks at 317 MB PSS; `Critical` brings it to 226 MB (decoded
+  images from 100 to 16 MB) and hiding the application to 131 MB.
 
 - **Calling the platform yourself: `frus::platform`** (J839, part of #216). For an API frus
   does not wrap, `frus::platform::android::with_env(|env, activity| ..)` gives a `JNIEnv` and
