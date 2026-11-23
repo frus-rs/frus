@@ -44,6 +44,8 @@ impl State for BatteryState {
     type Widget = BatteryScreen;
 
     fn init_state(&mut self, cx: &StateContext<Self>) {
+        #[cfg(target_os = "android")]
+        battery::check_from_a_worker();
         match battery::watch() {
             Ok(mut watch) => {
                 // A task of the interface's thread, owned by this state: each reading the

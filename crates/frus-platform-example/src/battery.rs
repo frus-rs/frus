@@ -81,6 +81,25 @@ pub fn watch() -> Result<BatteryWatch, PlatformError> {
     }
 }
 
+/// Asks `BatteryManager` for the charge from a plain worker thread through `with_env`, and
+/// logs it with the thread's Java name: the same number the broadcast gives, read on a
+/// thread the system knows nothing of.
+#[cfg(target_os = "android")]
+pub fn check_from_a_worker() {
+    let spawned = std::thread::Builder::new()
+        .name("battery-worker".into())
+        .spawn(|| match android::capacity() {
+            Ok((percent, thread)) => frus::log::info!(
+                "battery: BatteryManager says {percent} % (asked through with_env on the \
+                 worker thread \"{thread}\")"
+            ),
+            Err(err) => frus::log::warn!("battery: the worker could not ask ({err})"),
+        });
+    if let Err(err) = spawned {
+        frus::log::warn!("battery: no worker thread ({err})");
+    }
+}
+
 /// `BatteryManager.BATTERY_STATUS_*` and the `EXTRA_*` names of the battery broadcast, read
 /// into a [`Battery`]. Pure, so it is tested on any machine.
 pub fn from_extras(level: i32, scale: i32, status: i32, plugged: i32) -> Battery {
@@ -153,6 +172,33 @@ mod android {
             .call_method(&thread, "getName", "()Ljava/lang/String;", &[])?
             .l()?;
         Ok(env.get_string(&name.into())?.into())
+    }
+
+    /// The charge as `BatteryManager.getIntProperty(BATTERY_PROPERTY_CAPACITY)` gives it, read
+    /// on the calling thread (any thread: `with_env` attaches it for the call), and that
+    /// thread's Java name.
+    pub fn capacity() -> Result<(i32, String), PlatformError> {
+        with_env(|env, activity| {
+            const BATTERY_PROPERTY_CAPACITY: i32 = 4;
+            let service = env.new_string("batterymanager")?;
+            let manager = env
+                .call_method(
+                    activity,
+                    "getSystemService",
+                    "(Ljava/lang/String;)Ljava/lang/Object;",
+                    &[JValue::Object(&service)],
+                )?
+                .l()?;
+            let percent = env
+                .call_method(
+                    &manager,
+                    "getIntProperty",
+                    "(I)I",
+                    &[JValue::Int(BATTERY_PROPERTY_CAPACITY)],
+                )?
+                .i()?;
+            Ok((percent, java_thread(env)?))
+        })
     }
 
     pub(super) fn register(sender: Sender<Battery>) -> Result<Registration, PlatformError> {

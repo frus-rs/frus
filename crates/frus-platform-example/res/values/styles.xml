@@ -4,8 +4,7 @@
   it and the moment this application draws its first frame.
 
   Without it the window keeps the platform theme's background — white on a device in
-  light mode — so a dark application opens with a full-screen white flash. The reference
-  ships the same file in its own template, for the same reason.
+  light mode — so a dark application opens with a full-screen white flash.
 
   `windowBackground` is the only thing here that matters, and it should be the colour the
   application's first frame starts with: `Theme::dark()`'s background, since that is what

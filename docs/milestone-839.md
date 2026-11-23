@@ -115,7 +115,9 @@ call; exceptions are caught.
 state at once, then each change), `navigator.getBattery()` on the web (reached by name with
 `js_sys::Reflect`, since `web-sys` has no binding for it), and `Unavailable` elsewhere. A
 button shows a toast through `run_on_main_thread`, which is the `Proxy` path on an interface
-(`Runnable`).
+(`Runnable`). At start, a plain worker thread also asks `BatteryManager` for the charge
+through `with_env` and logs the answer, so the log shows the same number read on a thread
+the VM did not know.
 
 ## How it was tested
 
@@ -133,9 +135,32 @@ button shows a toast through `run_on_main_thread`, which is the `Proxy` path on 
   `frus-shell` with the example on Android (`--no-deps`, since the JNI code is behind
   `cfg(android)` and linted by nothing else) and on wasm; `cargo doc` of `frus-shell` and
   `frus` with `-D warnings`; `cargo fmt --all`.
-- **Not run on a device.** No phone was connected when this was checked, so the JNI half
-  (`with_env`, `JavaProxy`, `broadcast_receiver`, `run_on_main_thread`) and the rebuilt dex
-  were compiled and linted but not run. The web half was compiled, not run in a browser.
+- **On a phone** (Huawei STK-L21, Android 10, release APK built with cargo-apk):
+  - *Real values.* At launch the screen read "18 %, charging", the same as
+    `dumpsys battery` (level 18, status 2, USB powered) and the status bar. The broadcast was
+    heard on the Java thread `main`.
+  - *Changes.* Driving the broadcast with `dumpsys battery` (`unplug` with
+    `set status 3`, `set level 35`, `set ac 1` with `set status 2`, `set level 36`, `reset`)
+    gave "20 %, on battery", "35 %, on battery", "35 %, charging", "36 %, charging", then the
+    real "20 %, charging" again, each on screen through the channel. A loop of 300
+    `set level` commands delivered 280 readings before USB dropped (the phone's connection,
+    not the app). The process kept the same pid throughout, and nothing crashed.
+  - *`with_env` on a worker.* A plain `std::thread` asked `BatteryManager` for the charge
+    through `with_env` and got 18 %, the broadcast's value. Its Java name was `Thread-3`, a
+    thread the VM did not know before the call.
+  - *The JNI reference tables stay flat.* A stress pass in a temporary build of the example
+    (not committed) ran on a worker: 20,000 `with_env` calls nested in one attached call,
+    8 local strings each, finished in 321 ms. A leaked local frame would overflow the local
+    table. 5,000 calls that attach and detach the thread had no failures. 60,000 `Runnable`
+    proxies were made, called and dropped in 4.4 s, and the handler ran 60,000 times. One leaked
+    global per proxy would pass ART's 51,200 globals and abort; it did not. The resident size
+    stayed between 117 and 120 MB across the passes.
+  - *A proxy called after its `JavaProxy` is dropped* runs no handler (the `Runnable` handler
+    ran 0 times). A `Comparator` answered 7 before the drop and the default 0 after, with no
+    exception.
+  - *Not checked on the phone:* the toast. The phone locked with a PIN between runs, so the
+    button could not be pressed. `run_on_main_thread` itself was not exercised on the device.
+- **Not run in a browser.** The web half was compiled for wasm, not run.
 
 ## Not done
 
@@ -150,8 +175,5 @@ button shows a toast through `run_on_main_thread`, which is the `Proxy` path on 
   `objc2` directly; whether frus should re-export it is part of the plugin discussion.
 - **Arrays and return values** are left to `jni`: `ProxyCall` unboxes primitives and reads
   strings, but a handler that returns a primitive boxes it itself.
-- **No run on a phone or in a browser.** The Android bridge and the example have not been run
-  on a device (none was connected), and the web half has not been run in a browser. Both are
-  owed before the bridge is relied on: the battery reading and its changes, the toast, a
-  proxy called after its `JavaProxy` is dropped, and the reference table staying flat over
-  many calls on the interface's thread.
+- **No run in a browser**, and **no toast on the phone** (it was locked with a PIN): the web
+  half and `run_on_main_thread` are compiled and linted, not run.
