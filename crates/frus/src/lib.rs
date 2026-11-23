@@ -236,6 +236,10 @@ pub use frus_shell::{NotificationError, NotificationResponse, SystemNotification
 /// let _ = frus::haptics::success();
 /// ```
 pub use frus_shell::haptics;
+/// **Calling the platform yourself** (milestone 839): `frus::platform::android::with_env` and
+/// `JavaProxy` on Android, `frus::platform::web::window()` on the web, and
+/// [`platform::channel`] to bring what a system callback learned to the interface's thread.
+pub use frus_shell::platform;
 pub use frus_shell::HapticsError;
 #[cfg(feature = "secure-store")]
 pub use frus_shell::{secure_store, SecureStore, SecureStoreError};
