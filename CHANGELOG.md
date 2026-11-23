@@ -41,6 +41,15 @@ any release may break.
   `crates/frus-platform-example`, shows the battery's charge and charging state on Android and
   the web with `frus::platform` alone.
 
+- **The GPU no longer shades any rect where a later opaque rect hides it, and draws the
+  inside of large opaque rects without blending** (J838). Milestone 837's cut now applies to
+  every rect, not only shadows, and looks past any number of rects to the opaque one that hides
+  most of it: the demo's page background is no longer shaded under its task card. The inside of
+  an opaque rect (where its coverage and alpha are exactly one) goes to a second pipeline that
+  does not blend, which lets a tiled GPU drop the hidden pixels of earlier draws by itself; its
+  anti-aliased ring is still blended. Rects that paint nothing are dropped. The picture does not
+  change (a GPU test compares every pixel, and the goldens pass unchanged).
+
 - **The GPU no longer shades shadows hidden under the surface that casts them, nor anything
   outside a rect's clip** (J837). A rect's quad is now held to its clip in the vertex stage,
   where the clip used to be tested only per pixel; and a shadow followed in its batch by an
