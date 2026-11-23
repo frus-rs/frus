@@ -8,10 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 839 so far, each documenting the objective, the alternatives
+> record — one per step, 840 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Memory is given back when the system is short of it** (J840, part of #221).
+  `trim_caches(TrimLevel)` (new) gives back the decoded pictures nobody shows and, from
+  `Critical` up, GPU memory: the glyph atlas back to its first size, the rasterised glyphs and
+  the path triangles at `Critical`; every texture the next frame can make again at `Hidden`.
+  frus calls it itself: Android's `onTrimMemory` (through a small class in the bundled dex),
+  Android's low-memory callback and the iOS memory warning trim at `Critical`, and an
+  application none of whose windows can be seen (a hidden browser tab, a minimised window)
+  trims at `Hidden`. An application can call it too. `frus run`'s `trim-memory` command takes
+  a level. Each frame statistics line now says what the decoded images hold and how many
+  pictures were decoded on the interface's thread and on the decoding threads
+  (`image_decodes()`, `decoded_image_bytes()`, new). The measurement of a 200-photograph grid
+  on a phone is still owed.
 
 - **Calling the platform yourself: `frus::platform`** (J839, part of #216). For an API frus
   does not wrap, `frus::platform::android::with_env(|env, activity| ..)` gives a `JNIEnv` and
