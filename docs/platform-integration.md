@@ -19,7 +19,7 @@ difference is worth understanding before it is discovered in a comment thread.
 | UI, layout, state, animation, gestures | — | — | ✅ |
 | Desktop, in its entirety | — | — | ✅ |
 | Android — APIs frus wraps | — | — | ✅ |
-| Android — APIs frus does not wrap | sometimes | — | via `jni` |
+| Android — APIs frus does not wrap | — | — | via `frus::platform` |
 | iOS — once the shell exists | — | never required | ✅ |
 
 Two things that table does not show, and that a developer does meet:
@@ -32,9 +32,11 @@ iOS will bring `Info.plist` and a launch configuration. This is XML and plist, n
 a programming language, but it is not Rust either, and it must be understood rather
 than copied.
 
-**Coverage, not language, is the real limit.** A developer who needs biometrics or
-in-app purchases today writes the JNI themselves. That is possible and unpleasant. It is discussed under
-[the real gap](#the-real-gap-coverage-not-language) below.
+**Coverage, not language, is the real limit.** A developer who needs an API frus does not
+wrap (biometrics, a sensor, Bluetooth) calls it from Rust through `frus::platform`, described
+[below](#calling-the-platform-yourself): JNI with the threading and exception rules handled on
+Android, `web-sys` on the web. That is the bridge; a convention for publishing such code as a
+plugin crate is not settled yet, see [the real gap](#the-real-gap-coverage-not-language).
 
 ## What frus already wraps
 
@@ -103,6 +105,70 @@ These need no JNI, no platform code and no setup; each is one call, re-exported 
 
 ---
 
+## Calling the platform yourself
+
+`frus::platform` (milestone 839) is the documented way into the system for an API frus does
+not wrap. Nothing in it costs an application that does not call it: no class is loaded, no
+thread started, no listener registered.
+
+**Android.** `frus::platform::android::with_env(|env, activity| ...)` runs a closure with a
+`JNIEnv` and the activity, and `jni` is re-exported as `frus::platform::android::jni`:
+
+```rust
+use frus::platform::android::{jni::objects::JValue, with_env};
+
+let percent = with_env(|env, activity| {
+    let name = env.new_string("batterymanager")?;
+    let manager = env
+        .call_method(activity, "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;", &[JValue::Object(&name)])?
+        .l()?;
+    Ok(env.call_method(&manager, "getIntProperty", "(I)I", &[JValue::Int(4)])?.i()?)
+});
+```
+
+The rules, stated in its documentation:
+
+- **Any thread.** The interface's thread is attached to the Java VM for its whole life; any
+  other thread is attached for the call and detached after it, unless it was attached already.
+- **The interface's thread is not Android's main thread.** An API that must run on the main
+  thread (a `Toast`, a `View`) goes through `run_on_main_thread(|env, activity| ...)`, which
+  posts a `Runnable` to the main looper. Neither thread may block waiting for the other.
+- **Local references are freed when the closure returns** (it runs in a local frame); a Java
+  object kept beyond the call is a global reference.
+- **A Java exception is caught**: cleared, and returned as `PlatformError::Exception` with its
+  text, where a pending one would end the process at the next JNI call.
+
+`JavaProxy::new(env, &["android.hardware.SensorEventListener"], |env, call| ...)` implements
+any Java interface in Rust; `JavaProxy::broadcast_receiver(env, |env, call| ...)` makes a
+`BroadcastReceiver`. The handler runs on the thread Java calls it on, sees the method's name and
+its arguments (`call.int_arg(env, 0)` unboxes a primitive), and answers a value for methods that
+return one. An error or a panic in it is logged and never thrown into the system's code.
+Dropping the proxy drops the handler; Java calls that still come answer the return type's
+default.
+
+**The web.** `frus::platform::web::window()` and `document()`, with `web_sys`, `js_sys`,
+`wasm_bindgen` and `wasm_bindgen_futures` re-exported. An interface frus does not use itself is
+turned on by the crate that needs it, with its own `web-sys` line listing that feature; Cargo
+merges it into the one frus re-exports. An API the bindings lack is reached by name with
+`js_sys::Reflect`.
+
+**Windows, macOS, Linux and iOS.** No bridge, because none is needed: their interfaces are C,
+COM or Objective-C, which Rust calls directly (`windows`, `objc2`, D-Bus crates), with no VM
+to attach to. `frus::platform::BRIDGE` says which case a build is in.
+
+**Back to the interface's thread.** A system callback runs on a system thread. It sends what it
+learned through `frus::platform::channel()`; a task of the interface's thread (`spawn_local`,
+`StateHandle::spawn`) awaits `Receiver::recv`, and the send wakes it through the same path every
+task woken from another thread takes: a request for a frame (a redraw request, which winit on
+Android honours where a bare wake is dropped), and the frame runs the task before it builds.
+
+`crates/frus-platform-example` is the worked example: the battery's charge and charging state,
+read with a broadcast receiver on Android and `navigator.getBattery()` on the web, in one file
+that uses `frus::platform` alone, as a third-party crate would.
+
+---
+
 ## Desktop
 
 Nothing to qualify. Win32, X11, Wayland and AppKit are all reachable through
@@ -154,7 +220,11 @@ observers, `OnClickListener`-style contracts — is therefore reachable with no 
 file at all. It does not extend classes, so it does not help with `View`,
 `Service`, `BroadcastReceiver` or `AccessibilityNodeProvider`.
 
-That is the rule to carry: **interfaces are free, classes cost a dex.**
+That is the rule to carry: **interfaces are free, classes cost a dex.** Since milestone 839
+the trick is built, as `frus::platform::android::JavaProxy` (below): the one
+`InvocationHandler` every proxy needs lives in the dex frus already carries, so a crate that
+implements a listener ships no Java and no dex. `BroadcastReceiver`, the class most callbacks
+on Android arrive through, is answered the same way by one forwarding class in that dex.
 
 ### Screen readers on Android
 
@@ -222,17 +292,17 @@ bindings: more glue, still no hand-written JavaScript.
 The honest summary of everything above is that the language question is nearly
 settled and the *coverage* question is wide open.
 
-An application needing biometrics or in-app purchases gets no help from frus today (video plays
-through `VideoPlayerController`, and a camera at least has a surface to draw into, `TextureSurface`). Its author
-writes JNI by hand — reachable, verbose, easy to get wrong, and repeated in every application
-that needs the same thing. That is the actual obstacle for someone shipping a real
-application, and it is not solved by adding another widget.
+An application needing biometrics gets no ready-made API from frus today (video plays
+through `VideoPlayerController`, purchases go through `Purchases`, and a camera has
+`CameraController`). Its author calls the platform through `frus::platform`, above: the
+threading, the references, the exceptions and the callbacks are handled, and no Java is
+written, but the calls themselves are still written by hand, in every application that needs
+the same thing.
 
-What it argues for is a platform-services layer: a small set of Rust APIs with
-per-target implementations behind them, following the same rule as the rest of the
-architecture — the portable crates state the intent, `frus-shell` knows the
-platform. The shape is not settled and no milestone claims it. It is written down
-here so the next person to feel the friction knows it was seen, not missed.
+What is missing is the convention that lets that code be published once: how a crate declares
+the permissions and manifest entries it needs, the Java or Swift it might still carry, and how
+`frus build` picks them up, so that an application gains a capability by adding one dependency.
+That needs a discussion first (#216); the bridge it would stand on exists.
 
 ---
 
@@ -245,8 +315,8 @@ here so the next person to feel the friction knows it was seen, not missed.
   Android the process hosts ART because `NativeActivity` is a Java class; that is
   the platform's runtime, not one frus ships.
 - **"No second language for app logic"** — true, and the qualifier is load-bearing.
-  The framework contains one Java file and will likely contain a second; an
-  application contains none.
+  The framework carries its Java in one prebuilt dex (the keyboard,
+  the screen reader, the forwarding class behind `JavaProxy`); an application contains none.
 - **"No platform channel between your code and the pixels"** — true, and scoped on
   purpose. The render path is application → widget tree → scene → `wgpu` → native
   API, with no serialisation boundary. The JNI bridge sits on the *input* path.

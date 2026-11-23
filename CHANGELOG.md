@@ -8,10 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 837 so far, each documenting the objective, the alternatives
+> record — one per step, 839 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Calling the platform yourself: `frus::platform`** (J839, part of #216). For an API frus
+  does not wrap, `frus::platform::android::with_env(|env, activity| ..)` gives a `JNIEnv` and
+  the activity on any thread (attached for the call when it is not already, local references
+  freed when it returns, a Java exception cleared and returned as
+  `PlatformError::Exception`), and `run_on_main_thread` runs work on Android's main thread.
+  `JavaProxy` implements any Java interface in Rust through `java.lang.reflect.Proxy`, and
+  `JavaProxy::broadcast_receiver` a `BroadcastReceiver`, with no Java and no dex of the crate's
+  own: the one forwarding class is in the dex frus already carries (2 KB more). On the web,
+  `frus::platform::web::window()` and `document()`, with `web_sys`, `js_sys` and
+  `wasm_bindgen` re-exported. `frus::platform::channel()` brings what a system callback
+  learned to a task of the interface's thread, through the redraw request every woken task
+  uses. Nothing is loaded or started until an application calls it. A new example,
+  `crates/frus-platform-example`, shows the battery's charge and charging state on Android and
+  the web with `frus::platform` alone.
 
 - **The GPU no longer shades shadows hidden under the surface that casts them, nor anything
   outside a rect's clip** (J837). A rect's quad is now held to its clip in the vertex stage,

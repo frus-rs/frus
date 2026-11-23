@@ -1,0 +1,52 @@
+[package]
+name = "frus-platform-example"
+description = "frus — calling the platform yourself: the battery's charge through frus::platform (JNI on Android, the browser's API on the web)"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# An example application, never a crate someone depends on.
+publish = false
+
+# Library: `rlib` for the desktop binary, `cdylib` (the `.so`) for Android.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# **A single dependency**: the `frus` facade. `frus::platform` re-exports `jni` on Android and
+# `web-sys`, `js-sys` and `wasm-bindgen` on the web, so this crate declares none of them for
+# its calls.
+frus = { path = "../frus" }
+
+# Web (wasm): the `frus::main!` macro generates the `#[wasm_bindgen(start)]` entry point. The
+# `web-sys` line only turns on the one interface frus does not use itself; Cargo merges it into
+# the `web-sys` that `frus::platform::web` re-exports.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["BatteryManager"] }
+
+# --- Android packaging (cargo-apk) ---
+[package.metadata.android]
+package = "com.frus.platform"
+build_targets = ["aarch64-linux-android"]
+# The launch theme lives here — see `res/values/styles.xml`.
+resources = "res"
+
+[package.metadata.android.application]
+label = "frus platform"
+# NoActionBar, for the safe area (see `res/values/styles.xml`).
+theme = "@style/LaunchTheme"
+
+# The configuration changes followed in place (see frus-demo's manifest).
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|mcc|mnc|touchscreen|navigation|colorMode|fontWeightAdjustment|grammaticalGender"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.func_name"
+value = "frus_native_activity_on_create"
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 34

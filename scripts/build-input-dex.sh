@@ -9,7 +9,8 @@
 # screen reader's view of the window, milestone 782; FrusPlatformViews.java and the
 # dev.frus.platform interfaces plugins implement, the native views of milestone 794;
 # FrusIntents.java, what an intent that opens the application carries, milestone 801;
-# FrusTextServices.java, the spell checker and the "process text" actions, milestone 829) into one
+# FrusTextServices.java, the spell checker and the "process text" actions, milestone 829;
+# FrusProxy.java, Java calling Rust through any interface, milestone 839) into one
 # embedded dex, and the web views of milestone 799 (dev.frus.webview) into a second one.
 # Only re-run this when a Java file changes; the resulting dex is checked in
 # (crates/frus-shell/assets/frus_input.dex) so that `cargo apk` never needs javac.
