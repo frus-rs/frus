@@ -121,6 +121,8 @@ mod instance;
 mod interface_thread;
 mod link;
 mod logging;
+// The system's memory signals (milestone 840): Android's levels, the Web's hidden page.
+mod memory_pressure;
 #[cfg_attr(not(android), allow(dead_code))]
 mod textservices;
 // Opening an address in the system's handler (milestone 775).

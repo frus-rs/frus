@@ -93,6 +93,9 @@ pub(crate) struct TextPainter {
     /// The multisample state the renderers must be built with: it has to match the
     /// pass, or the pipeline mismatches under MSAA.
     multisample: wgpu::MultisampleState,
+    /// What a new atlas is made with, when memory is short and the grown one goes.
+    cache: glyphon::Cache,
+    format: wgpu::TextureFormat,
 }
 
 impl TextPainter {
@@ -123,7 +126,19 @@ impl TextPainter {
             viewport,
             renderers: Vec::new(),
             multisample,
+            cache,
+            format,
         }
+    }
+
+    /// Lets go of the glyph atlas and the rasterised glyphs (milestone 840): memory is short.
+    /// An atlas grows to hold a frame's glyphs and never shrinks; a new one starts at its
+    /// first size and holds what the next frame draws. The renderers go with it, and their
+    /// buffers, made again as the next frame needs them.
+    pub(crate) fn trim(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.atlas = glyphon::TextAtlas::new(device, queue, &self.cache, self.format);
+        self.renderers.clear();
+        self.swash_cache = glyphon::SwashCache::new();
     }
 
     /// Starts a frame: the glyphs no draw of the last frame used may be evicted from the

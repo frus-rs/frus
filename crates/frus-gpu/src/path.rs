@@ -504,6 +504,17 @@ impl PathPainter {
         self.meshes.end_frame();
     }
 
+    /// Lets go of the triangles kept for paths: memory is short (milestone 840).
+    pub(crate) fn trim(&mut self) {
+        self.meshes.clear();
+    }
+
+    /// How many outlines' triangles are kept.
+    #[cfg(test)]
+    pub(crate) fn meshes_len(&self) -> usize {
+        self.meshes.len()
+    }
+
     /// Draws one batch's paths into an already-open render pass.
     pub(crate) fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>, range: Range<u32>) {
         if range.is_empty() {

@@ -612,6 +612,14 @@ pub(crate) struct SurfaceTargets {
     layers: Vec<CachedLayer>,
 }
 
+impl SurfaceTargets {
+    /// Lets go of every target kept for the surface (milestone 840): its window is out of
+    /// sight, and its next frame makes them again.
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// An intermediate MSAA texture reused as a render target: painting happens there,
 /// multisampled, then **resolves** to the single-sample target. One is enough — the
 /// layer pre-passes and the main pass are all full-surface and take turns using it,
@@ -1200,6 +1208,37 @@ impl Painters {
         std::mem::swap(&mut self.msaa, &mut other.msaa);
         std::mem::swap(&mut self.stage, &mut other.stage);
         std::mem::swap(&mut self.layer_cache, &mut other.layers);
+    }
+
+    /// **Gives back GPU memory** the painters can rebuild, as much as `level` says
+    /// (milestone 840). Called between frames.
+    ///
+    /// - `Moderate`: nothing. Between frames the painters hold what the last frame drew.
+    /// - `Critical`: what the next frame does not need: the glyph atlas, which grows to the
+    ///   most text a frame ever drew and never shrinks, back to its first size; the
+    ///   rasterised glyphs; the triangles kept for paths.
+    /// - `Hidden`: that, and every texture the next frame can make again: the cached layers,
+    ///   the images' textures, the multisampled scratch targets, the staging texture. The
+    ///   first frame back renders and uploads them again.
+    pub(crate) fn trim(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        level: frus_core::TrimLevel,
+    ) {
+        use frus_core::TrimLevel;
+        if level < TrimLevel::Critical {
+            return;
+        }
+        self.text.trim(device, queue);
+        self.path.trim();
+        if level < TrimLevel::Hidden {
+            return;
+        }
+        self.layer_cache.clear();
+        self.msaa.clear();
+        self.stage = None;
+        self.image.trim();
     }
 
     /// The GPU memory the painters hold in textures of their own, at the end of the last
@@ -2958,6 +2997,111 @@ mod tests {
             painters.text.atlas_bytes() <= first.max(512 * 512 + 256 * 256 * 4),
             "the atlas grew to {} bytes",
             painters.text.atlas_bytes()
+        );
+    }
+
+    /// **A trim gives back what it says, and the next frame builds it again** (milestone
+    /// 840). A frame with a photograph drawn small (a mip chain), a kept layer, a path and
+    /// more text than the first glyph atlas holds leaves the painters holding all of it.
+    /// `Moderate` keeps it; `Critical` brings the atlas back to its first size and drops the
+    /// kept triangles; `Hidden` leaves the painters as they were made. The same frame drawn
+    /// again holds what it held.
+    #[test]
+    fn a_trim_gives_back_gpu_memory_and_the_next_frame_rebuilds_it() {
+        use frus_core::TrimLevel;
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 512);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let photo = ImageData::from_rgba(256, 256, vec![200; 256 * 256 * 4]).into_handle();
+        let mut scene = Scene::new();
+        scene.draw_image(
+            &photo,
+            Rect::new(0.0, 0.0, 32.0, 32.0),
+            Rect::new(0.0, 0.0, 1.0, 1.0),
+            Color::WHITE,
+        );
+        scene.fill_path(
+            &frus_core::Path::circle(frus_core::Point::new(100.0, 100.0), 30.0),
+            Color::WHITE,
+        );
+        scene.layer(0.5, |s| {
+            s.fill_rect(Rect::new(40.0, 40.0, 60.0, 60.0), Color::rgb(1.0, 0.0, 0.0))
+        });
+        for (row, line) in [
+            "ABCDEFGHIJKLM",
+            "NOPQRSTUVWXYZ",
+            "abcdefghijklm",
+            "nopqrstuvwxyz",
+        ]
+        .iter()
+        .enumerate()
+        {
+            scene.text(
+                frus_core::Point::new(0.0, 120.0 + row as f32 * 90.0),
+                *line,
+                &frus_core::ResolvedTextStyle::exact(72.0),
+                Color::WHITE,
+            );
+        }
+        let render = |painters: &mut Painters| {
+            painters.render(
+                &device,
+                &queue,
+                format,
+                &view,
+                512,
+                512,
+                &scene,
+                Some(wgpu::Color::BLACK),
+            )
+        };
+        let fresh = painters.memory();
+        let first_atlas = painters.text.atlas_bytes();
+        render(&mut painters);
+        let full = painters.memory();
+        assert!(
+            painters.text.atlas_bytes() > first_atlas,
+            "the frame's text grew the atlas"
+        );
+        assert!(
+            painters.path.meshes_len() > 0,
+            "the circle's triangles are kept"
+        );
+        assert!(!painters.layer_cache.is_empty(), "the layer is kept");
+
+        painters.trim(&device, &queue, TrimLevel::Moderate);
+        assert_eq!(
+            painters.memory(),
+            full,
+            "a moderate trim leaves the GPU alone"
+        );
+
+        painters.trim(&device, &queue, TrimLevel::Critical);
+        assert_eq!(
+            painters.text.atlas_bytes(),
+            first_atlas,
+            "the atlas is back to its first size"
+        );
+        assert_eq!(painters.path.meshes_len(), 0, "the triangles went");
+        assert!(!painters.layer_cache.is_empty(), "the layer is still kept");
+
+        painters.trim(&device, &queue, TrimLevel::Hidden);
+        assert_eq!(
+            painters.memory(),
+            fresh,
+            "hidden: the painters hold what they held when made"
+        );
+
+        render(&mut painters);
+        assert_eq!(
+            painters.memory(),
+            full,
+            "the next frame builds it all again"
         );
     }
 

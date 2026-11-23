@@ -158,6 +158,7 @@ mod lottie;
 mod marquee;
 mod media;
 mod mediascope;
+mod memory;
 mod menu;
 mod menubar;
 mod messenger;
@@ -556,6 +557,7 @@ pub use media::{
     Accessibility, AccessibilityOverrides, Brightness, Edges, MediaQuery, SurfaceGuard,
 };
 pub use mediascope::MediaScope;
+pub use memory::{take_gpu_trim, trim_caches};
 pub use menu::{MenuItem, PopupMenuButton};
 pub use menubar::{MenuBar, MenuPath, SubmenuButton};
 pub use motion::MotionTheme;
@@ -850,6 +852,8 @@ pub use frus_core::{
 pub use frus_core::{
     apply_box_fit, DecorationImage, FittedSizes, ImagePiece, ImageRepeat, MAX_IMAGE_TILES,
 };
+/// Memory pressure (milestone 840): how much to give back, and what the decoded pictures cost.
+pub use frus_core::{decoded_image_bytes, image_decodes, ImageDecodes, TrimLevel};
 /// What a decoration is made of — its shape, its sides, its border's two forms, its
 /// shadows' blur — and the shapes a border can take.
 pub use frus_core::{

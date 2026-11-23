@@ -520,6 +520,31 @@ impl Renderer {
         self.painters.memory()
     }
 
+    /// **Gives back the GPU memory this renderer can rebuild**, as much as `level` says
+    /// (milestone 840), between two frames:
+    ///
+    /// - [`TrimLevel::Moderate`](frus_core::TrimLevel::Moderate): nothing, since between
+    ///   frames it holds what the last one drew;
+    /// - [`TrimLevel::Critical`](frus_core::TrimLevel::Critical): the glyph atlas back to its
+    ///   first size, the rasterised glyphs and the triangles kept for paths;
+    /// - [`TrimLevel::Hidden`](frus_core::TrimLevel::Hidden): that, plus the kept layers, the
+    ///   images' textures and the scratch targets of this renderer's own surface; another
+    ///   window's are given back by [`trim_surface`](Self::trim_surface).
+    ///
+    /// The next frame makes again what it draws, so it costs more than an ordinary one.
+    /// [`gpu_memory`](Self::gpu_memory) counts what is left.
+    pub fn trim_caches(&mut self, level: frus_core::TrimLevel) {
+        self.painters.trim(&self.device, &self.queue, level);
+    }
+
+    /// Gives back what is kept for another window's surface — its layers and scratch
+    /// targets — at [`TrimLevel::Hidden`](frus_core::TrimLevel::Hidden) (milestone 840).
+    pub fn trim_surface(&self, surface: &mut WindowSurface, level: frus_core::TrimLevel) {
+        if level >= frus_core::TrimLevel::Hidden {
+            surface.targets.clear();
+        }
+    }
+
     /// Draws the scene — rectangles, images, paths, text, layers — and presents it.
     pub fn render(&mut self, scene: &Scene) -> RenderOutcome {
         self.draw(None, scene)
