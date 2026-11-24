@@ -23,13 +23,20 @@ pub(crate) fn normalize(root: &mut Value, notes: &mut Vec<&'static str>) -> Resu
     let Some(root) = root.as_object_mut() else {
         return Err("not a Lottie animation: the file is not a JSON object".to_string());
     };
+    // The fonts text layers name.
+    let fonts = root
+        .get("fonts")
+        .and_then(|f| f.get("list"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if let Some(Value::Array(layers)) = root.get_mut("layers") {
-        normalize_layers(layers, notes)?;
+        normalize_layers(layers, &fonts, notes)?;
     }
     if let Some(Value::Array(assets)) = root.get_mut("assets") {
         for asset in assets {
             if let Some(Value::Array(layers)) = asset.get_mut("layers") {
-                normalize_layers(layers, notes)?;
+                normalize_layers(layers, &fonts, notes)?;
             }
         }
     }
@@ -99,10 +106,20 @@ fn modern_keyframes(frames: &mut [Value]) {
     }
 }
 
-fn normalize_layers(layers: &mut Vec<Value>, notes: &mut Vec<&'static str>) -> Result<(), String> {
-    // Text layers (type 5): velato has none, and refuses the whole file for one.
+fn normalize_layers(
+    layers: &mut Vec<Value>,
+    fonts: &[Value],
+    notes: &mut Vec<&'static str>,
+) -> Result<(), String> {
+    // Text layers (type 5): velato has none, and refuses the whole file for one. Each
+    // becomes the shape layer that draws its words; one with nothing to draw goes.
     let before = layers.len();
-    layers.retain(|layer| layer.get("ty").and_then(Value::as_u64) != Some(5));
+    layers.retain_mut(|layer| match layer.as_object_mut() {
+        Some(layer) if layer.get("ty").and_then(Value::as_u64) == Some(5) => {
+            crate::text::text_as_shape(layer, fonts, notes)
+        }
+        _ => true,
+    });
     if layers.len() != before {
         note(notes, "text");
     }

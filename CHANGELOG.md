@@ -22,6 +22,17 @@ any release may break.
   Backspace took it apart. A length limit no longer lets part of an emoji in. Android's
   surrounding-text deletion now removes the UTF-16 units the keyboard named instead of that
   many characters. `grapheme_stops` and its stepping helpers are new in `frus-text`.
+- **Text in SVG pictures and Lottie animations** (J841, #303, #304). An SVG's `<text>` and
+  `<tspan>` were dropped without a word, and a Lottie text layer was left out. Both are now
+  shaped by frus's own text stack, with the application's fonts, and drawn as glyph outlines —
+  filled, stroked, transformed, clipped and ordered like any other shape. SVG: `x`, `y`, `dx`,
+  `dy` and their lists, `text-anchor`, `font-family` lists, `font-size`, `font-weight`,
+  `font-style`, `letter-spacing` and `xml:space`, from attributes, `style` and `<style>`
+  sheets; text on a path, rotated glyphs, `textLength`, decorations and vertical text are named
+  by `Svg::unsupported`. Lottie: the document's text, font (from the font list), size,
+  justification, line height, tracking, baseline shift, fill, stroke and paragraph box, and a
+  keyframed document changing on its frame; text animators are named `"text animator"`.
+  `frus_text::outline_text` and `outline_paragraph` (new) give any text as outlines.
 
 - **Memory is given back when the system is short of it** (J840, part of #221).
   `trim_caches(TrimLevel)` (new) gives back the decoded pictures nobody shows and, from

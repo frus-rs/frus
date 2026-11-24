@@ -481,3 +481,56 @@ fn mask_content_in_transformed_groups() {
         </svg>"##,
     );
 }
+
+/// resvg's picture of `source` on white, its text laid out with the bundled DejaVu Sans
+/// faces — the files frus draws its default text with.
+fn reference_with_dejavu(source: &str) -> Snapshot {
+    let mut db = usvg::fontdb::Database::new();
+    for face in ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../frus-text/assets")
+            .join(face);
+        db.load_font_data(std::fs::read(path).expect("a bundled face"));
+    }
+    let options = usvg::Options {
+        fontdb: std::sync::Arc::new(db),
+        ..usvg::Options::default()
+    };
+    let tree = usvg::Tree::from_data(source.as_bytes(), &options).unwrap();
+    let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE).unwrap();
+    pixmap.fill(tiny_skia::Color::WHITE);
+    let scale = SIZE as f32 / tree.size().width();
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Snapshot {
+        width: SIZE,
+        height: SIZE,
+        rgba: pixmap.data().to_vec(),
+    }
+}
+
+/// **Text, shaped by frus's text stack and drawn as glyph outlines**, against the reference
+/// renderer laying out the same font files: positions, anchors, a `<tspan>` with its own
+/// size, offsets and paint, bold, a style sheet, a gradient over the text and a turned group.
+#[test]
+fn text_matches_the_reference_in_the_same_font() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <defs>
+            <style>.title { font-size: 16px; font-weight: bold }</style>
+            <linearGradient id="g"><stop offset="0" stop-color="#d81b60"/>
+              <stop offset="1" stop-color="#1e88e5"/></linearGradient>
+          </defs>
+          <g font-family="DejaVu Sans">
+            <text x="50" y="22" class="title" text-anchor="middle" fill="#3949ab">Hello</text>
+            <text x="6" y="48" font-size="13" fill="#e53935">Pay<tspan dx="3" dy="-5" font-size="8"
+                  fill="#43a047">2</tspan><tspan x="60" dy="5" font-size="13">end</tspan></text>
+            <g transform="rotate(-12 50 80)">
+              <text x="94" y="84" font-size="20" text-anchor="end" fill="url(#g)">Turn</text>
+            </g>
+          </g>
+        </svg>"##;
+    agrees("text", source, reference_with_dejavu(source));
+}
