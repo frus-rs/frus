@@ -311,11 +311,22 @@ pub(crate) struct CustomPainter {
     groups: Vec<Option<(u64, wgpu::BindGroup)>>,
     /// The GPU passes' pictures and states, by key.
     passes: HashMap<u64, PassSlot>,
+    /// The passes whose asked-for targets this device cannot make, said once each.
+    warned: std::collections::HashSet<u64>,
 }
 
 /// A GPU pass's picture, kept from frame to frame with the state its callback keeps.
 struct PassSlot {
     texture: wgpu::Texture,
+    /// The multisampled colour target the picture is resolved from, when the pass asked
+    /// for more than one sample.
+    multisampled: Option<wgpu::Texture>,
+    /// The depth (and stencil) buffer, when the pass asked for one.
+    depth: Option<wgpu::Texture>,
+    /// What the textures were made for: the pipelines in the state were too.
+    targets: PassTargets,
+    /// The version the picture shows, for a pass that says when it changes.
+    drawn: Option<u64>,
     state: Option<Box<dyn PassState>>,
     used: bool,
 }
@@ -425,6 +436,7 @@ impl CustomPainter {
             buffer: None,
             groups: Vec::new(),
             passes: HashMap::new(),
+            warned: Default::default(),
         }
     }
 
@@ -660,8 +672,11 @@ impl CustomPainter {
     }
 
     /// Runs a GPU pass: its callback draws into the pass's picture, kept from the last
-    /// frame when the size is the same, and cleared. `None` when there is nothing to draw:
-    /// an empty box, or a payload that is not a [`GpuCallback`].
+    /// frame when the size and the targets are the same, and cleared (with its depth buffer
+    /// and its multisampled target, when it has them). A pass that says its
+    /// [version](GpuCallback::version) is not run again while the version and the size
+    /// stay the same: the picture it drew is composited again. `None` when there is
+    /// nothing to draw: an empty box, or a payload that is not a [`GpuCallback`].
     pub(crate) fn run_pass(
         &mut self,
         device: &wgpu::Device,
@@ -679,34 +694,73 @@ impl CustomPainter {
         if width == 0 || height == 0 {
             return None;
         }
-        let stale = self
-            .passes
-            .get(&pass.key())
-            .is_none_or(|s| s.texture.width() != width || s.texture.height() != height);
-        if stale {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("frus.gpu_pass"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: GPU_PASS_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+        let (targets, refused) = callback.config.targets(device);
+        if let Some(why) = refused {
+            if self.warned.insert(pass.key()) {
+                log::warn!("a GPU pass asked for {why}");
+            }
+        }
+        let kept = self.passes.get(&pass.key());
+        let resized =
+            kept.is_none_or(|s| s.texture.width() != width || s.texture.height() != height);
+        let retargeted = kept.is_some_and(|s| s.targets != targets);
+        if resized || retargeted {
+            let size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            let make = |label, format, sample_count, usage| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size,
+                    mip_level_count: 1,
+                    sample_count,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let texture = make(
+                "frus.gpu_pass",
+                GPU_PASS_FORMAT,
+                1,
+                wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC
                     | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
+            );
+            let multisampled = (targets.samples > 1).then(|| {
+                make(
+                    "frus.gpu_pass.msaa",
+                    GPU_PASS_FORMAT,
+                    targets.samples,
+                    wgpu::TextureUsages::RENDER_ATTACHMENT,
+                )
             });
-            // The state lives on, whatever the size: what it holds is the application's.
-            let state = self.passes.remove(&pass.key()).and_then(|s| s.state);
+            let depth = targets.depth.map(|format| {
+                make(
+                    "frus.gpu_pass.depth",
+                    format,
+                    targets.samples,
+                    wgpu::TextureUsages::RENDER_ATTACHMENT,
+                )
+            });
+            // The state lives on through a resize: what it holds is the application's. A
+            // change of targets drops it: the pipelines in it were made for the old ones.
+            let state =
+                self.passes
+                    .remove(&pass.key())
+                    .and_then(|s| if retargeted { None } else { s.state });
             self.passes.insert(
                 pass.key(),
                 PassSlot {
                     texture,
+                    multisampled,
+                    depth,
+                    targets,
+                    drawn: None,
                     state,
                     used: false,
                 },
@@ -717,22 +771,41 @@ impl CustomPainter {
         let view = slot
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        if callback.config.version.is_some() && slot.drawn == callback.config.version {
+            // Unchanged, as the pass says: the picture is the one it drew.
+            return Some(view);
+        }
+        let multisampled = slot
+            .multisampled
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+        let depth = slot
+            .depth
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frus.encoder.gpu_pass"),
         });
-        // Cleared to transparent: what the callback draws is all there is.
+        // Cleared to transparent, the depth to its far value: what the callback draws is all
+        // there is.
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frus.gpu_pass.clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
+                view: multisampled.as_ref().unwrap_or(&view),
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target: multisampled.as_ref().map(|_| &view),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: depth.as_ref().map(|view| {
+                targets.attachment(
+                    view,
+                    wgpu::LoadOp::Clear(callback.config.depth_clear),
+                    wgpu::LoadOp::Clear(0),
+                )
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -743,6 +816,9 @@ impl CustomPainter {
             encoder: &mut encoder,
             target: &view,
             texture: &slot.texture,
+            multisampled: multisampled.as_ref(),
+            depth: depth.as_ref(),
+            targets,
             format: GPU_PASS_FORMAT,
             width,
             height,
@@ -752,6 +828,7 @@ impl CustomPainter {
         };
         (callback.draw)(&mut context);
         queue.submit(std::iter::once(encoder.finish()));
+        slot.drawn = callback.config.version;
         Some(view)
     }
 
@@ -759,6 +836,10 @@ impl CustomPainter {
     pub(crate) fn each_texture(&self, mut each: impl FnMut(&wgpu::Texture)) {
         for slot in self.passes.values() {
             each(&slot.texture);
+            slot.multisampled
+                .iter()
+                .chain(&slot.depth)
+                .for_each(&mut each);
         }
     }
 
@@ -824,6 +905,152 @@ pub(crate) fn gl_check(_source: &str) -> Result<(), String> {
 /// so a pass writes **linear** values, premultiplied by alpha, as frus's own drawing does.
 pub const GPU_PASS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+/// The depth format a GPU pass gets from [`GpuCallback::depth`] when it names none: 32-bit
+/// float, which every backend frus runs on can render to, WebGL 2 included.
+pub const GPU_PASS_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// **What a GPU pass draws into**, as its pipelines must be made for it: the picture's
+/// colour format, the depth (and stencil) format when the pass has a depth buffer, and the
+/// number of samples of both.
+///
+/// A pipeline the pass draws with is made with [`PassTargets::multisample`] and
+/// [`PassTargets::depth_stencil`]; its passes are begun with
+/// [`GpuPassContext::begin_render_pass`], or with [`GpuPassContext::color_attachment`] and
+/// [`GpuPassContext::depth_stencil_attachment`] in a descriptor of the application's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassTargets {
+    /// The colour format, [`GPU_PASS_FORMAT`].
+    pub format: wgpu::TextureFormat,
+    /// The depth buffer's format, `None` without one.
+    pub depth: Option<wgpu::TextureFormat>,
+    /// Samples per pixel of the colour target and of the depth buffer: 1, or what
+    /// [`GpuCallback::samples`] asked for when the device can make it.
+    pub samples: u32,
+}
+
+impl PassTargets {
+    /// The multisample state a pipeline drawing into these targets is made with.
+    pub fn multisample(&self) -> wgpu::MultisampleState {
+        wgpu::MultisampleState {
+            count: self.samples,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        }
+    }
+
+    /// The depth state of a pipeline that tests with `compare` and writes its depth, as a
+    /// 3D scene draws its opaque surfaces; `None` when the pass has no depth buffer. Change
+    /// its fields for anything else (no writes for a transparent surface, a stencil, a bias).
+    pub fn depth_stencil(&self, compare: wgpu::CompareFunction) -> Option<wgpu::DepthStencilState> {
+        self.depth.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(compare),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        })
+    }
+
+    /// The colour target state of a pipeline drawing into these targets, blending
+    /// premultiplied colours over what is there.
+    pub fn color_target(&self) -> wgpu::ColorTargetState {
+        wgpu::ColorTargetState {
+            format: self.format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        }
+    }
+
+    /// The depth (and stencil) attachment of `view`, loaded or cleared as asked.
+    fn attachment<'v>(
+        &self,
+        view: &'v wgpu::TextureView,
+        depth: wgpu::LoadOp<f32>,
+        stencil: wgpu::LoadOp<u32>,
+    ) -> wgpu::RenderPassDepthStencilAttachment<'v> {
+        let format = self.depth.unwrap_or(GPU_PASS_DEPTH_FORMAT);
+        wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: format.has_depth_aspect().then_some(wgpu::Operations {
+                load: depth,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: format.has_stencil_aspect().then_some(wgpu::Operations {
+                load: stencil,
+                store: wgpu::StoreOp::Store,
+            }),
+        }
+    }
+}
+
+/// What a GPU pass asked for, beyond its picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PassConfig {
+    depth: Option<wgpu::TextureFormat>,
+    depth_clear: f32,
+    samples: u32,
+    version: Option<u64>,
+}
+
+impl Default for PassConfig {
+    fn default() -> Self {
+        PassConfig {
+            depth: None,
+            depth_clear: 1.0,
+            samples: 1,
+            version: None,
+        }
+    }
+}
+
+impl PassConfig {
+    /// The targets this device makes for what was asked, and what it could not make.
+    fn targets(&self, device: &wgpu::Device) -> (PassTargets, Option<String>) {
+        let features = device.features();
+        let mut refused = None;
+        let depth = self.depth.filter(|format| {
+            let usable = format.is_depth_stencil_format()
+                && features.contains(format.required_features())
+                && format
+                    .guaranteed_format_features(features)
+                    .allowed_usages
+                    .contains(wgpu::TextureUsages::RENDER_ATTACHMENT);
+            if !usable {
+                refused = Some(format!(
+                    "a depth buffer of {format:?}, which this device cannot render to: drawn without one"
+                ));
+            }
+            usable
+        });
+        let supported = |samples: u32| {
+            std::iter::once(GPU_PASS_FORMAT).chain(depth).all(|format| {
+                format
+                    .guaranteed_format_features(features)
+                    .flags
+                    .sample_count_supported(samples)
+            })
+        };
+        let samples = if self.samples <= 1 || supported(self.samples) {
+            self.samples.max(1)
+        } else {
+            let fallback = if supported(4) { 4 } else { 1 };
+            refused = Some(format!(
+                "{} samples, which this device cannot make: drawn with {fallback}",
+                self.samples
+            ));
+            fallback
+        };
+        (
+            PassTargets {
+                format: GPU_PASS_FORMAT,
+                depth,
+                samples,
+            },
+            refused,
+        )
+    }
+}
+
 /// What a GPU pass may keep from one frame to the next: anything it owns.
 #[cfg(not(target_arch = "wasm32"))]
 pub trait PassState: Any + Send + Sync {
@@ -861,6 +1088,12 @@ impl<T: Any> PassState for T {
 /// Draw **premultiplied linear** colours into [`GpuPassContext::target`]
 /// ([`GPU_PASS_FORMAT`], sRGB-encoded by the hardware). Pipelines, buffers and anything
 /// else worth keeping go in [`GpuPassContext::state`], made once.
+///
+/// A pass that asked for a depth buffer ([`GpuCallback::depth`]) or for multisampling
+/// ([`GpuCallback::samples`]) is given them here too, the size of the picture, made again
+/// when the box changes size and cleared every frame (the depth to its far value).
+/// [`GpuPassContext::begin_render_pass`] begins a pass on all of them, resolving the
+/// samples into the picture.
 pub struct GpuPassContext<'a> {
     /// frus's device: make pipelines, buffers and textures with it.
     pub device: &'a wgpu::Device,
@@ -868,10 +1101,18 @@ pub struct GpuPassContext<'a> {
     pub queue: &'a wgpu::Queue,
     /// An encoder frus submits when the callback returns; the picture was cleared in it.
     pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The picture, as a render target.
+    /// The picture, as a render target. With multisampling, what
+    /// [`GpuPassContext::multisampled`] is resolved into.
     pub target: &'a wgpu::TextureView,
     /// The picture's texture: a copy destination, too.
     pub texture: &'a wgpu::Texture,
+    /// The multisampled colour target, when the pass draws with more than one sample: draw
+    /// into it and resolve into [`GpuPassContext::target`].
+    pub multisampled: Option<&'a wgpu::TextureView>,
+    /// The depth (and stencil) buffer, when the pass asked for one.
+    pub depth: Option<&'a wgpu::TextureView>,
+    /// What the pass draws into: what its pipelines are made for.
+    pub targets: PassTargets,
     /// The picture's format, [`GPU_PASS_FORMAT`].
     pub format: wgpu::TextureFormat,
     /// Its width in physical pixels.
@@ -885,7 +1126,7 @@ pub struct GpuPassContext<'a> {
     state: &'a mut Option<Box<dyn PassState>>,
 }
 
-impl GpuPassContext<'_> {
+impl<'a> GpuPassContext<'a> {
     /// **What this pass keeps between frames**: made by `init` the first time (or when a
     /// value of another type was kept), then the same value every frame after.
     ///
@@ -907,6 +1148,46 @@ impl GpuPassContext<'_> {
             .as_mut()
             .and_then(|s| (**s).as_any_mut().downcast_mut::<T>())
             .expect("kept above")
+    }
+
+    /// The colour attachment of a render pass drawing into the picture: the multisampled
+    /// target resolved into the picture when there is one, the picture itself otherwise,
+    /// loading what is there.
+    pub fn color_attachment(&self) -> wgpu::RenderPassColorAttachment<'a> {
+        wgpu::RenderPassColorAttachment {
+            view: self.multisampled.unwrap_or(self.target),
+            depth_slice: None,
+            resolve_target: self.multisampled.map(|_| self.target),
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        }
+    }
+
+    /// The depth (and stencil) attachment of a render pass, loading what is there (cleared
+    /// by frus when the frame began); `None` when the pass has no depth buffer.
+    pub fn depth_stencil_attachment(&self) -> Option<wgpu::RenderPassDepthStencilAttachment<'a>> {
+        let targets = self.targets;
+        self.depth
+            .map(|view| targets.attachment(view, wgpu::LoadOp::Load, wgpu::LoadOp::Load))
+    }
+
+    /// **Begins a render pass on everything the pass draws into**: the picture (through its
+    /// multisampled target) and the depth buffer, as
+    /// [`color_attachment`](GpuPassContext::color_attachment) and
+    /// [`depth_stencil_attachment`](GpuPassContext::depth_stencil_attachment) give them.
+    pub fn begin_render_pass(&mut self, label: Option<&str>) -> wgpu::RenderPass<'_> {
+        let color = self.color_attachment();
+        let depth = self.depth_stencil_attachment();
+        self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label,
+            color_attachments: &[Some(color)],
+            depth_stencil_attachment: depth,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
     }
 }
 
@@ -943,6 +1224,16 @@ type PassFn = dyn Fn(&mut GpuPassContext<'_>) + Send + Sync;
 pub struct GpuCallback {
     key: u64,
     draw: Arc<PassFn>,
+    config: PassConfig,
+}
+
+impl std::fmt::Debug for GpuCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuCallback")
+            .field("key", &self.key)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GpuCallback {
@@ -969,12 +1260,48 @@ impl GpuCallback {
         GpuCallback {
             key: hasher.finish(),
             draw: Arc::new(draw),
+            config: PassConfig::default(),
         }
     }
 
     /// Tells this pass apart from others drawn by the same function: a list of them.
     pub fn key(mut self, key: u64) -> GpuCallback {
         self.key = self.key.rotate_left(17) ^ key.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self
+    }
+
+    /// **A depth buffer** of `format` ([`GPU_PASS_DEPTH_FORMAT`] for most), the size of
+    /// the picture and with as many samples, cleared to 1.0 at the start of every frame the
+    /// pass draws: what a 3D scene needs so that the nearer surface wins whatever order its
+    /// triangles are drawn in. Given as [`GpuPassContext::depth`]. A format the device
+    /// cannot render to is said once and the pass drawn without one.
+    pub fn depth(mut self, format: wgpu::TextureFormat) -> GpuCallback {
+        self.config.depth = Some(format);
+        self
+    }
+
+    /// The value the depth buffer is cleared to each frame: 1.0 unless set, 0.0 for a
+    /// reversed depth range (with [`wgpu::CompareFunction::Greater`]).
+    pub fn depth_clear(mut self, value: f32) -> GpuCallback {
+        self.config.depth_clear = value;
+        self
+    }
+
+    /// **Multisampling**: draws with `samples` per pixel ([`GpuPassContext::multisampled`],
+    /// and the depth buffer with as many), resolved into the picture, which smooths the
+    /// edges of 3D geometry. 4 is what every backend can make; a count the device cannot is
+    /// said once and 4, or else 1, is used instead. 1, the default, is none.
+    pub fn samples(mut self, samples: u32) -> GpuCallback {
+        self.config.samples = samples.max(1);
+        self
+    }
+
+    /// **Says when the picture changes**: while `version` and the box's size stay what they
+    /// were when it was last drawn, the callback is not run and the picture it drew is
+    /// composited again. Without a version the callback runs every frame the box is drawn.
+    /// For a view that changes on input (a model turned by a drag), not with the clock.
+    pub fn version(mut self, version: u64) -> GpuCallback {
+        self.config.version = Some(version);
         self
     }
 
@@ -1148,6 +1475,172 @@ fn shade(frag: Fragment) -> vec4<f32> {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(custom.pipeline(&device, &shader).is_some());
+    }
+
+    /// What one run of a test pass saw.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Seen {
+        size: (u32, u32),
+        depth: bool,
+        multisampled: bool,
+        targets: PassTargets,
+        /// How many states the pass had made so far.
+        states: usize,
+    }
+
+    type Log = Arc<std::sync::Mutex<Vec<Seen>>>;
+
+    /// A pass recording what it is given: one closure type, so every call is the same pass.
+    fn recording(log: Log) -> GpuCallback {
+        GpuCallback::new(move |ctx| {
+            // The state numbers itself: one more than any seen, made only when frus has none.
+            let made = log.lock().unwrap().iter().map(|s| s.states).max();
+            let count = *ctx.state(|_, _| made.unwrap_or(0) + 1);
+            log.lock().unwrap().push(Seen {
+                size: (ctx.width, ctx.height),
+                depth: ctx.depth.is_some(),
+                multisampled: ctx.multisampled.is_some(),
+                targets: ctx.targets,
+                states: count,
+            });
+            let _pass = ctx.begin_render_pass(Some("test"));
+        })
+    }
+
+    fn painters(device: &wgpu::Device, queue: &wgpu::Queue) -> crate::compositor::Painters {
+        crate::compositor::Painters::new(device, queue, GPU_PASS_FORMAT, 1, None)
+    }
+
+    /// A pass that asks for a depth buffer and 4 samples is given both, the size of its box;
+    /// a new size makes them again and keeps the state; new targets drop the state, whose
+    /// pipelines were made for the old ones.
+    #[test]
+    fn a_pass_is_given_its_depth_buffer_and_samples() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let mut painters = painters(&device, &queue);
+        let custom = painters.custom_mut();
+        let log: Log = Default::default();
+        let deep = recording(log.clone())
+            .depth(GPU_PASS_DEPTH_FORMAT)
+            .samples(4);
+        let mut run = |callback: &GpuCallback, w: f32, h: f32| {
+            let view = custom.run_pass(
+                &device,
+                &queue,
+                &callback.pass(Rect::new(0.0, 0.0, w, h), 0.0),
+            );
+            assert!(view.is_some(), "a picture");
+            custom.end_frame();
+        };
+        run(&deep, 40.0, 30.0);
+        run(&deep, 64.0, 48.0);
+        run(&recording(log.clone()), 64.0, 48.0);
+        let seen = log.lock().unwrap().clone();
+        let deep_targets = PassTargets {
+            format: GPU_PASS_FORMAT,
+            depth: Some(GPU_PASS_DEPTH_FORMAT),
+            samples: 4,
+        };
+        assert_eq!(
+            seen[0],
+            Seen {
+                size: (40, 30),
+                depth: true,
+                multisampled: true,
+                targets: deep_targets,
+                states: 1,
+            }
+        );
+        assert_eq!(seen[1].size, (64, 48), "made again at the new size");
+        assert_eq!(seen[1].states, 1, "the state lives through a resize");
+        assert_eq!(
+            seen[2],
+            Seen {
+                size: (64, 48),
+                depth: false,
+                multisampled: false,
+                targets: PassTargets {
+                    format: GPU_PASS_FORMAT,
+                    depth: None,
+                    samples: 1,
+                },
+                states: 2,
+            },
+            "new targets, a new state"
+        );
+        assert_eq!(
+            deep_targets.multisample().count,
+            4,
+            "pipelines are made for the samples"
+        );
+        let state = deep_targets
+            .depth_stencil(wgpu::CompareFunction::Less)
+            .unwrap();
+        assert_eq!(state.format, GPU_PASS_DEPTH_FORMAT);
+        assert_eq!(state.depth_write_enabled, Some(true));
+    }
+
+    /// A pass that says its version is drawn once per version and size, and its picture
+    /// shown again in between.
+    #[test]
+    fn a_versioned_pass_is_drawn_only_when_it_changes() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let mut painters = painters(&device, &queue);
+        let custom = painters.custom_mut();
+        let log: Log = Default::default();
+        let mut run = |version: u64, w: f32| {
+            let pass = recording(log.clone())
+                .version(version)
+                .pass(Rect::new(0.0, 0.0, w, 20.0), 0.0);
+            assert!(custom.run_pass(&device, &queue, &pass).is_some());
+            custom.end_frame();
+            log.lock().unwrap().len()
+        };
+        assert_eq!(run(1, 20.0), 1, "drawn the first time");
+        assert_eq!(run(1, 20.0), 1, "unchanged: not drawn again");
+        assert_eq!(run(2, 20.0), 2, "a new version is drawn");
+        assert_eq!(run(2, 30.0), 3, "a new size is drawn");
+    }
+
+    /// A sample count the device cannot make falls back to one it can, with a reason; a
+    /// format that is no depth format is refused and the pass drawn without a buffer.
+    #[test]
+    fn what_the_device_cannot_make_falls_back() {
+        let Some((device, _queue)) = headless_device() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let config = PassConfig {
+            samples: 3,
+            ..PassConfig::default()
+        };
+        let (targets, why) = config.targets(&device);
+        assert!(matches!(targets.samples, 1 | 4), "{targets:?}");
+        assert!(why.unwrap().contains("3 samples"));
+        let config = PassConfig {
+            depth: Some(wgpu::TextureFormat::Rgba8Unorm),
+            ..PassConfig::default()
+        };
+        let (targets, why) = config.targets(&device);
+        assert_eq!(targets.depth, None);
+        assert!(why.unwrap().contains("depth buffer"));
+        let (targets, why) = PassConfig {
+            depth: Some(GPU_PASS_DEPTH_FORMAT),
+            samples: 4,
+            ..PassConfig::default()
+        }
+        .targets(&device);
+        assert_eq!(
+            why, None,
+            "32-bit float depth at 4 samples is made everywhere"
+        );
+        assert_eq!(targets.samples, 4);
     }
 
     #[test]

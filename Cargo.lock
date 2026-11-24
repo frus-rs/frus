@@ -1867,6 +1867,7 @@ name = "frus-shaders"
 version = "0.6.0"
 dependencies = [
  "frus",
+ "frus-test",
  "wasm-bindgen",
 ]
 
