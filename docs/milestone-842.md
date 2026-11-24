@@ -119,6 +119,12 @@ stack), `frus-shell` 639. `cargo clippy --workspace --all-targets -- -D warnings
 
 ## Not done
 
+- **Goldens were not run.** The golden build under WSL was cut off by the time limit, and the
+  second attempt failed when the host disk filled. TextLayout feeds only the caret, the
+  selection highlight and hit testing, and for text where every character is its own cluster
+  (all the selection goldens) the geometry is the same as before, so no golden is expected to
+  change. That is reasoned, not measured.
+
 - **Emoji and complex-script fallback rendering** is unchanged: a machine with no emoji face
   draws a ZWJ sequence as whatever the fallback finds. On the Windows test machine the family
   shapes but its glyphs left it without width before this change; that it is drawn as one
