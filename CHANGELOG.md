@@ -13,6 +13,24 @@ any release may break.
 
 ## [Unreleased]
 
+- **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
+  run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
+  administrator password, only Perl and `make` (`frus doctor` says when either is missing).
+  Under WSLg, frus opens its window through X11: WSLg's compositor crashes a few seconds after
+  a Wayland window with client-side decorations appears, and every window goes with it
+  (`FRUS_WAYLAND=1` keeps Wayland). A window system that goes away now ends the application with
+  "the window system ended the connection" instead of `Exit Failure: 1`. The engine is a new
+  revision, so the first `frus run` after the update installs it again, on every system. Checked
+  end to end on Linux (WSL): two patches into the same process, its state kept, and `q` ending
+  everything; macOS was not run.
+- **`q` and `R` in `frus run` end the application on Linux**, where they ended the patch engine
+  and left the application running: the process group was signalled without the `--` that
+  procps-ng's `kill` needs, and got nothing (J843).
+- **A screenshot (`s`) waits for the first frame on the screen**, where one taken during the
+  start could show the background alone; and taking one no longer logs
+  `DRI2: failed to load driver` errors on Linux machines without an OpenGL driver: the
+  offscreen drawing asks OpenGL only where no other backend has a GPU (J843).
+
 - **Memory is given back when the system is short of it** (J840, part of #221).
   `trim_caches(TrimLevel)` (new) gives back the decoded pictures nobody shows and, from
   `Critical` up, GPU memory: the glyph atlas back to its first size, the rasterised glyphs and

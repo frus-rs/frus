@@ -245,6 +245,9 @@ mod window;
 // The desktop window's size, place and maximized state, kept between runs (milestone 783).
 #[cfg(any(desktop, test))]
 mod window_memory;
+// X11 rather than Wayland under WSLg, whose compositor crashes on Wayland windows (milestone 843).
+#[cfg(any(all(desktop, target_os = "linux"), test))]
+mod window_system;
 // The Windows host of native views (milestone 802).
 #[cfg(windows)]
 mod windows_platform_view;
@@ -645,14 +648,35 @@ pub fn run<A: Application>(mut app: A) -> anyhow::Result<()> {
 
     // A loop whose **user events** are messages: asynchronous effects deliver their
     // result through an `EventLoopProxy<Message>`.
-    let event_loop = winit::event_loop::EventLoop::<A::Message>::with_user_event().build()?;
+    let mut builder = winit::event_loop::EventLoop::<A::Message>::with_user_event();
+    // Under WSLg, X11: its compositor crashes on Wayland windows (milestone 843).
+    #[cfg(target_os = "linux")]
+    if window_system::x11_preferred() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
+    let event_loop = builder.build()?;
     // Keep asking for frames while an animation runs; otherwise wait.
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
     let mut app = App::new(app, proxy);
-    event_loop.run_app(&mut app)?;
+    event_loop.run_app(&mut app).map_err(loop_ended)?;
     Ok(())
+}
+
+/// What a loop that ended in failure says. winit reports a lost connection to the window
+/// system (the Wayland compositor or X server closed or restarted) only as `Exit Failure: 1`,
+/// after its own `Io error` lines; that alone does not tell the developer what went away.
+#[cfg(desktop)]
+fn loop_ended(err: winit::error::EventLoopError) -> anyhow::Error {
+    match err {
+        winit::error::EventLoopError::ExitFailure(code) => anyhow::anyhow!(
+            "the window system ended the connection (exit failure {code}): the display server \
+             closed or restarted, and the window went with it"
+        ),
+        other => other.into(),
+    }
 }
 
 /// Runs an application on **iOS**. Same shape as [`run`] — winit takes care of

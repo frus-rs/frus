@@ -292,7 +292,7 @@ Things that have cost previous contributors real time:
 - **Interactive widgets and hit-testing.** `Ui::widget_rect` resolves rects through per-kind registries. A new interactive widget that isn't wired into a registry will pass its unit tests and still silently no-op on live drag or hover paths.
 - **Android fonts.** Fonts are bundled, not taken from the system — an Android-only text bug is often a font-loading problem, not a shaping one.
 - **Windows + Smart App Control.** With SAC in Enforce mode, freshly built test executables are intermittently blocked (`os error 4551`). Compilation succeeds, running fails. Retry, run under WSL2 (see [`scripts/wsl-run.sh`](scripts/wsl-run.sh)), or turn SAC off.
-- **WSL2 display.** Force the X11 backend (`WINIT_UNIX_BACKEND=x11`); WSLg's Wayland connection is unstable under root.
+- **WSL2 display.** WSLg's compositor (weston 9) crashes with a segmentation fault a few seconds after a Wayland window with client-side decorations appears, and every window on it goes with it: the application ends on `Io error: Broken pipe`. frus opens its window through X11 under WSLg for that reason (milestone 843); `FRUS_WAYLAND=1` keeps Wayland, to reproduce it. A test that runs a window should also wait until the compositor has been up a few seconds: WSLg also restarts it on its own, often just as a new `wsl` session starts.
 
 Found a new one? Add it here in your PR.
 

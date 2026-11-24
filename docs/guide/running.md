@@ -92,8 +92,8 @@ impl State for CounterState {
 
 ### What it costs
 
-- **The first run installs the engine** that builds patches: about twenty minutes, once. Linux
-  needs the OpenSSL headers for it.
+- **The first run installs the engine** that builds patches: about twenty minutes, once. On Linux
+  it takes Perl and `make`, which most machines that build Rust have.
 - **On Android**, the first hot build is slow and its library large (a debug library of a few
   hundred megabytes, on the device only); patches then take a few seconds. Switching between a
   hot run and `--no-hot` (or `frus build apk`) reinstalls the application, and its data on the
