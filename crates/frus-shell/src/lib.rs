@@ -25,7 +25,7 @@ pub struct ReadmeDoctests;
 mod a11y;
 #[cfg(any(android, test))]
 mod a11y_android;
-#[cfg(web)]
+#[cfg(any(web, test))]
 mod a11y_web;
 #[cfg(web)]
 mod address;

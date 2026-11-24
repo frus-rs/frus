@@ -137,6 +137,22 @@ impl<Msg: Clone> Widget<Msg> for Stepper<Msg> {
         None
     }
 
+    /// The arrows step the value, as its buttons do. The stepper itself takes no focus (its
+    /// buttons do), so this is what an assistive technology's increment and decrement reach:
+    /// the node says it is a slider, and a slider's value moves with its arrows (milestone 845).
+    fn on_key(&self, key: &crate::interaction::Key) -> crate::interaction::KeyResponse<Msg> {
+        use crate::interaction::{Key, KeyResponse};
+        if !self.enabled {
+            return KeyResponse::Ignored;
+        }
+        let to = match key {
+            Key::Left { .. } => (self.value - self.step).clamp(self.min, self.max),
+            Key::Right { .. } => (self.value + self.step).clamp(self.min, self.max),
+            _ => return KeyResponse::Ignored,
+        };
+        KeyResponse::Handled((to != self.value).then(|| (self.on_change)(to)))
+    }
+
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         // The picker said nothing to a reader before this; its value is the whole of what
         // it carries.
@@ -158,6 +174,34 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     enum Msg {
         Set(i32),
+    }
+
+    #[test]
+    fn the_arrows_step_it_for_an_assistive_technology() {
+        use crate::interaction::{Key, KeyResponse};
+        let right = Key::Right {
+            shift: false,
+            word: false,
+        };
+        let left = Key::Left {
+            shift: false,
+            word: false,
+        };
+        let stepper = Stepper::new(5, Msg::Set).range(0, 10).step(2);
+        assert!(matches!(
+            stepper.on_key(&right),
+            KeyResponse::Handled(Some(Msg::Set(7)))
+        ));
+        assert!(matches!(
+            stepper.on_key(&left),
+            KeyResponse::Handled(Some(Msg::Set(3)))
+        ));
+        // At a bound, nothing moves.
+        let low = Stepper::new(0, Msg::Set).range(0, 10);
+        assert!(matches!(low.on_key(&left), KeyResponse::Handled(None)));
+        // Disabled, nothing at all.
+        let off = Stepper::new(5, Msg::Set).range(0, 10).enabled(false);
+        assert!(matches!(off.on_key(&right), KeyResponse::Ignored));
     }
 
     #[test]
