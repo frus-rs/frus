@@ -5039,8 +5039,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 };
                 let (scene, shot) = framed(scene);
                 let clean = clean.map(|c| framed(c).0);
+                // Not before a frame was on the screen: the frames before the first one
+                // presented can be empty, and a picture of the background alone says nothing
+                // (milestone 843). The request waits for the next frame, which is asked below.
                 #[cfg(desktop)]
-                if let Some(path) = self.debug.screenshot.take() {
+                if let Some(path) = self
+                    .debug
+                    .screenshot
+                    .take_if(|_| !crate::startup::pending())
+                {
                     write_screenshot(
                         photographed(&scene, clean.as_ref(), false),
                         shot.0,
@@ -5100,6 +5107,14 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         self.frame_costs.acquire = timings.acquire;
                         self.frame_costs.draw = timings.draw;
                         self.frame_costs.gpu = timings.gpu;
+                    }
+                }
+                // A screenshot still waiting for the first frame on the screen: the next frame
+                // takes it.
+                #[cfg(desktop)]
+                if self.debug.screenshot.is_some() {
+                    if let Some(window) = self.win.window.as_ref() {
+                        window.request_redraw();
                     }
                 }
                 // The GPU device is gone: a new renderer on the same window, at the next frame's

@@ -137,18 +137,27 @@ pub fn render_offscreen(
 
 /// Creates a surfaceless wgpu device, along with the MSAA sample count supported
 /// for the sRGB target. `None` when there is no adapter.
+///
+/// The primary backends (Vulkan, Metal, DirectX 12, WebGPU) are asked first, and every backend
+/// only where none of them has an adapter: asking OpenGL as well made each screenshot on Linux
+/// probe EGL, which logs `DRI2: failed to load driver` errors where it has no GPU driver, as
+/// under WSLg (milestone 843).
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue, u32)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        ..Default::default()
-    }))
-    .ok()?;
+    let adapter = [wgpu::Backends::PRIMARY, wgpu::Backends::all()]
+        .into_iter()
+        .find_map(|backends| {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+                ..Default::default()
+            }))
+            .ok()
+        })?;
     let sample_count =
         crate::compositor::preferred_sample_count(&adapter, wgpu::TextureFormat::Rgba8UnormSrgb);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

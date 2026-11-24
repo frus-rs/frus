@@ -29,26 +29,60 @@ use crate::project::Project;
 
 /// Where the fixed `dx` comes from: the fix on top of the 0.7.10 release, which matches the
 /// patch protocol of frus's `hot-reload` feature.
+///
+/// On Linux this revision builds OpenSSL from its sources (milestone 843): with the system's
+/// OpenSSL, installing the engine needed `libssl-dev`, which takes the administrator's password,
+/// and a machine without it ran with restarts.
 const ENGINE_REPO: &str = "https://github.com/KalybosPro/dioxus";
-const ENGINE_REV: &str = "c5438d614cac6e539c5f4fbbc0022db04d5181fb";
+const ENGINE_REV: &str = "b1cd923bb0c93b2e12f046b34f5c1eb105c77e79";
 
-/// What building the engine needs and this machine lacks, as what to do about it: on Linux it
-/// links OpenSSL, whose headers a package manager installs, which frus cannot do without the
+/// The Perl modules OpenSSL's build script loads: Debian's `perl` has them all, while Fedora
+/// splits them into packages of their own that a minimal installation leaves out.
+const OPENSSL_BUILD_PERL_MODULES: [&str; 5] = [
+    "FindBin",
+    "IPC::Cmd",
+    "File::Compare",
+    "File::Copy",
+    "Time::Local",
+];
+
+/// What building the engine needs and this machine lacks, as what to do about it. On Linux the
+/// engine builds OpenSSL from its sources, which takes Perl and `make` besides the C compiler
+/// Rust already links with; a package manager installs them, which frus cannot do without the
 /// administrator's password.
 pub(crate) fn missing_build_requirement() -> Option<String> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    let found = Command::new("pkg-config")
-        .args(["--exists", "openssl"])
+    let perl = Command::new("perl")
+        .args(OPENSSL_BUILD_PERL_MODULES.map(|module| format!("-M{module}")))
+        .args(["-e", "1"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    (!found).then(|| {
-        "building the hot-reload engine needs OpenSSL's headers and pkg-config: \
-         `sudo apt install pkg-config libssl-dev` (Fedora: `sudo dnf install pkgconf \
-         openssl-devel`), then run again"
-            .to_string()
-    })
+    let make = Command::new("make")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    build_requirement(perl, make)
+}
+
+/// What to install, given whether Perl (with the modules OpenSSL's build loads) and `make` are
+/// there.
+fn build_requirement(perl: bool, make: bool) -> Option<String> {
+    let missing = match (perl, make) {
+        (true, true) => return None,
+        (false, true) => "Perl",
+        (true, false) => "make",
+        (false, false) => "Perl and make",
+    };
+    Some(format!(
+        "building the hot-reload engine needs {missing}: `sudo apt install perl make` \
+         (Fedora: `sudo dnf install perl make`), then run again"
+    ))
 }
 
 /// Where the patch engine is installed: `~/.frus/tools/dx-<commit>/`.
@@ -713,11 +747,12 @@ pub(crate) fn web_build_dir(target: &Path, library: &str) -> Option<PathBuf> {
 /// Stops `dx` and the application it started.
 pub(crate) fn stop(dx: &mut Child) {
     // Elsewhere `dx` leads a process group of its own (see `run_hot`): the group goes, the
-    // application with it.
+    // application with it. The `--` matters: procps-ng's `kill -TERM -1234` returns 0 and
+    // signals nothing, so `q` and `R` ended `dx` and left the application running on Linux.
     #[cfg(unix)]
     {
         let _ = Command::new("kill")
-            .args(["-TERM", &format!("-{}", dx.id())])
+            .args(["-s", "TERM", "--", &format!("-{}", dx.id())])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
@@ -748,6 +783,61 @@ pub(crate) fn platform_flag() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Milestone 843: stopping `dx` stops what it started, as the application is `dx`'s child,
+    /// in its process group.
+    #[cfg(unix)]
+    #[test]
+    fn stopping_the_engine_stops_its_process_group() {
+        use std::io::BufRead;
+        use std::os::unix::process::CommandExt;
+        let mut leader = Command::new("sh")
+            .args(["-c", "sleep 60 & echo $!; wait"])
+            .stdout(std::process::Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(leader.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let child = line.trim().to_string();
+        let alive = |pid: &str| {
+            Command::new("kill")
+                .args(["-0", pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(alive(&child));
+        stop(&mut leader);
+        let gone = (0..50).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            !alive(&child)
+        });
+        assert!(gone, "the child {child} outlived its group's leader");
+    }
+
+    #[test]
+    fn the_engine_needs_no_system_openssl() {
+        // Perl and make are what OpenSSL's own build takes; the headers of the system's OpenSSL
+        // (`libssl-dev`) are never asked for.
+        assert_eq!(build_requirement(true, true), None);
+        for (perl, make, named) in [
+            (false, true, "needs Perl:"),
+            (true, false, "needs make:"),
+            (false, false, "needs Perl and make:"),
+        ] {
+            let said = build_requirement(perl, make).unwrap();
+            assert!(said.contains(named), "{said}");
+            assert!(said.contains("sudo apt install perl make"), "{said}");
+            assert!(
+                !said.contains("libssl") && !said.contains("openssl"),
+                "{said}"
+            );
+        }
+    }
 
     #[test]
     fn a_link_is_made_with_backslashes() {

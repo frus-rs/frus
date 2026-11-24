@@ -8,11 +8,28 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 842 so far, each documenting the objective, the alternatives
+> record — one per step, 843 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
+  run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
+  administrator password, only Perl and `make` (`frus doctor` says when either is missing).
+  Under WSLg, frus opens its window through X11: WSLg's compositor crashes a few seconds after
+  a Wayland window with client-side decorations appears, and every window goes with it
+  (`FRUS_WAYLAND=1` keeps Wayland). A window system that goes away now ends the application with
+  "the window system ended the connection" instead of `Exit Failure: 1`. The engine is a new
+  revision, so the first `frus run` after the update installs it again, on every system. Checked
+  end to end on Linux (WSL): two patches into the same process, its state kept, and `q` ending
+  everything; macOS was not run.
+- **`q` and `R` in `frus run` end the application on Linux**, where they ended the patch engine
+  and left the application running: the process group was signalled without the `--` that
+  procps-ng's `kill` needs, and got nothing (J843).
+- **A screenshot (`s`) waits for the first frame on the screen**, where one taken during the
+  start could show the background alone; and taking one no longer logs
+  `DRI2: failed to load driver` errors on Linux machines without an OpenGL driver: the
+  offscreen drawing asks OpenGL only where no other backend has a GPU (J843).
 - **Editing steps by grapheme cluster** (J842, part of #56). What a reader sees as one
   character — a family emoji joined by zero-width joiners, a flag, a hand with a skin tone, a
   letter with a combining accent, a Devanagari or Thai syllable, an Arabic letter with its

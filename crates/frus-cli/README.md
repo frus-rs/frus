@@ -66,7 +66,7 @@ cannot change the shape of a state that is alive (a field added): `R` for that.
 **`--no-hot`** runs without it: `r` then rebuilds and restarts the application, with the state
 of every component that keeps one (see the keys below). A release build (`--release`) runs that
 way too, unless **`--hot`** is given; `--hot` also makes a missing engine an error, where by
-default a machine that cannot install it (Linux without OpenSSL's headers, say) runs with
+default a machine that cannot install it (Linux without Perl or `make`, say) runs with
 restarts and says why.
 
 On the web (`frus run -d web`), the page is served by `frus run` as with `--no-hot`, its
@@ -84,8 +84,9 @@ minute or two). The package installed by `frus run --no-hot` (or `frus build apk
 will not replace it with the engine's (its data on the device goes with it), and the other way
 round.
 
-On Linux, building the engine needs OpenSSL's headers (`sudo apt install pkg-config
-libssl-dev`); `frus doctor` says whether they are there.
+On Linux, building the engine builds OpenSSL from its sources, which takes Perl and `make`
+(`sudo apt install perl make` where they are missing); `frus doctor` says whether they are
+there. The system's OpenSSL headers are not needed.
 
 A change that does not compile is said with its place in your own files
 (`src/x.rs:40:34: error[E0425]: …`), and the application goes on running the code it had.
