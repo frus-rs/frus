@@ -27,7 +27,11 @@ use frus_core::{
     TextPosition, TextRun, TextShaping, TextStyle,
 };
 
+mod grapheme;
 mod shaping;
+pub use grapheme::{
+    grapheme_after, grapheme_before, grapheme_floor, grapheme_stops, grapheme_stops_of,
+};
 pub use shaping::{default_locale, set_default_locale, shaped};
 
 /// The default line-height to font-size ratio.
@@ -1494,8 +1498,12 @@ struct LayoutLine {
     carets: Vec<f32>,
     /// The left and right edges of every character on the line, in reading order. A
     /// character drawn by no glyph (the space a line broke at) is an empty extent at its
-    /// caret.
+    /// caret. The characters of one grapheme cluster all have the cluster's extent.
     extents: Vec<(f32, f32)>,
+    /// Whether each boundary on the line (`chars + 1` entries) is a **grapheme** boundary —
+    /// one the caret may stand at. Inside a cluster (an emoji sequence, a letter and its
+    /// combining marks, an Indic syllable) it is not.
+    stops: Vec<bool>,
     /// Whether each character on the line was drawn right to left — its glyph's direction,
     /// or the line's for a character drawn by none.
     rtl: Vec<bool>,
@@ -1821,25 +1829,61 @@ impl TextLayout {
                 let span = &line_text[lo..hi];
                 let char_bytes: Vec<usize> = span.char_indices().map(|(b, _)| lo + b).collect();
                 let n = char_bytes.len();
+                // The grapheme cluster each character belongs to, and which boundaries are a
+                // cluster's: the caret never stands inside one.
+                let grapheme_starts = grapheme_stops(span);
+                let mut cluster = vec![0usize; n];
+                for (g, pair) in grapheme_starts.windows(2).enumerate() {
+                    cluster[pair[0]..pair[1]].fill(g);
+                }
+                let mut stops = vec![false; n + 1];
+                for &stop in &grapheme_starts {
+                    stops[stop] = true;
+                }
 
                 // Each glyph covers a byte cluster [start, end) over [x, x+w), where x is
                 // **local to the visual line** and already carries the alignment; the
-                // characters of a cluster share its width, in the cluster's direction.
+                // grapheme clusters it draws share its width — a ligature of two letters is
+                // split between them, an emoji sequence drawn as one glyph is not split at
+                // all — in the glyph's direction.
                 let mut drawn: Vec<Option<(f32, f32, bool)>> = vec![None; n];
                 for glyph in run.glyphs.iter() {
                     let covered: Vec<usize> = (0..n)
                         .filter(|&i| char_bytes[i] >= glyph.start && char_bytes[i] < glyph.end)
                         .collect();
-                    let k = covered.len().max(1) as f32;
+                    let mut groups: Vec<usize> = covered.iter().map(|&i| cluster[i]).collect();
+                    groups.dedup();
+                    let k = groups.len().max(1) as f32;
                     let rtl = glyph.level.is_rtl();
-                    for (j, &i) in covered.iter().enumerate() {
+                    for &i in &covered {
+                        let j = groups.iter().position(|&g| g == cluster[i]).unwrap_or(0);
                         let from = glyph.w * (j as f32 / k);
                         let to = glyph.w * ((j + 1) as f32 / k);
-                        drawn[i] = Some(if rtl {
+                        let part = if rtl {
                             (glyph.x + glyph.w - to, glyph.x + glyph.w - from, true)
                         } else {
                             (glyph.x + from, glyph.x + to, false)
+                        };
+                        // A character drawn by several glyphs — a base and its mark — spans
+                        // all of them.
+                        drawn[i] = Some(match drawn[i] {
+                            Some((left, right, was_rtl)) => {
+                                (left.min(part.0), right.max(part.1), was_rtl)
+                            }
+                            None => part,
                         });
+                    }
+                }
+                // A grapheme cluster is drawn as one: every character of it spans the whole
+                // of what its glyphs drew, in the direction of its first drawn character.
+                for pair in grapheme_starts.windows(2) {
+                    let (from, to) = (pair[0], pair[1]);
+                    let whole =
+                        drawn[from..to].iter().flatten().copied().reduce(
+                            |(left, right, rtl), (l, r, _)| (left.min(l), right.max(r), rtl),
+                        );
+                    if let Some(whole) = whole {
+                        drawn[from..to].fill(Some(whole));
                     }
                 }
                 let leading = |(left, right, rtl): (f32, f32, bool)| if rtl { right } else { left };
@@ -1877,6 +1921,7 @@ impl TextLayout {
                     start_char,
                     carets,
                     extents,
+                    stops,
                     rtl,
                     base_rtl: run.rtl,
                     top: run.line_top,
@@ -1892,6 +1937,7 @@ impl TextLayout {
                 start_char: 0,
                 carets: vec![empty_line_x(block.width, block.align, false)],
                 extents: Vec::new(),
+                stops: vec![true],
                 rtl: Vec::new(),
                 base_rtl: false,
                 top: 0.0,
@@ -1955,6 +2001,14 @@ impl TextLayout {
         }
     }
 
+    /// The boundary after the grapheme cluster character `k` of `line` starts or is in: where
+    /// the caret lands once it has crossed that cluster forwards.
+    fn cluster_end(line: &LayoutLine, k: usize) -> usize {
+        (k + 1..line.stops.len())
+            .find(|&j| line.stops[j])
+            .unwrap_or(line.extents.len())
+    }
+
     /// The trailing edge of character `k` of `line`.
     fn trailing(line: &LayoutLine, k: usize) -> f32 {
         let (left, right) = line.extents[k];
@@ -2012,7 +2066,8 @@ impl TextLayout {
     /// The caret position a press at `point` puts down, in text-local coordinates: the
     /// `y` picks the line (clamped), and the character under the `x` decides — on its
     /// leading half, the boundary before it, belonging to it (downstream); on its trailing
-    /// half, the boundary after it, belonging to it (upstream). So a press beside a change of
+    /// half, the boundary after it, belonging to it (upstream). The character is a grapheme
+    /// cluster, so a press never lands inside one. So a press beside a change of
     /// direction puts the caret on the side that was pressed, and a press past the end of a
     /// wrapped line puts it at the end of that line, not at the start of the next.
     pub fn position_at(&self, point: Point) -> TextPosition {
@@ -2028,8 +2083,9 @@ impl TextLayout {
             .unwrap_or(last);
         let n = line.extents.len();
         let x = point.x;
-        // The character under the point, its leading half or its trailing one.
-        let under = (0..n).find(|&k| {
+        // The grapheme cluster under the point, its leading half or its trailing one: its
+        // first character stands for it, and a press inside it is at one of its two ends.
+        let under = (0..n).filter(|&k| line.stops[k]).find(|&k| {
             let (left, right) = line.extents[k];
             left < right && left <= x && x < right
         });
@@ -2044,7 +2100,7 @@ impl TextLayout {
                 if leading_half {
                     (k, TextAffinity::Downstream)
                 } else {
-                    (k + 1, TextAffinity::Upstream)
+                    (Self::cluster_end(line, k), TextAffinity::Upstream)
                 }
             }
             // Beside the line, or in a gap: the nearest edge of a character — and of two
@@ -2053,10 +2109,13 @@ impl TextLayout {
             None => {
                 let mut best = (0, TextAffinity::Downstream);
                 let mut best_dist = (line.carets[0] - x).abs();
-                for k in 0..n {
+                for k in (0..n).filter(|&k| line.stops[k]) {
                     for (edge, stop) in [
                         (Self::leading(line, k), (k, TextAffinity::Downstream)),
-                        (Self::trailing(line, k), (k + 1, TextAffinity::Upstream)),
+                        (
+                            Self::trailing(line, k),
+                            (Self::cluster_end(line, k), TextAffinity::Upstream),
+                        ),
                     ] {
                         let dist = (edge - x).abs();
                         if dist <= best_dist {
@@ -2074,7 +2133,9 @@ impl TextLayout {
     /// The caret one step **on screen** from `from`: past the character drawn next to it on
     /// the right when `rightwards`, on the left otherwise — whatever the direction of that
     /// character, so that the arrows move the caret the way they point through a line that
-    /// mixes directions. Crossing a character leaves the caret beside it, belonging to it.
+    /// mixes directions. Crossing a character leaves the caret beside it, belonging to it. A
+    /// character is a **grapheme cluster** here — an emoji sequence, a flag, a letter and its
+    /// marks are crossed in one step, and the caret never stands inside one.
     ///
     /// Off the end of a line — its right for a left-to-right line, its left for a
     /// right-to-left one — the caret goes to the start of the next line; off its start, to
@@ -2088,8 +2149,10 @@ impl TextLayout {
         let local = (index - line.start_char).min(n);
         let x = Self::caret_x(line, local, from.affinity);
         const EPS: f32 = 0.01;
-        // The drawn character next to the caret on that side.
+        // The drawn grapheme cluster next to the caret on that side, its first character
+        // standing for it.
         let next = (0..n)
+            .filter(|&k| line.stops[k])
             .filter(|&k| line.extents[k].0 < line.extents[k].1)
             .filter(|&k| {
                 if rightwards {
@@ -2109,7 +2172,7 @@ impl TextLayout {
             // Rightwards over a left-to-right character, or leftwards over a right-to-left
             // one, is forwards: the caret lands after it.
             let (local, affinity) = if rightwards != line.rtl[k] {
-                (k + 1, TextAffinity::Upstream)
+                (Self::cluster_end(line, k), TextAffinity::Upstream)
             } else {
                 (k, TextAffinity::Downstream)
             };
@@ -3697,5 +3760,113 @@ mod tests {
             TextPosition::upstream(5)
         );
         assert!(!layout.line_is_rtl(TextPosition::new(0)));
+    }
+
+    /// Texts whose grapheme clusters are several characters each, with the boundaries a caret
+    /// may stand at (milestone 842): a family joined by zero-width joiners, a flag, a thumb
+    /// with a skin tone, a letter and a combining accent, Devanagari and Thai syllables, and
+    /// Arabic letters carrying their vowel marks, read right to left.
+    const CLUSTERED: &[(&str, &[usize])] = &[
+        (
+            "a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}b",
+            &[0, 1, 6, 7],
+        ),
+        ("x\u{1F1F9}\u{1F1EC}\u{1F1EB}\u{1F1F7}y", &[0, 1, 3, 5, 6]),
+        ("\u{1F44D}\u{1F3FD}ok", &[0, 2, 3, 4]),
+        ("cafe\u{301} au", &[0, 1, 2, 3, 5, 6, 7, 8]),
+        ("\u{915}\u{93F}\u{924}\u{93E}\u{92C}", &[0, 2, 4, 5]),
+        ("\u{E01}\u{E33}\u{E44}\u{E14}\u{E49}", &[0, 2, 3, 5]),
+        ("\u{628}\u{64E}\u{627}\u{628}\u{64F}", &[0, 2, 3, 5]),
+    ];
+
+    /// **The arrows step over a whole grapheme cluster** (milestone 842): stepping the caret
+    /// across each text, both ways, stops at the cluster boundaries and nowhere else — it
+    /// never stands inside an emoji sequence or between a letter and its mark, whatever the
+    /// direction of the text. Before, it stopped at every character, inside the family five
+    /// times.
+    #[test]
+    fn visual_steps_stop_only_at_grapheme_boundaries() {
+        for &(text, stops) in CLUSTERED {
+            let layout = TextLayout::new(text, 16.0, FontWeight::Regular, false);
+            let len = text.chars().count();
+            let rtl = layout.line_is_rtl(TextPosition::new(0));
+            // Forwards through the text: rightwards in a left-to-right line.
+            for forwards_is_right in [!rtl] {
+                let mut at = TextPosition::new(0);
+                let mut seen = vec![0];
+                loop {
+                    let next = layout.visual_step(at, forwards_is_right);
+                    if next == at {
+                        break;
+                    }
+                    seen.push(next.offset);
+                    at = next;
+                    assert!(seen.len() <= len + 1, "{text:?}: no end to the steps");
+                }
+                assert_eq!(seen, stops, "{text:?} forwards");
+                let mut back = vec![at.offset];
+                loop {
+                    let next = layout.visual_step(at, !forwards_is_right);
+                    if next == at {
+                        break;
+                    }
+                    back.push(next.offset);
+                    at = next;
+                    assert!(back.len() <= len + 1, "{text:?}: no end to the steps back");
+                }
+                back.reverse();
+                assert_eq!(back, stops, "{text:?} backwards");
+            }
+        }
+    }
+
+    /// **A press never lands inside a grapheme cluster** (milestone 842): swept across each
+    /// text a pixel at a time, every position a press gives is a cluster boundary — on the
+    /// leading half of a family emoji, before it; on its trailing half, after the whole of it.
+    #[test]
+    fn a_press_lands_on_a_grapheme_boundary() {
+        for &(text, stops) in CLUSTERED {
+            let layout = TextLayout::new(text, 16.0, FontWeight::Regular, false);
+            let width = layout.size().width;
+            let mut x = -4.0;
+            while x < width + 4.0 {
+                let hit = layout.position_at(Point::new(x, 4.0));
+                assert!(
+                    stops.contains(&hit.offset),
+                    "{text:?}: a press at x = {x} landed at {} inside a cluster",
+                    hit.offset
+                );
+                x += 0.5;
+            }
+        }
+    }
+
+    /// **A grapheme cluster is highlighted whole, its caret at its edges** (milestone 842):
+    /// the caret after the family emoji is at its far edge, and selecting it covers what was
+    /// drawn for it — not a fifth of it, as when its width was split between its characters.
+    #[test]
+    fn a_cluster_has_one_box() {
+        let text = "a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}b";
+        let layout = TextLayout::new(text, 16.0, FontWeight::Regular, false);
+        let before = layout.caret_rect(1).x;
+        let after = layout.caret_rect_at(TextPosition::upstream(6)).x;
+        let b = layout.caret_rect(6).x;
+        assert!(after > before, "the cluster is drawn: {before} .. {after}");
+        assert!((after - b).abs() < 0.01, "its end is where `b` starts");
+        let rects = layout.selection_rects(1, 6);
+        assert_eq!(rects.len(), 1);
+        assert!(
+            (rects[0].x - before).abs() < 0.01
+                && (rects[0].x + rects[0].width - after).abs() < 0.01
+        );
+        // Inside the cluster there is no other place to stand: every interior index is drawn
+        // at one of its two edges.
+        for inside in 2..6 {
+            let x = layout.caret_rect(inside).x;
+            assert!(
+                (x - before).abs() < 0.01 || (x - after).abs() < 0.01,
+                "index {inside} drawn at {x}, between {before} and {after}"
+            );
+        }
     }
 }

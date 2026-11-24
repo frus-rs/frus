@@ -31,7 +31,9 @@ pub(crate) enum ImeEvent {
     ComposingRegion { start: u32, end: u32 },
     /// The current composition becomes final, as it stands.
     FinishComposing,
-    /// Deletes `before` characters ahead of the cursor and `after` behind it.
+    /// Deletes `before` characters ahead of the selection and `after` behind it, leaving the
+    /// selection itself alone. In **UTF-16 units**, as Java counts: an emoji is two, a family
+    /// of them joined into one picture eight.
     Delete { before: u32, after: u32 },
     /// An editor action: the keyboard's Enter, OK or Search.
     Action,
@@ -136,9 +138,47 @@ pub(crate) fn plan(event: &ImeEvent, edit: &Edit, text: &str) -> Vec<Step> {
             vec![Step::Compose((s < e).then_some((s, e)))]
         }
         ImeEvent::FinishComposing => vec![Step::Compose(None)],
+        // The exact stretches the input method named, selected and deleted — not that many
+        // presses of Backspace, which take a whole grapheme cluster each (milestone 842): a
+        // keyboard deleting a thumb with a skin tone asks for four units, and four presses
+        // took the thumb and three characters before it.
         ImeEvent::Delete { before, after } => {
-            let mut steps = vec![Step::Key(Key::Backspace); *before as usize];
-            steps.extend(vec![Step::Key(Key::Delete); *after as usize]);
+            let caret = edit.cursor.min(len);
+            let (start, end) = edit
+                .selection_range()
+                .map(|(s, e)| (s.min(len), e.min(len)))
+                .unwrap_or((caret, caret));
+            let from = char_index(
+                text,
+                utf16_index(text, start).saturating_sub(*before as usize),
+            );
+            let to = char_index(text, utf16_index(text, end) + *after as usize);
+            let mut steps = Vec::new();
+            // After the selection first, so that the stretch before it keeps its indices.
+            if to > end {
+                steps.push(Step::Place {
+                    cursor: to,
+                    anchor: Some(end),
+                });
+                steps.push(Step::Key(Key::Delete));
+            }
+            if from < start {
+                steps.push(Step::Place {
+                    cursor: start,
+                    anchor: Some(from),
+                });
+                steps.push(Step::Key(Key::Backspace));
+            }
+            // The caret and the selection where they were, moved back by what went before them.
+            let shift = start - from;
+            if !steps.is_empty() {
+                steps.push(Step::Place {
+                    cursor: caret - shift.min(caret),
+                    anchor: edit
+                        .anchor
+                        .map(|anchor| anchor.min(len) - shift.min(anchor.min(len))),
+                });
+            }
             steps
         }
         ImeEvent::Action => vec![Step::Key(Key::Enter)],
@@ -216,8 +256,10 @@ mod tests {
                         self.chars.drain(s..e);
                         cursor = s;
                     } else if cursor > 0 {
-                        self.chars.remove(cursor - 1);
-                        cursor -= 1;
+                        let stops = frus_text::grapheme_stops_of(&self.chars);
+                        let start = frus_text::grapheme_before(&stops, cursor);
+                        self.chars.drain(start..cursor);
+                        cursor = start;
                     }
                 }
                 Key::Delete => {
@@ -225,7 +267,9 @@ mod tests {
                         self.chars.drain(s..e);
                         cursor = s;
                     } else if cursor < len {
-                        self.chars.remove(cursor);
+                        let stops = frus_text::grapheme_stops_of(&self.chars);
+                        let end = frus_text::grapheme_after(&stops, cursor);
+                        self.chars.drain(cursor..end);
                     }
                 }
                 Key::Enter => self.submitted += 1,
@@ -378,12 +422,52 @@ mod tests {
             after: 1,
         });
         assert_eq!(field.text(), "ax", "one before the caret, one after");
+        assert_eq!(field.edit.cursor, 1, "the caret stays between them");
         field.run(ImeEvent::Action);
         field.run(ImeEvent::Key {
             code: 66,
             unicode: 0,
         });
         assert_eq!(field.submitted, 2, "the action and 66 are Enter");
+    }
+
+    /// **Deleting around the caret removes the units the input method named** (milestone
+    /// 842), not that many grapheme clusters: a keyboard deleting a thumb with a skin tone
+    /// asks for four units — two characters, one cluster — and gets exactly that; an emoji
+    /// after the caret is two units.
+    #[test]
+    fn deleting_around_the_caret_counts_utf16_units() {
+        let mut field = Field {
+            chars: "a\u{1F44D}\u{1F3FD}b\u{1F600}c".chars().collect(),
+            ..Default::default()
+        };
+        field.edit.cursor = 3;
+        field.run(ImeEvent::Delete {
+            before: 4,
+            after: 0,
+        });
+        assert_eq!(field.text(), "ab\u{1F600}c");
+        assert_eq!(field.edit.cursor, 1);
+        field.edit.cursor = 2;
+        field.run(ImeEvent::Delete {
+            before: 0,
+            after: 2,
+        });
+        assert_eq!(
+            field.text(),
+            "abc",
+            "the emoji after the caret, and only it"
+        );
+        assert_eq!(field.edit.cursor, 2);
+        // With a selection, around it and not in it.
+        field.edit.cursor = 2;
+        field.edit.anchor = Some(1);
+        field.run(ImeEvent::Delete {
+            before: 1,
+            after: 1,
+        });
+        assert_eq!(field.text(), "b");
+        assert_eq!((field.edit.anchor, field.edit.cursor), (Some(0), 1));
     }
 
     /// Java counts in UTF-16 units, the field in characters: an emoji is two of one and one

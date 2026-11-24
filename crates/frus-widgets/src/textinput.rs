@@ -11,7 +11,7 @@ use frus_core::{
     Color, Point, Rect, ResolvedTextStyle, Scene, TextAffinity, TextAlign, TextPosition, TextStyle,
 };
 use frus_layout::{Dimension, Style};
-use frus_text::TextLayout;
+use frus_text::{grapheme_after, grapheme_before, grapheme_floor, grapheme_stops_of, TextLayout};
 
 use crate::autofill::AutofillHint;
 use crate::disabled::DISABLED_CONTENT_OPACITY;
@@ -438,29 +438,39 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Whether the grapheme cluster that starts at character `start` belongs to a word: its first
+/// character does — so a letter carries its combining marks with it, and an emoji sequence is
+/// a separator however many characters it is made of.
+fn is_word_cluster(chars: &[char], start: usize) -> bool {
+    chars.get(start).is_some_and(|&c| is_word(c))
+}
+
 /// Next word boundary **to the left** of `cursor`: skips the separators, then the word
-/// (editor behaviour — it stops at the **start** of the previous word).
+/// (editor behaviour — it stops at the **start** of the previous word). It steps a grapheme
+/// cluster at a time, so it never stops inside one.
 pub(crate) fn word_boundary_left(chars: &[char], cursor: usize) -> usize {
-    let mut i = cursor;
-    while i > 0 && !is_word(chars[i - 1]) {
-        i -= 1;
+    let stops = grapheme_stops_of(chars);
+    let mut i = cursor.min(chars.len());
+    while i > 0 && !is_word_cluster(chars, grapheme_before(&stops, i)) {
+        i = grapheme_before(&stops, i);
     }
-    while i > 0 && is_word(chars[i - 1]) {
-        i -= 1;
+    while i > 0 && is_word_cluster(chars, grapheme_before(&stops, i)) {
+        i = grapheme_before(&stops, i);
     }
     i
 }
 
 /// Next word boundary **to the right**: skips the separators, then the word — it stops
-/// **after** the next word.
+/// **after** the next word, and never inside a grapheme cluster.
 pub(crate) fn word_boundary_right(chars: &[char], cursor: usize) -> usize {
+    let stops = grapheme_stops_of(chars);
     let len = chars.len();
-    let mut i = cursor;
-    while i < len && !is_word(chars[i]) {
-        i += 1;
+    let mut i = cursor.min(len);
+    while i < len && !is_word_cluster(chars, grapheme_floor(&stops, i)) {
+        i = grapheme_after(&stops, i);
     }
-    while i < len && is_word(chars[i]) {
-        i += 1;
+    while i < len && is_word_cluster(chars, grapheme_floor(&stops, i)) {
+        i = grapheme_after(&stops, i);
     }
     i
 }
@@ -592,23 +602,25 @@ pub(crate) fn paint_handles(
 }
 
 /// The word around character `index` of `chars`, as a range — what a double click or a long
-/// press selects. A separator selects itself; an empty text, the empty range.
+/// press selects. A separator selects itself — the whole of its grapheme cluster, an emoji
+/// sequence or a flag; an empty text, the empty range.
 pub(crate) fn word_range(chars: &[char], index: usize) -> Option<(usize, usize)> {
     let len = chars.len();
     if len == 0 {
         return Some((0, 0));
     }
-    let i = index.min(len - 1);
-    if !is_word(chars[i]) {
-        return Some((i, (i + 1).min(len)));
+    let stops = grapheme_stops_of(chars);
+    let i = grapheme_floor(&stops, index.min(len - 1));
+    if !is_word_cluster(chars, i) {
+        return Some((i, grapheme_after(&stops, i)));
     }
     let mut start = i;
-    while start > 0 && is_word(chars[start - 1]) {
-        start -= 1;
+    while start > 0 && is_word_cluster(chars, grapheme_before(&stops, start)) {
+        start = grapheme_before(&stops, start);
     }
-    let mut end = i + 1;
-    while end < len && is_word(chars[end]) {
-        end += 1;
+    let mut end = grapheme_after(&stops, i);
+    while end < len && is_word_cluster(chars, end) {
+        end = grapheme_after(&stops, end);
     }
     Some((start, end))
 }
@@ -682,6 +694,7 @@ fn visual_word_step(
     from: TextPosition,
     rightwards: bool,
 ) -> TextPosition {
+    let stops = grapheme_stops_of(chars);
     let mut at = from;
     let mut crossed_word = false;
     loop {
@@ -689,17 +702,16 @@ fn visual_word_step(
         if next == at {
             return at;
         }
-        // The character crossed: the one the caret now belongs to. A step to another line
-        // crosses none.
+        // The grapheme cluster crossed: the one the caret now belongs to, by its first
+        // character. A step to another line crosses none.
         let same_line = layout.line_bounds(at) == layout.line_bounds(next);
         let crossed = match next.affinity {
-            TextAffinity::Upstream => next.offset.checked_sub(1),
+            TextAffinity::Upstream => {
+                (next.offset > 0).then(|| grapheme_before(&stops, next.offset))
+            }
             TextAffinity::Downstream => Some(next.offset),
         };
-        let word = same_line
-            && crossed
-                .and_then(|i| chars.get(i))
-                .is_some_and(|&c| is_word(c));
+        let word = same_line && crossed.is_some_and(|i| is_word_cluster(chars, i));
         if crossed_word && !word {
             return at;
         }
@@ -733,8 +745,14 @@ fn move_caret_in(
         (Key::Right { word: true, .. }, _) => by_word(true),
         (Key::Left { .. }, Some(layout)) => layout.visual_step(from, false),
         (Key::Right { .. }, Some(layout)) => layout.visual_step(from, true),
-        (Key::Left { .. }, None) => TextPosition::new(from.offset.saturating_sub(1)),
-        (Key::Right { .. }, None) => TextPosition::new((from.offset + 1).min(len)),
+        // A grapheme cluster at a time: an emoji sequence, a flag, a letter and its marks are
+        // one step.
+        (Key::Left { .. }, None) => {
+            TextPosition::new(grapheme_before(&grapheme_stops_of(chars), from.offset))
+        }
+        (Key::Right { .. }, None) => {
+            TextPosition::new(grapheme_after(&grapheme_stops_of(chars), from.offset).min(len))
+        }
         // Ctrl (`doc`): the bounds of the whole text; otherwise those of the line — the line
         // on screen with a layout, the logical one without.
         (Key::Home { doc: true, .. }, _) => TextPosition::new(0),
@@ -2749,8 +2767,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
                     cursor = s;
                     changed = true;
                 } else if cursor > 0 {
-                    chars.remove(cursor - 1);
-                    cursor -= 1;
+                    // The whole grapheme cluster before the caret: a family emoji, a flag, a
+                    // letter with its accent goes in one press, never leaving a part behind.
+                    let start = grapheme_before(&grapheme_stops_of(&chars), cursor);
+                    chars.drain(start..cursor);
+                    cursor = start;
                     changed = true;
                 }
                 anchor = None;
@@ -2761,7 +2782,9 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
                     cursor = s;
                     changed = true;
                 } else if cursor < len {
-                    chars.remove(cursor);
+                    // The whole grapheme cluster after the caret.
+                    let end = grapheme_after(&grapheme_stops_of(&chars), cursor);
+                    chars.drain(cursor..end);
                     changed = true;
                 }
                 anchor = None;
@@ -2824,6 +2847,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
         if changed {
             if let Some(max) = self.max_length {
                 if chars.len() > max {
+                    // Cut at a grapheme boundary: an emoji that does not fit whole does not
+                    // land as a part of itself — a bare hand without its skin tone, a lone
+                    // regional indicator.
+                    let max = grapheme_floor(&grapheme_stops_of(&chars), max);
                     chars.truncate(max);
                     cursor = cursor.min(max);
                     anchor = anchor.map(|a| a.min(max));
@@ -6394,5 +6421,210 @@ mod text_service_tests {
         // Spell checking is told too, and never for a secret.
         assert!(Widget::<Msg>::ime(&field("x").spell_check(true)).spell_check);
         assert!(!Widget::<Msg>::ime(&field("x").spell_check(true).obscure(true)).spell_check);
+    }
+}
+
+#[cfg(test)]
+mod grapheme_tests {
+    //! Editing steps by **extended grapheme cluster** (milestone 842): what a reader sees as
+    //! one character — an emoji sequence, a flag, a letter with its accent, an Indic or Thai
+    //! syllable — is crossed, deleted and selected whole, never split.
+
+    use super::*;
+    use crate::runtime::Edit;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Changed(String),
+    }
+
+    /// Man, ZWJ, woman, ZWJ, girl: one cluster of five characters.
+    const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    /// Togo's flag: two regional indicators.
+    const TOGO: &str = "\u{1F1F9}\u{1F1EC}";
+    /// A thumb up with a medium skin tone.
+    const THUMB: &str = "\u{1F44D}\u{1F3FD}";
+    /// `e` and a combining acute accent.
+    const E_ACUTE: &str = "e\u{301}";
+
+    fn field(value: &str) -> TextField<Msg> {
+        TextField::new(value).on_input(Msg::Changed)
+    }
+
+    fn at(cursor: usize) -> Edit {
+        Edit {
+            cursor,
+            ..Default::default()
+        }
+    }
+
+    fn changed(msg: Option<Msg>) -> String {
+        match msg {
+            Some(Msg::Changed(value)) => value,
+            None => panic!("no change"),
+        }
+    }
+
+    const LEFT: Key = Key::Left {
+        shift: false,
+        word: false,
+    };
+    const RIGHT: Key = Key::Right {
+        shift: false,
+        word: false,
+    };
+
+    /// **Backspace takes the whole cluster before the caret.** Before, it took one
+    /// character: the girl of the family, leaving a dangling joiner, or one regional
+    /// indicator of a flag, or the skin tone of a thumb.
+    #[test]
+    fn backspace_deletes_a_whole_cluster() {
+        for (cluster, len) in [(FAMILY, 5), (TOGO, 2), (THUMB, 2), (E_ACUTE, 2)] {
+            let value = format!("a{cluster}");
+            let f = field(&value);
+            let mut edit = at(1 + len);
+            assert_eq!(
+                changed(Widget::on_edit(&f, &mut edit, &Key::Backspace)),
+                "a",
+                "{value:?}"
+            );
+            assert_eq!(edit.cursor, 1);
+        }
+        // Devanagari "ki" and Thai "kam" are one syllable each.
+        let f = field("\u{915}\u{93F}\u{E01}\u{E33}");
+        let mut edit = at(4);
+        assert_eq!(
+            changed(Widget::on_edit(&f, &mut edit, &Key::Backspace)),
+            "\u{915}\u{93F}"
+        );
+        assert_eq!(
+            changed(Widget::on_edit(
+                &field("\u{915}\u{93F}"),
+                &mut edit,
+                &Key::Backspace
+            )),
+            ""
+        );
+    }
+
+    /// **Delete takes the whole cluster after the caret**, and two flags in a row are two
+    /// clusters: one press takes one flag.
+    #[test]
+    fn delete_deletes_a_whole_cluster() {
+        let value = format!("{TOGO}\u{1F1EB}\u{1F1F7}");
+        let f = field(&value);
+        let mut edit = at(0);
+        assert_eq!(
+            changed(Widget::on_edit(&f, &mut edit, &Key::Delete)),
+            "\u{1F1EB}\u{1F1F7}"
+        );
+        let value = format!("{FAMILY}b");
+        let mut edit = at(0);
+        assert_eq!(
+            changed(Widget::on_edit(&field(&value), &mut edit, &Key::Delete)),
+            "b"
+        );
+    }
+
+    /// **The arrows cross a cluster in one step** through the text's order, the way a field
+    /// moves when it has no layout to move on.
+    #[test]
+    fn arrows_step_over_a_whole_cluster_without_a_layout() {
+        let value = format!("a{FAMILY}{THUMB}{E_ACUTE}b");
+        let f = field(&value);
+        let mut edit = at(0);
+        let mut seen = vec![0];
+        for _ in 0..6 {
+            Widget::on_edit(&f, &mut edit, &RIGHT);
+            seen.push(edit.cursor);
+        }
+        assert_eq!(seen, [0, 1, 6, 8, 10, 11, 11]);
+        let mut back = vec![edit.cursor];
+        for _ in 0..5 {
+            Widget::on_edit(&f, &mut edit, &LEFT);
+            back.push(edit.cursor);
+        }
+        assert_eq!(back, [11, 10, 8, 6, 1, 0]);
+    }
+
+    /// **The arrows cross a cluster in one step on screen too**, left to right and right to
+    /// left: through the drawn layout, a field's caret never stands inside a cluster.
+    #[test]
+    fn arrows_step_over_a_whole_cluster_on_screen() {
+        for (value, stops) in [
+            (format!("a{FAMILY}{TOGO}b"), vec![0, 1, 6, 8, 9]),
+            (format!("{E_ACUTE}\u{915}\u{93F}"), vec![0, 2, 4]),
+            // Arabic BEH with a fatha, ALEF, BEH with a damma: right to left.
+            (
+                "\u{628}\u{64E}\u{627}\u{628}\u{64F}".to_string(),
+                vec![0, 2, 3, 5],
+            ),
+        ] {
+            let f = field(&value);
+            let rtl = value.starts_with('\u{628}');
+            let forwards = if rtl { LEFT } else { RIGHT };
+            let mut edit = at(0);
+            let mut seen = vec![0];
+            for _ in 0..stops.len() - 1 {
+                assert!(Widget::caret_key(&f, 400.0, &mut edit, &forwards));
+                seen.push(edit.cursor);
+            }
+            assert_eq!(seen, stops, "{value:?}");
+        }
+    }
+
+    /// **A word jump carries a letter's combining marks with it.** Before, the accent of a
+    /// decomposed `é` was a separator: Ctrl+Right stopped between `e` and its accent.
+    #[test]
+    fn word_jumps_keep_combining_marks_with_their_letter() {
+        let chars: Vec<char> = format!("caf{E_ACUTE} au lait").chars().collect();
+        assert_eq!(word_boundary_right(&chars, 0), 5, "after the accent");
+        assert_eq!(word_boundary_left(&chars, 5), 0);
+        // A cluster of five characters is one separator, crossed whole.
+        let chars: Vec<char> = format!("hi {FAMILY} yo").chars().collect();
+        assert_eq!(
+            word_boundary_left(&chars, 9),
+            0,
+            "back over the emoji and `hi`"
+        );
+        assert_eq!(
+            word_boundary_right(&chars, 2),
+            11,
+            "on over the emoji and `yo`"
+        );
+        let chars: Vec<char> = format!("{FAMILY}{THUMB}").chars().collect();
+        assert_eq!(
+            word_boundary_right(&chars, 0),
+            7,
+            "separators only: to the end"
+        );
+    }
+
+    /// **A double click on an emoji selects the whole of it**, and on a word with combining
+    /// marks the whole word.
+    #[test]
+    fn a_double_click_selects_whole_clusters() {
+        let chars: Vec<char> = format!("a {FAMILY} b").chars().collect();
+        for inside in 2..7 {
+            assert_eq!(word_range(&chars, inside), Some((2, 7)), "at {inside}");
+        }
+        let chars: Vec<char> = format!("caf{E_ACUTE} x").chars().collect();
+        assert_eq!(word_range(&chars, 4), Some((0, 5)), "from the accent");
+        assert_eq!(word_bounds(&format!("{TOGO}{TOGO}"), 3), (2, 4));
+    }
+
+    /// **The length limit never cuts a cluster in two**: an emoji that does not fit whole
+    /// does not land as a part of itself — a thumb without its skin tone.
+    #[test]
+    fn the_length_limit_never_splits_a_cluster() {
+        let f = field("ab").max_length(3);
+        let mut edit = at(2);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(THUMB.to_string()));
+        assert_eq!(changed(msg), "ab");
+        assert_eq!(edit.cursor, 2);
+        let f = field("a").max_length(3);
+        let mut edit = at(1);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(THUMB.to_string()));
+        assert_eq!(changed(msg), format!("a{THUMB}"), "it fits whole");
     }
 }
