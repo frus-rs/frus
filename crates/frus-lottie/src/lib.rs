@@ -13,12 +13,16 @@
 //! linear and radial gradients, layer opacity, clips and masks, and the blend modes of mattes,
 //! and image layers: a PNG or JPEG embedded in the file is decoded once, when it is parsed, and
 //! one the file names beside it is the application's to give ([`Animation::with_image`]).
-//! Sweep gradients are not drawn yet; [`Animation::unsupported`] names what an animation uses
-//! that is not.
+//! Text layers are laid out by frus's own text stack, with the fonts the application has,
+//! and drawn as the glyph outlines of each text document — its size, font, justification,
+//! line height, tracking, fill and stroke, in a paragraph box or not, a keyframed document
+//! changing on its frame. Sweep gradients and text animators are not drawn yet;
+//! [`Animation::unsupported`] names what an animation uses that is not.
 
 #![deny(missing_docs)]
 
 mod normalize;
+mod text;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -79,7 +83,7 @@ impl Animation {
     /// Parses a Lottie file's contents (JSON, UTF-8).
     ///
     /// Files written by older exporters are brought to the current form first, and what the
-    /// renderer cannot draw — text layers, a few blends — is left out and named by
+    /// renderer cannot draw — text animators, a few blends — is left out and named by
     /// [`Animation::unsupported`] rather than refusing the file; the rest is drawn.
     pub fn parse(bytes: &[u8]) -> Result<Animation, LottieError> {
         let mut value: serde_json::Value =

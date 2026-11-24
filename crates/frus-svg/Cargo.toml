@@ -15,4 +15,8 @@ categories = ["graphics", "gui"]
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.6" }
 frus-image = { path = "../frus-image", version = "0.6" }
+# `<text>` is laid out and outlined by frus's own text stack (text.rs).
+frus-text = { path = "../frus-text", version = "0.6" }
 usvg.workspace = true
+# The style sheets a `<text>` takes its font from; already the parser's.
+simplecss = "0.2"

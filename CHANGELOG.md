@@ -8,10 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 840 so far, each documenting the objective, the alternatives
+> record — one per step, 841 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Text in SVG pictures and Lottie animations** (J841, #303, #304). An SVG's `<text>` and
+  `<tspan>` were dropped without a word, and a Lottie text layer was left out. Both are now
+  shaped by frus's own text stack, with the application's fonts, and drawn as glyph outlines —
+  filled, stroked, transformed, clipped and ordered like any other shape. SVG: `x`, `y`, `dx`,
+  `dy` and their lists, `text-anchor`, `font-family` lists, `font-size`, `font-weight`,
+  `font-style`, `letter-spacing` and `xml:space`, from attributes, `style` and `<style>`
+  sheets; text on a path, rotated glyphs, `textLength`, decorations and vertical text are named
+  by `Svg::unsupported`. Lottie: the document's text, font (from the font list), size,
+  justification, line height, tracking, baseline shift, fill, stroke and paragraph box, and a
+  keyframed document changing on its frame; text animators are named `"text animator"`.
+  `frus_text::outline_text` and `outline_paragraph` (new) give any text as outlines.
 
 - **Memory is given back when the system is short of it** (J840, part of #221).
   `trim_caches(TrimLevel)` (new) gives back the decoded pictures nobody shows and, from

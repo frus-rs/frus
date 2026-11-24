@@ -15,6 +15,8 @@ categories = ["graphics", "gui"]
 [dependencies]
 frus-core = { path = "../frus-core", version = "0.6" }
 frus-image = { path = "../frus-image", version = "0.6" }
+# Text layers are laid out and outlined by frus's own text stack (text.rs).
+frus-text = { path = "../frus-text", version = "0.6" }
 velato.workspace = true
 kurbo.workspace = true
 peniko.workspace = true

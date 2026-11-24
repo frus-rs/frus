@@ -15,9 +15,13 @@
 //! or by alpha; filters built from Gaussian blurs, drop shadows, offsets, floods, merges,
 //! `over`, `in` and `out` composites, normal blends and colour matrices (see below);
 //! embedded PNG and JPEG bitmaps, decoded once, when the picture is parsed, and embedded
-//! SVG pictures, drawn as vectors like the rest. What is not yet: patterns, the other filter
-//! primitives, GIF and WebP bitmaps, and text — each is skipped, and named in
-//! [`Svg::unsupported`], so an application can say why a picture looks incomplete.
+//! SVG pictures, drawn as vectors like the rest; and **text** — `<text>`, `<tspan>` and their
+//! positions, anchors and fonts — shaped by frus's own text stack, with the fonts the
+//! application has, and drawn as glyph outlines filled, stroked, transformed and clipped
+//! like any other shape. What is not yet: patterns, the other filter primitives, GIF and
+//! WebP bitmaps, and text on a path, rotated glyphs, `textLength`, decorations and vertical
+//! text — each is skipped, and named in [`Svg::unsupported`], so an application can say why
+//! a picture looks incomplete.
 //!
 //! Masks and filters are layers of the scene: a mask is a layer meeting the masked group
 //! with `DstIn`, a blur a blurred layer, and so on. Filters mix colours in linear light by
@@ -46,6 +50,7 @@ use frus_core::{
 use usvg::tiny_skia_path;
 
 mod effect;
+mod text;
 
 /// A parsing failure: the bytes are not an SVG this parser can read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +70,26 @@ impl fmt::Display for SvgError {
 }
 
 impl std::error::Error for SvgError {}
+
+/// What a picture's conversion carries along: what is not drawn, and its text.
+struct Cx {
+    unsupported: Vec<&'static str>,
+    /// The glyph outlines of each text placeholder ([`text::MARKER`]), in its text
+    /// element's coordinates.
+    text: Vec<Option<tiny_skia_path::Path>>,
+}
+
+impl Cx {
+    fn push(&mut self, what: &'static str) {
+        self.unsupported.push(what);
+    }
+
+    /// The glyphs a placeholder stands for: `None` for any other shape.
+    fn text_of(&self, path: &usvg::Path) -> Option<Option<tiny_skia_path::Path>> {
+        let index: usize = path.id().strip_prefix(text::MARKER)?.parse().ok()?;
+        Some(self.text.get(index).cloned().flatten())
+    }
+}
 
 /// What a shape is filled with.
 #[derive(Clone, Debug, PartialEq)]
@@ -209,9 +234,24 @@ impl Svg {
             },
             ..usvg::Options::default()
         };
-        let tree = usvg::Tree::from_data(bytes, &options).map_err(|e| SvgError(e.to_string()))?;
-        let mut unsupported = Vec::new();
-        let items = group_items(tree.root(), &mut unsupported);
+        // Text is laid out first, by frus's own text stack, and stands in the source as
+        // placeholders the parser resolves like any shape.
+        let prepared = std::str::from_utf8(bytes).ok().and_then(text::prepare);
+        let tree = match &prepared {
+            Some(prepared) => usvg::Tree::from_str(&prepared.source, &options),
+            None => usvg::Tree::from_data(bytes, &options),
+        }
+        .map_err(|e| SvgError(e.to_string()))?;
+        let mut cx = Cx {
+            unsupported: Vec::new(),
+            text: Vec::new(),
+        };
+        if let Some(prepared) = prepared {
+            cx.unsupported = prepared.notes;
+            cx.text = prepared.spans.iter().map(skia_path).collect();
+        }
+        let items = group_items(tree.root(), &mut cx);
+        let mut unsupported = cx.unsupported;
         unsupported.sort_unstable();
         unsupported.dedup();
         Ok(Svg {
@@ -228,8 +268,11 @@ impl Svg {
     }
 
     /// The SVG features this picture uses that are not drawn yet, by name (`"filter"` — a
-    /// filter with a primitive not drawn, its group then drawn unfiltered —, `"pattern"`, `"image"` — a GIF, a WebP or a broken bitmap —, `"text"`,
-    /// `"blend mode"`): empty when the whole picture is drawn.
+    /// filter with a primitive not drawn, its group then drawn unfiltered —, `"pattern"`,
+    /// `"image"` — a GIF, a WebP or a broken bitmap —, `"blend mode"`, and for text
+    /// `"text on a path"`, `"rotated glyphs"`, `"text length"`, `"text decoration"`,
+    /// `"vertical text"`, each drawn as plain text along its line): empty when the whole
+    /// picture is drawn.
     pub fn unsupported(&self) -> &[&'static str] {
         &self.unsupported
     }
@@ -395,6 +438,23 @@ fn mapped(path: &Path, map: Affine) -> Path {
     out
 }
 
+/// A frus path as a tiny-skia one, for the stroker; `None` when it has no segment.
+fn skia_path(path: &Path) -> Option<tiny_skia_path::Path> {
+    let mut builder = tiny_skia_path::PathBuilder::new();
+    for verb in path.verbs() {
+        match *verb {
+            frus_core::PathVerb::MoveTo(p) => builder.move_to(p.x, p.y),
+            frus_core::PathVerb::LineTo(p) => builder.line_to(p.x, p.y),
+            frus_core::PathVerb::QuadTo { ctrl, to } => builder.quad_to(ctrl.x, ctrl.y, to.x, to.y),
+            frus_core::PathVerb::CubicTo { c1, c2, to } => {
+                builder.cubic_to(c1.x, c1.y, c2.x, c2.y, to.x, to.y)
+            }
+            frus_core::PathVerb::Close => builder.close(),
+        }
+    }
+    builder.finish()
+}
+
 /// usvg's transform as frus's: `x' = sx·x + kx·y + tx`, `y' = ky·x + sy·y + ty`.
 fn affine(t: usvg::Transform) -> Affine {
     Affine {
@@ -429,12 +489,7 @@ fn color(c: usvg::Color, alpha: f32) -> Color {
 
 /// A paint in the picture's coordinates, for a shape whose own space goes to the
 /// picture's through `to_root`. `None` for what is not drawn.
-fn paint(
-    paint: &usvg::Paint,
-    opacity: f32,
-    to_root: Affine,
-    unsupported: &mut Vec<&'static str>,
-) -> Option<(Paint, f32)> {
+fn paint(paint: &usvg::Paint, opacity: f32, to_root: Affine, cx: &mut Cx) -> Option<(Paint, f32)> {
     let ramp = |base: &usvg::BaseGradient, shape: RampShape| {
         let tile = match base.spread_method() {
             usvg::SpreadMethod::Pad => TileMode::Clamp,
@@ -478,38 +533,38 @@ fn paint(
             opacity,
         )),
         usvg::Paint::Pattern(_) => {
-            unsupported.push("pattern");
+            cx.push("pattern");
             None
         }
     }
 }
 
-fn group_items(group: &usvg::Group, unsupported: &mut Vec<&'static str>) -> Vec<Item> {
+fn group_items(group: &usvg::Group, cx: &mut Cx) -> Vec<Item> {
     let mut items = Vec::new();
     for node in group.children() {
         match node {
             usvg::Node::Group(child) => {
                 if child.blend_mode() != usvg::BlendMode::Normal {
-                    unsupported.push("blend mode");
+                    cx.push("blend mode");
                 }
                 let to_root = affine(child.abs_transform());
-                let mut inner = group_items(child, unsupported);
+                let mut inner = group_items(child, cx);
                 // In the reference renderer's order: the filters, then the clip and the
                 // mask, then the opacity.
                 if !child.filters().is_empty() {
                     match effect::filtered(child.filters(), inner.clone(), to_root) {
                         Some(output) => inner = output,
                         // Drawn unfiltered, and said so.
-                        None => unsupported.push("filter"),
+                        None => cx.push("filter"),
                     }
                 }
                 let opacity = child.opacity().get();
                 let clip = child
                     .clip_path()
-                    .map(|clip| clip_outline(clip, to_root, unsupported));
+                    .map(|clip| clip_outline(clip, to_root, cx));
                 let mut masked = false;
                 if let Some(mask) = child.mask() {
-                    if !effect::mask_layers(mask, to_root, &mut inner, unsupported) {
+                    if !effect::mask_layers(mask, to_root, &mut inner, cx) {
                         // A mask with nothing in it hides the whole group.
                         continue;
                     }
@@ -526,16 +581,16 @@ fn group_items(group: &usvg::Group, unsupported: &mut Vec<&'static str>) -> Vec<
                     });
                 }
             }
-            usvg::Node::Path(path) => path_items(path, &mut items, unsupported),
-            usvg::Node::Image(image) => image_items(image, &mut items, unsupported),
-            usvg::Node::Text(_) => unsupported.push("text"),
+            usvg::Node::Path(path) => path_items(path, &mut items, cx),
+            usvg::Node::Image(image) => image_items(image, &mut items, cx),
+            usvg::Node::Text(_) => cx.push("text"),
         }
     }
     items
 }
 
 /// An embedded picture: a PNG or a JPEG decoded now, once, or an SVG drawn as vectors.
-fn image_items(image: &usvg::Image, items: &mut Vec<Item>, unsupported: &mut Vec<&'static str>) {
+fn image_items(image: &usvg::Image, items: &mut Vec<Item>, cx: &mut Cx) {
     if !image.is_visible() {
         return;
     }
@@ -544,17 +599,17 @@ fn image_items(image: &usvg::Image, items: &mut Vec<Item>, unsupported: &mut Vec
     let bytes = match image.kind() {
         usvg::ImageKind::PNG(bytes) | usvg::ImageKind::JPEG(bytes) => bytes,
         usvg::ImageKind::SVG(tree) => {
-            let inner = group_items(tree.root(), unsupported);
+            let inner = group_items(tree.root(), cx);
             items.extend(inner.into_iter().map(|item| item.mapped(to_root)));
             return;
         }
         usvg::ImageKind::GIF(_) | usvg::ImageKind::WEBP(_) => {
-            unsupported.push("image");
+            cx.push("image");
             return;
         }
     };
     let Ok(data) = frus_image::decode(bytes) else {
-        unsupported.push("image");
+        cx.push("image");
         return;
     };
     let (pixels, size) = (data.size(), image.size());
@@ -569,29 +624,40 @@ fn image_items(image: &usvg::Image, items: &mut Vec<Item>, unsupported: &mut Vec
 }
 
 /// A path's fill and stroke, in its paint order.
-fn path_items(path: &usvg::Path, items: &mut Vec<Item>, unsupported: &mut Vec<&'static str>) {
+fn path_items(path: &usvg::Path, items: &mut Vec<Item>, cx: &mut Cx) {
     if !path.is_visible() {
         return;
     }
     let to_root = affine(path.abs_transform());
+    // A text placeholder draws its glyphs, with the paint the parser resolved for it.
+    let glyphs = cx.text_of(path);
+    let data = match &glyphs {
+        Some(Some(glyphs)) => glyphs,
+        Some(None) => return,
+        None => path.data(),
+    };
+    let glyphs = glyphs.is_some();
     // A line, horizontal or vertical, has no inside to fill: only its stroke draws.
-    let bounds = path.data().bounds();
+    let bounds = data.bounds();
     let has_area = bounds.width() > 0.0 && bounds.height() > 0.0;
     let fill = path.fill().filter(|_| has_area).and_then(|fill| {
         let rule = match fill.rule() {
+            // Glyphs are drawn non-zero, whatever `fill-rule` says: their contours wind
+            // as their font made them.
+            _ if glyphs => FillRule::NonZero,
             usvg::FillRule::NonZero => FillRule::NonZero,
             usvg::FillRule::EvenOdd => FillRule::EvenOdd,
         };
-        let (paint, opacity) = paint(fill.paint(), fill.opacity().get(), to_root, unsupported)?;
+        let (paint, opacity) = paint(fill.paint(), fill.opacity().get(), to_root, cx)?;
         Some(Item::Shape {
-            path: converted(path.data(), to_root, rule),
+            path: converted(data, to_root, rule),
             paint,
             opacity,
         })
     });
     let stroke = path.stroke().and_then(|stroke| {
-        let outline = stroke_outline(path.data(), stroke)?;
-        let (paint, opacity) = paint(stroke.paint(), stroke.opacity().get(), to_root, unsupported)?;
+        let outline = stroke_outline(data, stroke)?;
+        let (paint, opacity) = paint(stroke.paint(), stroke.opacity().get(), to_root, cx)?;
         Some(Item::Shape {
             // An outline crosses itself where the line turns; non-zero fills it whole.
             path: converted(&outline, to_root, FillRule::NonZero),
@@ -635,17 +701,13 @@ fn stroke_outline(
 /// The outline is the union of the clip's shapes, filled non-zero. A shape with its own
 /// `clip-rule="evenodd"` loses its holes, and a clip path that is itself clipped is drawn
 /// unclipped: both rare, both noted.
-fn clip_outline(
-    clip: &usvg::ClipPath,
-    to_root: Affine,
-    unsupported: &mut Vec<&'static str>,
-) -> Path {
+fn clip_outline(clip: &usvg::ClipPath, to_root: Affine, cx: &mut Cx) -> Path {
     if clip.clip_path().is_some() {
-        unsupported.push("nested clip path");
+        cx.push("nested clip path");
     }
     let to_root = affine(clip.transform()).then(to_root);
     let mut outline = Path::new().with_fill_rule(FillRule::NonZero);
-    collect_clip(clip.root(), to_root, &mut outline, unsupported);
+    collect_clip(clip.root(), to_root, &mut outline, cx);
     outline
 }
 
@@ -656,21 +718,23 @@ fn clip_outline(
 /// already holds every group transform between it and the clip path's root (whose own is
 /// the identity). So that transform alone places a shape in the clip's space: the groups
 /// are walked, never applied again.
-fn collect_clip(
-    group: &usvg::Group,
-    to_root: Affine,
-    outline: &mut Path,
-    unsupported: &mut Vec<&'static str>,
-) {
+fn collect_clip(group: &usvg::Group, to_root: Affine, outline: &mut Path, cx: &mut Cx) {
     for node in group.children() {
         match node {
             usvg::Node::Path(path) if path.is_visible() => {
                 let to_root = affine(path.abs_transform()).then(to_root);
-                let shape = converted(path.data(), to_root, FillRule::NonZero);
+                // Text in a clip path clips to its glyphs.
+                let glyphs = cx.text_of(path);
+                let data = match &glyphs {
+                    Some(Some(glyphs)) => glyphs,
+                    Some(None) => continue,
+                    None => path.data(),
+                };
+                let shape = converted(data, to_root, FillRule::NonZero);
                 *outline = std::mem::take(outline).append(shape);
             }
-            usvg::Node::Group(child) => collect_clip(child, to_root, outline, unsupported),
-            usvg::Node::Text(_) => unsupported.push("text"),
+            usvg::Node::Group(child) => collect_clip(child, to_root, outline, cx),
+            usvg::Node::Text(_) => cx.push("text"),
             _ => {}
         }
     }
@@ -1301,6 +1365,250 @@ mod tests {
             out.extend(&n.to_be_bytes()[1..chunk.len()]);
         }
         out
+    }
+
+    // --- Text ---
+
+    /// Every shape the picture draws, in its own coordinates, flattened out of its layers,
+    /// with its paint.
+    fn shapes(items: &[Item]) -> Vec<(Path, Paint)> {
+        let mut out = Vec::new();
+        for item in items {
+            match item {
+                Item::Shape { path, paint, .. } => out.push((path.clone(), paint.clone())),
+                Item::Group { items, .. } => out.extend(shapes(items)),
+                Item::Image { .. } => {}
+            }
+        }
+        out
+    }
+
+    /// `(left, top, right, bottom)` of a path's points.
+    fn extent(path: &Path) -> (f32, f32, f32, f32) {
+        let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for verb in path.verbs() {
+            let points = match *verb {
+                frus_core::PathVerb::MoveTo(p) | frus_core::PathVerb::LineTo(p) => vec![p],
+                frus_core::PathVerb::QuadTo { ctrl, to } => vec![ctrl, to],
+                frus_core::PathVerb::CubicTo { c1, c2, to } => vec![c1, c2, to],
+                frus_core::PathVerb::Close => vec![],
+            };
+            for p in points {
+                b = (b.0.min(p.x), b.1.min(p.y), b.2.max(p.x), b.3.max(p.y));
+            }
+        }
+        b
+    }
+
+    fn text_svg(body: &str) -> Svg {
+        parse(&format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">{body}</svg>"#
+        ))
+    }
+
+    /// **A `<text>` is drawn as its glyphs**, standing on the baseline `y` gives it from the
+    /// `x` it gives, in its fill — shaped by frus's text stack, not left out.
+    #[test]
+    fn text_is_drawn_as_glyphs_on_its_baseline_in_its_fill() {
+        let svg = text_svg(r##"<text x="10" y="80" font-size="40" fill="#ff0000">H</text>"##);
+        assert!(svg.unsupported().is_empty(), "{:?}", svg.unsupported());
+        let drawn = shapes(&svg.items);
+        assert_eq!(drawn.len(), 1, "one shape: the glyphs");
+        let (path, paint) = &drawn[0];
+        assert_eq!(*paint, Paint::Solid(Color::rgba8(255, 0, 0, 255)));
+        assert_eq!(path.fill_rule(), FillRule::NonZero);
+        let (x0, y0, x1, y1) = extent(path);
+        assert!((y1 - 80.0).abs() < 0.5, "on the baseline: {y1}");
+        assert!((45.0..60.0).contains(&y0), "a cap height above it: {y0}");
+        assert!((10.0..16.0).contains(&x0) && x1 < 45.0, "{x0}..{x1}");
+        // And on the screen, through the picture's box.
+        let drawn = painted(&svg, Rect::new(0.0, 0.0, 800.0, 400.0), BoxFit::Fill);
+        assert_eq!(drawn.len(), 1);
+        assert!(first_point(&drawn[0]).y > 80.0, "scaled twice");
+    }
+
+    /// **`text-anchor` moves each chunk by its own advance**: the middle of `middle` text and
+    /// the end of `end` text are at their `x`.
+    #[test]
+    fn text_anchor_centres_or_ends_the_text_at_x() {
+        let at = |anchor: &str| {
+            let svg = text_svg(&format!(
+                r#"<text x="200" y="100" font-size="30" text-anchor="{anchor}">Hello</text>"#
+            ));
+            extent(&shapes(&svg.items)[0].0)
+        };
+        let (s0, _, s1, _) = at("start");
+        let (m0, _, m1, _) = at("middle");
+        let (e0, _, e1, _) = at("end");
+        let width = s1 - s0;
+        assert!((200.0..205.0).contains(&s0), "{s0}");
+        assert!(((m0 + m1) / 2.0 - 200.0).abs() < 3.0, "centred: {m0}..{m1}");
+        assert!(e1 <= 200.0 && e1 > 195.0, "ends at x: {e1}");
+        assert!(((m1 - m0) - width).abs() < 0.01 && ((e1 - e0) - width).abs() < 0.01);
+    }
+
+    /// **A `<tspan>` keeps its own paint, size and offsets**: `dx` and `dy` move it from where
+    /// the text before it ended, an absolute `x` starts it afresh.
+    #[test]
+    fn a_tspan_has_its_own_paint_size_and_offsets() {
+        let svg = text_svg(
+            r##"<text x="10" y="100" font-size="20" fill="#000000">A<tspan dx="30" dy="-10" fill="#0000ff" font-size="40">B</tspan><tspan x="300" fill="#00ff00">C</tspan></text>"##,
+        );
+        let drawn = shapes(&svg.items);
+        assert_eq!(drawn.len(), 3);
+        let a = extent(&drawn[0].0);
+        let b = extent(&drawn[1].0);
+        let c = extent(&drawn[2].0);
+        assert_eq!(drawn[1].1, Paint::Solid(Color::rgba8(0, 0, 255, 255)));
+        assert_eq!(drawn[2].1, Paint::Solid(Color::rgba8(0, 255, 0, 255)));
+        assert!(
+            b.0 > a.2 + 25.0,
+            "dx moved B: A ends {}, B starts {}",
+            a.2,
+            b.0
+        );
+        assert!((b.3 - 90.0).abs() < 0.5, "dy raised B's baseline: {}", b.3);
+        assert!(b.3 - b.1 > (a.3 - a.1) * 1.7, "B is twice the size");
+        assert!((300.0..305.0).contains(&c.0), "C starts at its x: {}", c.0);
+        assert!(
+            (c.3 - 90.0).abs() < 0.5,
+            "and keeps the line B moved to: {}",
+            c.3
+        );
+    }
+
+    /// **A list of positions places each character**, and white space is collapsed as SVG
+    /// says unless `xml:space` keeps it.
+    #[test]
+    fn position_lists_and_white_space() {
+        let svg = text_svg(r#"<text x="10 100 200" y="50">abc</text>"#);
+        let (x0, _, x1, _) = extent(&shapes(&svg.items)[0].0);
+        assert!(x0 < 15.0 && (200.0..220.0).contains(&x1), "{x0}..{x1}");
+        let advance = |body: &str| {
+            let svg = text_svg(body);
+            let (x0, _, x1, _) = extent(&shapes(&svg.items)[0].0);
+            x1 - x0
+        };
+        let tight = advance(r#"<text x="0" y="50">a b</text>"#);
+        let loose = advance("<text x=\"0\" y=\"50\">\n   a  \n   b   </text>");
+        assert!((tight - loose).abs() < 0.01, "{tight} vs {loose}");
+        let kept = advance(r#"<text x="0" y="50" xml:space="preserve">a     b</text>"#);
+        assert!(kept > tight + 10.0, "{kept} vs {tight}");
+    }
+
+    /// **The font comes from attributes, `style` and style sheets**: bold is wider, a class
+    /// sets the size, and an inherited `font-family` reaches a nested text.
+    #[test]
+    fn the_font_comes_from_attributes_styles_and_sheets() {
+        let width = |body: &str| {
+            let svg = text_svg(body);
+            let (x0, y0, x1, y1) = extent(&shapes(&svg.items)[0].0);
+            (x1 - x0, y1 - y0)
+        };
+        let regular = width(r#"<text y="50" font-size="30">Wide</text>"#);
+        let bold = width(r#"<text y="50" style="font-size:30px; font-weight:bold">Wide</text>"#);
+        assert!(bold.0 > regular.0 * 1.05, "{bold:?} vs {regular:?}");
+        let sheet = width(
+            r#"<style>.big { font-size: 60px }</style><text y="100" class="big">Wide</text>"#,
+        );
+        assert!(
+            (sheet.0 / regular.0 - 2.0).abs() < 0.02,
+            "{sheet:?} vs {regular:?}"
+        );
+        let mono = width(
+            r#"<g font-family="'Nothing Here', monospace"><text y="50" font-size="30">iiii</text></g>"#,
+        );
+        let proportional = width(r#"<text y="50" font-size="30">iiii</text>"#);
+        assert!(
+            mono.0 > proportional.0 * 1.3,
+            "{mono:?} vs {proportional:?}"
+        );
+    }
+
+    /// **Text is a shape like any other**: its group's transform moves it, a gradient in
+    /// `objectBoundingBox` units spans the whole text, it clips, and it keeps its place
+    /// among the other shapes.
+    #[test]
+    fn text_is_transformed_painted_clipped_and_ordered_like_a_shape() {
+        let svg = text_svg(
+            r##"<defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+              <clipPath id="c"><text x="0" y="40" font-size="40">Clip</text></clipPath></defs>
+            <rect width="10" height="10" fill="#000"/>
+            <g transform="translate(100 0) scale(2)"><text x="0" y="50" font-size="20" fill="url(#g)">Wide</text></g>
+            <rect width="10" height="10" fill="#fff"/>
+            <rect width="400" height="200" fill="#888" clip-path="url(#c)"/>"##,
+        );
+        assert!(svg.unsupported().is_empty(), "{:?}", svg.unsupported());
+        let drawn = shapes(&svg.items);
+        assert_eq!(drawn.len(), 4, "rect, text, rect, clipped rect");
+        let (x0, _, x1, y1) = extent(&drawn[1].0);
+        assert!(
+            x0 >= 100.0 && (y1 - 100.0).abs() < 1.5,
+            "moved and scaled: {x0} {y1}"
+        );
+        let Paint::Ramp(ramp) = &drawn[1].1 else {
+            panic!("{:?}", drawn[1].1)
+        };
+        // The gradient runs from the text's left to its right.
+        let RampShape::Linear { from, to } = ramp.shape else {
+            panic!()
+        };
+        let (from, to) = (ramp.transform.apply(from), ramp.transform.apply(to));
+        assert!(
+            (from.x - x0).abs() < 2.0 && (to.x - x1).abs() < 2.0,
+            "{from:?} {to:?} over {x0}..{x1}"
+        );
+        // The clip is the glyphs, not a placeholder box.
+        let clip = svg
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Group {
+                    clip: Some(clip), ..
+                } => Some(clip.clone()),
+                _ => None,
+            })
+            .expect("a clipped layer");
+        let (cx0, cy0, cx1, cy1) = extent(&clip);
+        assert!(
+            cx0 >= 0.0 && cx1 < 120.0 && cy0 > 5.0 && (cy1 - 40.0).abs() < 12.0,
+            "{cx0} {cy0} {cx1} {cy1}"
+        );
+        assert!(clip.verbs().len() > 20, "glyph outlines");
+    }
+
+    /// **A stroked text draws its glyphs' outlines widened**, and a text with neither fill
+    /// nor stroke draws nothing.
+    #[test]
+    fn stroked_text_and_invisible_text() {
+        let svg = text_svg(
+            r##"<text x="10" y="80" font-size="40" fill="none" stroke="#00f" stroke-width="4">O</text>
+            <text x="10" y="80" font-size="40" fill="none">O</text>"##,
+        );
+        let drawn = shapes(&svg.items);
+        assert_eq!(drawn.len(), 1, "{drawn:?}");
+        let filled = text_svg(r#"<text x="10" y="80" font-size="40">O</text>"#);
+        let (f0, ..) = extent(&shapes(&filled.items)[0].0);
+        let (s0, ..) = extent(&drawn[0].0);
+        assert!(
+            (f0 - s0 - 2.0).abs() < 0.5,
+            "widened by half the width: {f0} {s0}"
+        );
+    }
+
+    /// **What text uses that is not laid out is named.**
+    #[test]
+    fn text_features_not_drawn_are_named() {
+        let svg = text_svg(
+            r##"<defs><path id="p" d="M0 50 L300 50"/></defs>
+            <text y="40" text-decoration="underline">u</text>
+            <text y="80"><textPath href="#p">on a path</textPath></text>
+            <text y="120" rotate="30">r</text>"##,
+        );
+        assert_eq!(
+            svg.unsupported(),
+            &["rotated glyphs", "text decoration", "text on a path"]
+        );
     }
 
     #[test]

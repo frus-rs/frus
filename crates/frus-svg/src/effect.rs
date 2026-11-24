@@ -41,14 +41,14 @@ pub(crate) fn mask_layers(
     mask: &usvg::Mask,
     to_root: Affine,
     items: &mut Vec<Item>,
-    unsupported: &mut Vec<&'static str>,
+    cx: &mut crate::Cx,
 ) -> bool {
     if mask.root().children().is_empty() {
         return false;
     }
     // The mask's content lives in a space of its own, which the masked group's transform
     // takes to the picture's.
-    let content: Vec<Item> = group_items(mask.root(), unsupported)
+    let content: Vec<Item> = group_items(mask.root(), cx)
         .into_iter()
         .map(|item| item.mapped(to_root))
         .collect();
@@ -84,7 +84,7 @@ pub(crate) fn mask_layers(
         coverage,
     ));
     match mask.mask() {
-        Some(inner) => mask_layers(inner, to_root, items, unsupported),
+        Some(inner) => mask_layers(inner, to_root, items, cx),
         None => true,
     }
 }

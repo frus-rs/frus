@@ -27,7 +27,9 @@ use frus_core::{
     TextPosition, TextRun, TextShaping, TextStyle,
 };
 
+mod outline;
 mod shaping;
+pub use outline::{outline_paragraph, outline_text, OutlineStyle, OutlinedLine};
 pub use shaping::{default_locale, set_default_locale, shaped};
 
 /// The default line-height to font-size ratio.
