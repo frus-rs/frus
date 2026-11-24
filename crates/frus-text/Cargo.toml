@@ -47,6 +47,9 @@ web-time = "1"
 # The script of a run, to pick its fallback faces (milestone 784); already in the tree,
 # cosmic-text uses it.
 unicode-script = "0.5"
+# Extended grapheme clusters, the unit the caret steps over (milestone 842); already in the
+# tree, cosmic-text uses it.
+unicode-segmentation = "1.12"
 
 # The Web: cosmic-text asks `sys-locale` for the reader's language when it builds a font system,
 # and `sys-locale` reads the browser's only with this feature. Without it the answer is nothing,
