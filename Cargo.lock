@@ -1965,6 +1965,7 @@ dependencies = [
  "log",
  "sys-locale",
  "unicode-script",
+ "unicode-segmentation",
  "web-time",
 ]
 

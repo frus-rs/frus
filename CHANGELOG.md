@@ -8,11 +8,20 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 841 so far, each documenting the objective, the alternatives
+> record — one per step, 842 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Editing steps by grapheme cluster** (J842, part of #56). What a reader sees as one
+  character — a family emoji joined by zero-width joiners, a flag, a hand with a skin tone, a
+  letter with a combining accent, a Devanagari or Thai syllable, an Arabic letter with its
+  vowel mark — is now one step for the arrows (on screen, left to right and right to left),
+  one press of Backspace or Delete, one press target, and whole in a double click or a word
+  jump. Before, each `char` was a step: the caret stood inside a family emoji four times and
+  Backspace took it apart. A length limit no longer lets part of an emoji in. Android's
+  surrounding-text deletion now removes the UTF-16 units the keyboard named instead of that
+  many characters. `grapheme_stops` and its stepping helpers are new in `frus-text`.
 - **Text in SVG pictures and Lottie animations** (J841, #303, #304). An SVG's `<text>` and
   `<tspan>` were dropped without a word, and a Lottie text layer was left out. Both are now
   shaped by frus's own text stack, with the application's fonts, and drawn as glyph outlines —
