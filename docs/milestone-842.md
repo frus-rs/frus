@@ -115,15 +115,10 @@ Each test below was run against the code before the fix and failed, then passes 
 The whole library suites pass after the change: `frus-text` 75, `frus-widgets` 2584 (built
 without optimisation; its `a_deep_tree_builds_on_a_platform_s_smallest_stack` was left out of
 that run, since it needs the optimised build's frame sizes to fit its deliberately small
-stack), `frus-shell` 639. `cargo clippy --workspace --all-targets -- -D warnings` is clean.
+stack), `frus-shell` 639. `cargo clippy --workspace --all-targets -- -D warnings` is clean. The goldens were run on
+2026-11-24 under WSL: 284 tests in 28 binaries, 0 failed, none regenerated.
 
 ## Not done
-
-- **Goldens were not run.** The golden build under WSL was cut off by the time limit, and the
-  second attempt failed when the host disk filled. TextLayout feeds only the caret, the
-  selection highlight and hit testing, and for text where every character is its own cluster
-  (all the selection goldens) the geometry is the same as before, so no golden is expected to
-  change. That is reasoned, not measured.
 
 - **Emoji and complex-script fallback rendering** is unchanged: a machine with no emoji face
   draws a ZWJ sequence as whatever the fallback finds. On the Windows test machine the family
