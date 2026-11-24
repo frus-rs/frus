@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 843 so far, each documenting the objective, the alternatives
+> record — one per step, 844 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **3D in a `GpuPass`: a depth buffer and multisampling** (J844, part of #220). `.depth(format)`
+  gives a pass a depth buffer the size of its picture, `.samples(4)` a multisampled target
+  resolved into it; frus makes them again when the box changes size and clears them every frame
+  (the depth to 1.0, or to `.depth_clear`). `ctx.targets` (`PassTargets`) says what pipelines
+  must be made for and gives their multisample, depth and colour states;
+  `ctx.begin_render_pass` begins a pass on all of them, and `ctx.depth` / `ctx.multisampled`
+  are there for a pass described by hand. What the device cannot make is said once and replaced.
+  `.version(n)` keeps the last picture while `n` and the size stay the same, without running the
+  callback. Composition is unchanged: a 3D pass is clipped, faded and transformed like any
+  widget. The shaders example has a "3D in a list" page: a lit cube, depth-tested and
+  multisampled, one row of a scrolling list. `clippy -p frus-gpu --all-targets` now passes
+  without the `warm-shaders` feature too.
 - **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
   run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
   administrator password, only Perl and `make` (`frus doctor` says when either is missing).
