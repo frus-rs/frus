@@ -6,7 +6,9 @@
 //!
 //! - an [`AnimatedShader`] painting a plasma, its clock running while it plays;
 //! - a [`ShaderMask`] running a shimmer across a title;
-//! - a [`GpuPass`] drawing a turning triangle with its own wgpu pipeline.
+//! - a [`GpuPass`] drawing a turning triangle with its own wgpu pipeline;
+//! - "3D in a list": a lit cube turning in a [`GpuPass`] with a depth buffer and 4×
+//!   multisampling, one row of a scrolling list among ordinary widgets (milestone 844).
 //!
 //! "Full screen" shows the plasma alone, over the whole window: a tap stops or starts it.
 //! That is the page the frame times and the idle CPU of the milestone were measured on.
@@ -15,11 +17,15 @@
 
 #![deny(missing_docs)]
 
+mod cube;
+
+pub use cube::CUBE;
+
 use frus::wgpu;
 use frus::{
-    button, column, text, Align, AnimatedShader, BlendMode, ClipRRect, Color, Container, FrusApp,
-    GestureDetector, GpuPass, GpuPassContext, MediaQuery, Shader, ShaderMask, Size, State,
-    StateContext, StatefulWidget, Variant, Widget,
+    button, column, text, Align, AnimatedShader, BlendMode, ClipRRect, Color, Container, Flex,
+    FrusApp, GestureDetector, GpuPass, GpuPassContext, MediaQuery, Shader, ShaderMask,
+    SingleChildScrollView, Size, State, StateContext, StatefulWidget, Variant, Widget,
 };
 
 /// The plasma: three waves, mixed between two colours the application sets.
@@ -40,6 +46,8 @@ struct Gallery;
 struct GalleryState {
     /// The plasma alone over the whole window.
     full_screen: bool,
+    /// The 3D page: a cube among the rows of a list.
+    cube: bool,
     /// Whether the clocks are stopped.
     paused: bool,
 }
@@ -169,6 +177,9 @@ impl State for GalleryState {
                     .on_tap(cx.callback(|s: &mut GalleryState| s.paused = !s.paused)),
             );
         }
+        if self.cube {
+            return cube_page(cx, width, height, playing);
+        }
         let shimmer = Shader::from_wgsl(SHIMMER).unwrap_or_else(Shader::placeholder);
         let title = ShaderMask::shader(shimmer.paint().color("base", Color::rgb8(150, 160, 190)))
             .blend(BlendMode::SrcIn)
@@ -196,6 +207,11 @@ impl State for GalleryState {
                     cx.callback(|s: &mut GalleryState| s.full_screen = true),
                 )
                 .variant(Variant::Filled),
+                button(
+                    "3D in a list",
+                    cx.callback(|s: &mut GalleryState| s.cube = true),
+                )
+                .variant(Variant::Outlined),
             ]
             .gap(8.0)
             .align(Align::Center),
@@ -213,6 +229,48 @@ impl State for GalleryState {
                 .child(page),
         )
     }
+}
+
+/// The 3D page: rows of text in a scrolling list, the turning cube one of them, so that it
+/// scrolls, and is clipped by the list's edges, with the rest.
+fn cube_page(
+    cx: &StateContext<GalleryState>,
+    width: f32,
+    height: f32,
+    playing: bool,
+) -> Box<dyn Widget> {
+    let theme = cx.theme();
+    let row = |i: usize| {
+        Container::new()
+            .padding(16.0)
+            .color(theme.surface)
+            .child(text(format!("Row {i}")).size(18.0))
+    };
+    let mut rows = Flex::column().gap(8.0).padding(24.0);
+    for i in 1..=4 {
+        rows = rows.child(row(i));
+    }
+    rows = rows.child(cube::cube(playing).size((width - 48.0).clamp(120.0, 480.0), 260.0));
+    for i in 5..=16 {
+        rows = rows.child(row(i));
+    }
+    let list = SingleChildScrollView::new()
+        .width(width)
+        .flex(1.0)
+        .child(rows);
+    let bar = column![
+        button("Back", cx.callback(|s: &mut GalleryState| s.cube = false),)
+            .variant(Variant::Outlined),
+    ]
+    .padding(12.0)
+    .align(Align::Center);
+    Box::new(
+        Container::new()
+            .width(width)
+            .height(height)
+            .color(theme.background)
+            .child(column![list, bar].width(width).height(height)),
+    )
 }
 
 frus::main!({

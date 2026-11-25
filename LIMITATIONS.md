@@ -443,12 +443,14 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Status:** open
 - **What you hit:** Shader uniforms are `f32`, `i32`, `u32` and `vec2`/`vec3`/`vec4<f32>`
   only (matrices and arrays are refused), with at most four images, sampled linearly with
-  clamped edges. A `GpuPass` draws one colour picture with no depth buffer and no MSAA, runs on
-  every frame its box is drawn, and cannot say that it did not change.
+  clamped edges. A `GpuPass` (which has a depth buffer and multisampling since milestone 844,
+  and can say it did not change with `.version`) draws in its own encoder before the frame,
+  never inside frus's own pass, and its picture cannot be a storage texture.
 - **Workaround:** Pack matrices into vectors; draw into your own textures and show them with a
   `Texture`.
 - **Evidence:** [docs/guide/shaders.md](docs/guide/shaders.md),
-  [docs/milestone-792.md](docs/milestone-792.md)
+  [docs/milestone-792.md](docs/milestone-792.md),
+  [docs/milestone-844.md](docs/milestone-844.md)
 
 ### L-028 External frames are shown without a copy only on Android with Vulkan
 
