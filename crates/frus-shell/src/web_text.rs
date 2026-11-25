@@ -6,8 +6,8 @@
 //! A frus page paints its words into a canvas, and as far as the browser is concerned the page
 //! has no text: find-in-page finds nothing, a printed page is a picture cut at the window, and a
 //! search engine indexes an empty page. The accessibility bridge (`a11y_web`) does put the words
-//! in the document, but as canvas fallback content, which is never laid out: the browser knows
-//! the words exist and not where they are, and a find never reaches them.
+//! in the document, but as generated content a find never reaches (milestone 845; before it, as
+//! canvas fallback content, which is never laid out).
 //!
 //! This module gives the page its text three ways, from what the frame records
 //! ([`frus_widgets::Ui::page_text`]):

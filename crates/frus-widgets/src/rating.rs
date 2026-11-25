@@ -155,6 +155,24 @@ impl<Msg: Clone> Widget<Msg> for Rating<Msg> {
         None
     }
 
+    /// The arrows move the score by one star, between one and the most. The rating itself
+    /// takes no focus (its stars do), so this is what an assistive technology's increment and
+    /// decrement reach: the node says it is a slider, and a slider's value moves with its
+    /// arrows (milestone 845).
+    fn on_key(&self, key: &crate::interaction::Key) -> crate::interaction::KeyResponse<Msg> {
+        use crate::interaction::{Key, KeyResponse};
+        if !self.enabled || self.max == 0 {
+            return KeyResponse::Ignored;
+        }
+        let to = match key {
+            Key::Left { .. } if self.value > 1 => self.value - 1,
+            Key::Left { .. } => self.value,
+            Key::Right { .. } => (self.value + 1).min(self.max),
+            _ => return KeyResponse::Ignored,
+        };
+        KeyResponse::Handled((to != self.value).then(|| (self.on_rate)(to)))
+    }
+
     fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
         // A rating said nothing to a reader before this: the score is the whole of what it
         // carries, and it is still owed to someone who cannot change it.
@@ -176,6 +194,33 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     enum Msg {
         Rate(u32),
+    }
+
+    #[test]
+    fn the_arrows_move_it_a_star_for_an_assistive_technology() {
+        use crate::interaction::{Key, KeyResponse};
+        let right = Key::Right {
+            shift: false,
+            word: false,
+        };
+        let left = Key::Left {
+            shift: false,
+            word: false,
+        };
+        let rating = Rating::new(0, 5, Msg::Rate);
+        assert!(matches!(
+            rating.on_key(&right),
+            KeyResponse::Handled(Some(Msg::Rate(1)))
+        ));
+        let rating = Rating::new(3, 5, Msg::Rate);
+        assert!(matches!(
+            rating.on_key(&left),
+            KeyResponse::Handled(Some(Msg::Rate(2)))
+        ));
+        let full = Rating::new(5, 5, Msg::Rate);
+        assert!(matches!(full.on_key(&right), KeyResponse::Handled(None)));
+        let off = Rating::new(3, 5, Msg::Rate).enabled(false);
+        assert!(matches!(off.on_key(&right), KeyResponse::Ignored));
     }
 
     #[test]

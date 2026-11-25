@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the demo's accessibility bridge in a real browser (milestone 564, #18).
+"""Checks the demo's accessibility bridge in a real browser (milestones 564 and 845, #18).
 
 What no unit test can say: that the DOM the shell projects (`a11y_web.rs`) is what
 Chromium's own accessibility engine actually computes, and that the loop closes both
@@ -133,6 +133,19 @@ def open_at(url, user_agent=None, platform=None):
     return page
 
 
+def close_browser():
+    """Closes the browser listening on `PORT` through the protocol itself. On Windows the process
+    `Popen` started is only a launcher: the browser outlives it, and killing it, its tree
+    included, leaves the browser serving the port, where the next check's tab then opens."""
+    try:
+        version = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json/version", timeout=2))
+        ws = websocket.create_connection(version["webSocketDebuggerUrl"], timeout=5, suppress_origin=True)
+        ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        ws.close()
+    except Exception:
+        pass
+
+
 failures = []
 
 
@@ -147,6 +160,63 @@ def expect_true(label, got):
     print(f"  {'ok  ' if got else 'FAIL'} {label}")
     if not got:
         failures.append(label)
+
+
+def named(tree, role, name):
+    """The first node of `role` whose name contains `name`, ignored ones left out."""
+    for node in tree:
+        if node.get("ignored"):
+            continue
+        if node.get("role", {}).get("value") == role and name in node.get("name", {}).get("value", ""):
+            return node
+    return None
+
+
+def index_of(tree, node):
+    if not node:
+        return -1
+    return next((i for i, n in enumerate(tree) if n["nodeId"] == node["nodeId"]), -1)
+
+
+def box(p, node):
+    """The node's box on the page, `(left, top, width, height)` in CSS pixels, or `None` when the
+    browser laid it out nowhere: what a reader touching the screen, or drawing its highlight
+    around the node, has to go on."""
+    try:
+        quad = p.call("DOM.getBoxModel", backendNodeId=node["backendDOMNodeId"])["model"]["border"]
+    except Exception:
+        return None
+    return (quad[0], quad[1], quad[2] - quad[0], quad[5] - quad[1])
+
+
+def on_node(p, node, body):
+    """Runs `function () { body }` with `this` the node's element: what an assistive technology
+    does to an element (a click for "activate", an arrow for "increment"), done from here."""
+    obj = p.call("DOM.resolveNode", backendNodeId=node["backendDOMNodeId"])["object"]["objectId"]
+    return p.call("Runtime.callFunctionOn", objectId=obj, functionDeclaration="function () { " + body + " }",
+                  returnByValue=True)["result"].get("value")
+
+
+def value(node):
+    return node.get("value", {}).get("value") if node else None
+
+
+def sliders(p):
+    return [n for n in p.ax_tree() if not n.get("ignored") and n.get("role", {}).get("value") == "slider"]
+
+
+def show(label, node, p=None):
+    """One line of evidence: the node as the accessibility tree has it."""
+    if not node:
+        print(f"    {label}: (none)")
+        return
+    props = {q["name"]: q.get("value", {}).get("value") for q in node.get("properties", [])}
+    keep = {k: v for k, v in props.items()
+            if k not in ("invalid", "settable", "readonly", "required", "multiline", "focusable")}
+    extra = f" value={value(node)!r}" if "value" in node else ""
+    at = box(p, node) if p else None
+    where = f" box={tuple(round(v) for v in at)}" if at else ""
+    print(f"    {label}: {node['role']['value']} {node.get('name', {}).get('value', '')!r} {keep}{extra}{where}")
 
 
 def main(base):
@@ -164,59 +234,179 @@ def main(base):
             except Exception:
                 time.sleep(0.2)
 
-        print("the page loads with the accessibility tree already in place")
+        print("the page is read as a page: a landmark named after the application")
         p = open_at(base)
         p.wait(7)
         tree = p.ax_tree()
-        root = p.find(tree, role="application")
-        expect_true("the canvas is exposed as role=application", root is not None)
-        if root:
-            expect_true("...with the app's title as its name",
-                        bool(root.get("name", {}).get("value")))
+        expect("no role=application (a reader browsing the page skipped every text in it)",
+               p.find(tree, role="application"), None)
+        region = p.find(tree, role="region")
+        show("landmark", region)
+        expect_true("a region landmark named after the application",
+                    bool(region and region.get("name", {}).get("value")))
 
+        print("text is text, and a tab says which one is showing")
+        words = named(tree, "StaticText", "Nothing to show")
+        show("empty-state text", words)
+        expect_true("a text node is read as text (StaticText)", words is not None)
+        expect("...not as an element with no role and a name", named(tree, "generic", "Nothing to show"), None)
+        show("heading", named(tree, "heading", ""))
+        tab = named(tree, "tab", "Tasks")
+        show("tab", tab)
+        expect("the tab showing is selected", p.prop(tab, "selected") if tab else None, True)
+        chips = [n for n in tree if not n.get("ignored") and n.get("role", {}).get("value") == "button"
+                 and p.prop(n, "pressed") is not None]
+        show("filter chip", chips[0] if chips else None)
+        expect_true("a filter chip is a button that says whether it is pressed", bool(chips))
+        progress = p.find(tree, role="progressbar")
+        show("progress", progress)
+        expect_true("a progress of nothing out of nothing says no 'NaN'",
+                    bool(progress) and "NaN" not in json.dumps(progress))
+        unnamed = [n for n in tree if not n.get("ignored") and n.get("role", {}).get("value") == "image"
+                   and not n.get("name", {}).get("value")]
+        expect("unnamed images (each read as just 'image')", len(unnamed), 0)
+
+        print("every node has a box over the place it is drawn")
         menu = p.find(tree, role="button", name_contains="Menu")
-        expect_true("the menu icon button is exposed, named 'Menu'", menu is not None)
+        show("menu", menu, p)
+        b = box(p, menu) if menu else None
+        expect_true("the 'Menu' button has a laid-out box of its own", bool(b and b[2] > 4 and b[3] > 4))
+        add = p.find(tree, role="button", name_contains="Add")
+        b2 = box(p, add) if add else None
+        show("add", add, p)
+        expect_true("'Add' has a box too, elsewhere", bool(b2 and b and b2 != b))
+        if b:
+            hit = p.js(f"(() => {{ const e = document.elementFromPoint({b[0] + b[2] / 2}, {b[1] + b[3] / 2});"
+                       " return e && e.tagName; })()")
+            expect("a press there still lands on the canvas (the layer takes no pointer)", hit, "CANVAS")
 
         print("adding a task announces it and names the checkbox after it")
-        # The field is found in the accessibility tree and given the focus the way an assistive
-        # technology would, rather than by a click at coordinates that move whenever the page's
-        # layout does (they moved when the demo stopped fixing its own size).
         field = p.find(p.ax_tree(), role="textbox")
         expect_true("the add field is exposed as a textbox", field is not None)
         if field:
             p.focus_backend_node(field["backendDOMNodeId"]); p.wait(0.5)
         p.type("Wash the dog"); p.wait(2)
         tree = p.ax_tree()
-        box = p.find(tree, role="checkbox", name_contains="Wash the dog")
-        expect_true("a checkbox named after the new task exists", box is not None)
-        if box:
-            expect("...unchecked to start", p.prop(box, "checked"), "false")
-        # The status container's own accessible name is empty — `role="status"` is not
-        # a naming-content role, so what an AT actually reads is exposed as the
-        # container's text content, a StaticText child in the computed tree.
+        check = p.find(tree, role="checkbox", name_contains="Wash the dog")
+        show("checkbox", check, p)
+        expect_true("a checkbox named after the new task exists", check is not None)
+        if check:
+            expect("...unchecked to start", p.prop(check, "checked"), "false")
+        clear = p.find(tree, role="button", name_contains="Clear completed")
+        expect_true("...read where the list has it, before 'Clear completed', not appended last",
+                    0 <= index_of(tree, check) < index_of(tree, clear))
         live = p.find(tree, name_contains="Wash the dog added")
+        status = p.find(tree, role="status")
+        show("live region", status, p)
+        show("its words", live)
         expect_true("a live region carries the 'added' announcement", live is not None)
+        expect("...politely", p.prop(status, "live") if status else None, "polite")
+        expect_true("...and is rendered (it has a box): the live machinery watches what is",
+                    bool(status and box(p, status)))
 
         print("focusing and activating the checkbox through the accessibility tree ticks it")
-        backend_id = box["backendDOMNodeId"]
-        p.focus_backend_node(backend_id)
-        p.wait(0.3)
-        # The element is a real <button>: the platform itself fires `click` on Enter,
-        # the same as a screen reader's own "activate" would deliver. The bridge keeps that
-        # key from also reaching the shell as typing (milestone 568), so `click` is the one
-        # way in, and the Enter has to be a real one.
-        p.activate()
-        p.wait(1)
+        if check:
+            p.focus_backend_node(check["backendDOMNodeId"])
+            p.wait(0.3)
+            p.activate()
+            p.wait(1)
         tree = p.ax_tree()
-        box = p.find(tree, role="checkbox", name_contains="Wash the dog")
-        expect_true("the checkbox is still there after activation", box is not None)
-        if box:
-            expect("...and is now checked", p.prop(box, "checked"), "true")
+        check = p.find(tree, role="checkbox", name_contains="Wash the dog")
+        expect_true("the checkbox is still there after activation", check is not None)
+        if check:
+            expect("...and is now checked", p.prop(check, "checked"), "true")
+
+        print("the browser's focus follows the application's")
+        label = "document.activeElement && (document.activeElement.getAttribute('aria-label') || '')"
+        before = p.js(label)
+        p.press("Tab", "Tab", 9); p.wait(0.6)
+        in_layer = p.js("!!(document.activeElement && document.activeElement.parentElement"
+                        " && document.activeElement.parentElement.id === 'frus-semantics')")
+        after = p.js(label)
+        print(f"    focus: {before!r} -> Tab -> {after!r}")
+        expect_true("Tab, pressed on a node, moved the focus to another node of the layer",
+                    in_layer and after != before)
+        focused = [n for n in p.ax_tree() if not n.get("ignored") and p.prop(n, "focused")
+                   and n.get("role", {}).get("value") != "RootWebArea"]
+        show("focused in the accessibility tree", focused[-1] if focused else None)
+        expect_true("...and the accessibility tree has that node focused",
+                    bool(focused and focused[-1].get("name", {}).get("value") == after))
 
         print("a delete button is reachable and named for what it does")
-        delete = p.find(tree, role="button", name_contains="Delete task")
-        expect_true("a 'Delete task' button exists for the row", delete is not None)
+        expect_true("a 'Delete task' button exists for the row",
+                    p.find(p.ax_tree(), role="button", name_contains="Delete task") is not None)
+
+        print("frames that change nothing write nothing to the layer")
+        p.js("window.__mut = 0; new MutationObserver((m) => { window.__mut += m.length; })"
+             ".observe(document.getElementById('frus-semantics'),"
+             " {subtree: true, attributes: true, childList: true, characterData: true})")
+        for i in range(30):
+            p.call("Input.dispatchMouseEvent", type="mouseMoved", x=20 + i * 10, y=300 + (i % 5) * 20)
+            time.sleep(0.03)
+        p.wait(0.5)
+        expect("mutations of the layer over 30 hover frames", p.js("window.__mut"), 0)
+
+        print("settings: a switch, a radio, a slider, an assistive technology's increment")
+        s = open_at(base.split("#")[0] + "#/settings")
+        s.wait(7)
+        tree = s.ax_tree()
+        show("heading", named(tree, "heading", "Settings"), s)
+        expect_true("'Settings' is a heading", named(tree, "heading", "Settings") is not None)
+        controls = named(tree, "tab", "Controls")
+        expect("the 'Controls' tab is selected", s.prop(controls, "selected") if controls else None, True)
+        switch = s.find(tree, role="switch")
+        show("switch", switch, s)
+        if switch:
+            on_node(s, switch, "this.click()")
+            s.wait(1)
+            switch = s.find(s.ax_tree(), role="switch")
+            show("switch after a reader's click", switch)
+            expect("a reader's click turns the switch on", s.prop(switch, "checked"), "true")
+        medium = named(s.ax_tree(), "radio", "Medium")
+        if medium:
+            on_node(s, medium, "this.click()")
+            s.wait(1)
+            medium = named(s.ax_tree(), "radio", "Medium")
+            expect("a reader's click picks 'Medium'", s.prop(medium, "checked"), "true")
+        found = sliders(s)
+        volume = found[0] if found else None
+        show("volume", volume, s)
+        if volume:
+            s.focus_backend_node(volume["backendDOMNodeId"]); s.wait(0.3)
+            for _ in range(2):
+                s.press("ArrowRight", "ArrowRight", 39)
+                s.wait(0.3)
+            s.wait(0.5)
+            volume = sliders(s)[0]
+            show("volume after ArrowRight twice", volume)
+            expect_true("the arrows on the focused slider moved it", (value(volume) or 0) > 0)
+
+        def quantity_and_less():
+            tree = s.ax_tree()
+            q = next((n for n in tree if not n.get("ignored") and n.get("role", {}).get("value") == "slider"
+                      and s.prop(n, "valuemax") == 20), None)
+            less = named(tree, "button", "Moins") or named(tree, "button", "Less")
+            return q, less
+
+        quantity, less = quantity_and_less()
+        show("quantity", quantity)
+        show("less", less)
+        expect("'Less' is disabled at 0", s.prop(less, "disabled") if less else None, True)
+        if quantity:
+            # An assistive technology's "increment" on a slider it has not focused: what a
+            # browser sends for it is the arrow, on the element.
+            on_node(s, quantity, "this.dispatchEvent(new KeyboardEvent('keydown',"
+                                 " {key: 'ArrowUp', bubbles: true, cancelable: true}))")
+            s.wait(1)
+            quantity, less = quantity_and_less()
+            show("quantity after an increment", quantity)
+            expect("an increment, on a slider without the focus, moved it to 1", value(quantity), 1)
+            expect("...and 'Less' is no longer disabled", s.prop(less, "disabled") if less else None, None)
+        show("dropdown", named(s.ax_tree(), "button", "Option A"))
     finally:
+        close_browser()
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(browser.pid), "/T", "/F"], capture_output=True)
         browser.kill()
         shutil.rmtree(profile, ignore_errors=True)
     print("FAILED: " + ", ".join(failures) if failures else "all good")

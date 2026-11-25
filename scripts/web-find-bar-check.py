@@ -41,7 +41,7 @@ WORD = os.environ.get("FIND_WORD", "Vibrate 400")
 # FIND_WORD="Row 4321"`: a lazy list of 5000 rows whose unbuilt rows Ctrl+F lays in).
 ROUTE = os.environ.get("FIND_ROUTE", "/settings")
 # The words the accessibility bridge holds: what the application has on screen.
-ON_SCREEN = "[...document.querySelectorAll('canvas [aria-label]')].map((el) => el.getAttribute('aria-label'))"
+ON_SCREEN = "[...document.querySelectorAll('#frus-semantics > *')].map((el) => el.getAttribute('aria-label') || el.getAttribute('data-t')).filter(Boolean)"
 # How far each region's box in the text layer is scrolled.
 BOXES = "[...document.querySelectorAll('#frus-text .s')].map((el) => Math.round(el.scrollTop))"
 

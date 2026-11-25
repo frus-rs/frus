@@ -1,0 +1,24 @@
+ frus   1 Run   2 Build   3 Doctor                        not in an application
+┌ Devices ─────────────────────┐┌ Log ─────────────────────────────────────────┐
+│Looking for devices…          ││                                              │
+└──────────────────────────────┘│                                              │
+┌ Runs ────────────────────────┐│                                              │
+│Enter runs on the device      ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘
+ Looking for devices…
+ Enter run  Space mark  r reload  R restart  s stop  Tab panel  c clear  q quit

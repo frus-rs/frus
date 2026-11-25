@@ -83,7 +83,7 @@ ELEMENT = "document.querySelector('[data-frus-field]')"
 
 def fields(p):
     """The nodes a reader browsing the page finds for the add field, each told apart: the
-    editing element, or the accessibility bridge's node in the canvas."""
+    editing element, or the accessibility bridge's node in its layer."""
     found = []
     for node in p.ax_tree():
         if node.get("ignored") or node.get("role", {}).get("value") != "textbox":
@@ -120,7 +120,7 @@ def main(base):
         # check focuses as a reader would, then the element, and no bounce back to the node.
         p.js("window.focusLog = []; document.addEventListener('focusin', (e) => focusLog.push("
              "e.target.hasAttribute('data-frus-field') ? 'element'"
-             " : e.target.closest('canvas') ? 'node' : e.target.tagName), true)")
+             " : e.target.closest('#frus-semantics') ? 'node' : e.target.tagName), true)")
         p.focus_backend_node(field["backendDOMNodeId"])
         p.wait(0.8)
         expect("the focus went from the field's node to the element, once (milestone 713)",

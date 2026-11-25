@@ -69,7 +69,7 @@ TEXTS = """[...document.querySelectorAll('#frus-text .t')].map((el) => {
 })"""
 
 # The words the accessibility bridge holds: what the application has on screen.
-ON_SCREEN = "[...document.querySelectorAll('canvas [aria-label]')].map((el) => el.getAttribute('aria-label'))"
+ON_SCREEN = "[...document.querySelectorAll('#frus-semantics > *')].map((el) => el.getAttribute('aria-label') || el.getAttribute('data-t')).filter(Boolean)"
 
 
 def find(p, word):

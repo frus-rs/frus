@@ -73,7 +73,7 @@ def main(base):
         p.wait(8)
 
         print("the field in the frame")
-        node = f"{INNER}.querySelector('canvas [role=textbox][aria-label=\"New task\"]')"
+        node = f"{INNER}.querySelector('#frus-semantics [role=textbox][aria-label=\"New task\"]')"
         if not p.js(f"!!{node}"):
             print("  FAIL no field named 'New task' in the frame")
             return 1

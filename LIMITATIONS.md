@@ -163,7 +163,7 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Platforms:** Web
 - **Status:** open
 - **What you hit:** Text is painted into a canvas. The semantics tree is projected into the DOM
-  for screen readers, but as unpainted fallback content, so Ctrl+F finds nothing, search
+  for screen readers, but as words a find does not search, so Ctrl+F finds nothing, search
   engines and link previews see an empty page, printing gives at best a picture of the
   viewport, and the browser's translation and reader mode have nothing to work on.
 - **Workaround:** Keep pages that must be indexed or printed as ordinary HTML beside the
@@ -641,18 +641,22 @@ as welcome. A real use case is the best argument for moving an entry up.
   [docs/milestone-811.md](docs/milestone-811.md),
   [crates/frus-widgets/src/semantics.rs](crates/frus-widgets/src/semantics.rs)
 
-### L-041 Web accessibility has not been checked with a screen reader
+### L-041 Web accessibility has not been heard through a screen reader
 
 - **Area:** a11y
 - **Platforms:** Web
 - **Status:** partial
-- **What you hit:** The semantics tree reaches the browser as DOM fallback content, checked
-  against Chromium's computed accessibility tree. It has not been listened to with a screen
-  reader, Firefox and Safari were not driven, and explore by touch is not offered, since
-  fallback content has no layout box.
+- **What you hit:** The semantics tree reaches the browser as a layer of elements placed over
+  the canvas, checked against Chromium's computed accessibility tree: roles, names, states,
+  values, boxes, focus, actions and the live region; Firefox was driven at the DOM level. It
+  has not been listened to with a screen reader, Safari was not driven, and no phone was used. The tree is flat
+  ([L-040](#l-040-the-semantics-tree-is-flat)), so a list's items are not in a list and a
+  dialog's content is not inside the dialog. A custom action (a row's Archive) has no web
+  equivalent and is not offered.
 - **Workaround:** None.
 - **Evidence:** [#18](https://github.com/frus-rs/frus/issues/18),
   [docs/milestone-564.md](docs/milestone-564.md),
+  [docs/milestone-845.md](docs/milestone-845.md),
   [docs/milestone-711.md](docs/milestone-711.md)
 
 ## Widgets and application structure
