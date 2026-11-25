@@ -373,9 +373,11 @@ jobs:
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev
 
       # Built from its own tarball, as `cargo install frus-cli` will: a template file
-      # cargo leaves out of the package fails to compile here.
+      # cargo leaves out of the package fails to compile here. With the workbench's crate,
+      # packaged beside it, as `cargo publish --workspace` does: until a release publishes
+      # frus-tui, crates.io does not have it.
       - name: Package the tool
-        run: cargo package -p frus-cli --allow-dirty
+        run: cargo package -p frus-tui -p frus-cli --allow-dirty
 
       - name: Create an application
         run: |
