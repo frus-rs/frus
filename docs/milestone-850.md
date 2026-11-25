@@ -112,11 +112,21 @@ of the three runs:
 
   Before, every sample of the shrunk checkerboard lands on a white texel; text magnified
   four times spreads each edge over four pixels and lights 70 % more of them.
-- Goldens: **not run** for this milestone. The build lock the machine's agents share stayed
-  taken for hours, and the WSL golden build never started. Goldens with a scaled layer are
-  expected to move: those shrunk (`navigator_mid_push_zoom`, `animated_switcher_halfway`,
-  `explicit_transitions`, `picker_wheel`) now read a mip chain, and those enlarged draw their
-  content at the scale shown. They are to be run under WSL and read before they are updated.
+- Goldens: run under WSL on lavapipe (mesa 25.2.8, CI's version); every frus-test target
+  passes. Ten moved, each a scaled layer, each read before and after:
+  - enlarged, text now drawn at the size shown: `sliver_app_bar_expanded` (the large title),
+    `open_container_third` (the opening card's title), `animated_switcher_halfway` (the
+    digits growing in);
+  - shrunk, now read through the mip chain: `picker_wheel` (the rows above and below the
+    selection; the selected row, not scaled, is unchanged), `navigator_mid_push_zoom`,
+    `navigator_mid_push_shared_z`, `motion_switches_third` (a few pixels of text and outline,
+    at most 9 levels in a channel);
+  - shrunk, edges softer: `boxes_that_fit` (a `FittedBox` at 0.6), `turned_and_rotated` (a
+    `Transform::scale(0.6)`), `explicit_transitions` (a `ScaleTransition`). At 0.6 trilinear
+    filtering mixes in three quarters of the next level, so a hard edge spreads over about two
+    pixels instead of one. Images have been filtered the same way since milestone 743.
+  None lost content, changed scale or moved. CI's renders of the two it reported
+  (`explicit_transitions`, `picker_wheel`) are identical to the updated pictures.
 
 ## Not done
 
@@ -142,4 +152,3 @@ of the three runs:
 - **Not run on a phone, on WebGL 2 or on OpenGL ES**: the device is not to be used for this
   milestone. The chain is rendered with the same render passes, `textureLoad` and sRGB targets
   as the images' chain (milestone 743). Measured and tested on the Windows laptop's GPU (Vulkan).
-- **The goldens were not run** (see above).
