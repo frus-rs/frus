@@ -76,6 +76,27 @@ live, and [DevTools](devtools.md) graphs it. A frame over budget in **build** bu
 is on screen (a column where a lazy `ListView` belongs); in **render**, too much overdraw, too many
 layers, or a GPU still busy with earlier frames.
 
+## Scaled layers
+
+A `Transform` (and every transition that scales, turns or moves a page) draws its child flat
+into a texture of its own and composites that texture through the transform. The texture is
+drawn for the scale it is shown at:
+
+- **Shown smaller**, it gets a mip chain, made on the GPU when the texture is drawn and kept
+  with it, and is read trilinearly: fine text and patterns keep their tone instead of
+  shimmering as the scale moves. The chain costs a third more memory than the texture, and
+  only layers shown smaller pay it.
+- **Shown larger**, its content is drawn at that scale, so text is rasterised at the size it
+  is shown at and stays sharp. While the scale grows, the texture is drawn ahead of it and
+  drawn again only each time the scale passes it, not every frame. Until then it is shown at
+  most a quarter smaller than it was drawn; a frame drawn with the scale at rest draws it
+  once more at the exact scale. An enlarged texture never holds more texels than the screen
+  has pixels.
+
+Content that changes every frame is drawn again every frame anyway; while it scales, it is
+drawn at the same few sizes, so its glyphs are not rasterised again each frame. A frame in
+which nothing changed draws no layer again.
+
 ## Backends
 
 | Platform | Drawn with |

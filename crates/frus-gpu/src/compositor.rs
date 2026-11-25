@@ -600,6 +600,65 @@ struct CachedLayer {
     /// primitives blurred by a different amount are a different picture, and an
     /// animated blur would otherwise hold the first frame it drew for ever.
     image: Option<ImageFilter>,
+    /// The scale its content was drawn at: above one for a layer shown enlarged
+    /// (milestone 850). Its texture is `width`×`height` times this.
+    scale: f32,
+    /// Its transform the last frame it was drawn, to tell a scale at rest from one
+    /// animating (milestone 850).
+    affine: Option<frus_core::Affine>,
+}
+
+/// A layer's texture as [`Painters::layer_texture`] hands it back: its view, every mip level
+/// included, the scale its content was drawn at, and its size in texels (milestone 850).
+struct DrawnLayer {
+    view: wgpu::TextureView,
+    scale: f32,
+    size: (u32, u32),
+}
+
+/// The scale a layer's texture is drawn at and its mip levels (milestone 850): one and one
+/// for a layer that is not transformed. `filtered` when an image filter is baked into it —
+/// its radius is in the content's units, so it is drawn at its own size and kept one level.
+#[allow(clippy::too_many_arguments)]
+fn raster_plan(
+    affine: Option<frus_core::Affine>,
+    filtered: bool,
+    rw: u32,
+    rh: u32,
+    w: u32,
+    h: u32,
+    max_dim: u32,
+    kept: Option<crate::raster::Kept>,
+) -> (f32, u32) {
+    let Some(affine) = affine else {
+        return (1.0, 1);
+    };
+    if filtered {
+        return (1.0, 1);
+    }
+    let (most, least) = crate::raster::stretch(affine.m);
+    let limit = crate::raster::scale_limit(rw, rh, w, h, max_dim);
+    let scale = crate::raster::chosen_scale(most, limit, kept);
+    let levels = if crate::raster::needs_chain(least, scale) {
+        let (tw, th) = crate::raster::scaled_size(rw, rh, scale, max_dim);
+        crate::mipmap::level_count(tw, th)
+    } else {
+        1
+    };
+    (scale, levels)
+}
+
+/// Points a layer's composite draw at a texture drawn `scale` times larger than its region
+/// (milestone 850): the inverse goes on to the texture's texels, and the region is measured
+/// in them. The quad, where it lands on the screen, does not move.
+fn drawn_at(entry: &mut LayerComposite, scale: f32, size: (u32, u32)) {
+    if scale == 1.0 {
+        return;
+    }
+    entry.inverse = crate::raster::scaled_inverse(entry.inverse, scale);
+    if let Some(r) = entry.region.as_mut() {
+        *r = [r[0] * scale, r[1] * scale, size.0 as f32, size.1 as f32];
+    }
 }
 
 /// What the painters keep for one surface from a frame to the next: the multisampled scratch
@@ -786,10 +845,15 @@ impl CompositePainter {
         // Linear: a layer that is scaled or turned falls between texels, and the nearest one
         // drops strokes from text and steps edges (milestone 732). A layer that is neither
         // samples texel centres, where linear reads exactly the texel.
+        //
+        // Trilinear: a layer shown smaller than its texture has a mip chain, and reads the
+        // levels whose texels match the screen's (milestone 850). Every other texture bound
+        // here has one level, which this reads as plain bilinear.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("frus.composite.sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -1159,12 +1223,18 @@ pub(crate) struct Painters {
     stage: Option<MsaaScratch>,
     /// Layer textures kept across frames, indexed by the layer's rank.
     layer_cache: Vec<CachedLayer>,
+    /// Renders the mip chains of transformed layers shown smaller than they were drawn,
+    /// made the first time one is (milestone 850).
+    layer_mips: Option<crate::mipmap::MipGenerator>,
     /// Whether the multisampled scratch targets may be transient: the adapter says it saves
     /// memory there, a tiled GPU (milestone 796).
     transient: bool,
     /// How many layer pre-passes were actually rendered — the cache's proof.
     #[allow(dead_code)]
     layer_renders: u64,
+    /// How many mip chains were rendered for layers (milestone 850).
+    #[allow(dead_code)]
+    layer_chains: u64,
 }
 
 impl Painters {
@@ -1188,8 +1258,10 @@ impl Painters {
             msaa: Vec::new(),
             stage: None,
             layer_cache: Vec::new(),
+            layer_mips: None,
             transient: false,
             layer_renders: 0,
+            layer_chains: 0,
         }
     }
 
@@ -1442,22 +1514,23 @@ impl Painters {
                 // A shader filling a box and a GPU pass have no content to render first
                 // (milestone 792); they take no slot of the layer cache either.
                 let bare = custom_only(filter, primitives);
-                let view = if bare {
-                    self.composite.white_mask_view()
+                let (view, scale, size) = if bare {
+                    (self.composite.white_mask_view(), 1.0, (rw, rh))
                 } else {
                     let local = into_region(primitives, region);
-                    let view = self.layer_texture(
+                    let drawn = self.layer_texture(
                         device,
                         queue,
                         format,
                         layer_index,
                         &local,
                         filter.image.filter(|f| !f.is_identity()),
-                        rw,
-                        rh,
+                        (rw, rh),
+                        transform.map(|t| t.affine),
+                        (w, h),
                     );
                     layer_index += 1;
-                    view
+                    (drawn.view, drawn.scale, drawn.size)
                 };
                 let mut entry = self.layer_entry(
                     device, queue, format, view, *opacity, *clip, clip_shape, transform, filter, w,
@@ -1465,6 +1538,7 @@ impl Painters {
                 );
                 entry.region = region.map(|r| r.to_array());
                 entry.quad = region.and_then(|r| layer_quad(r, *clip, transform, w, h));
+                drawn_at(&mut entry, scale, size);
                 if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
                     continue;
                 }
@@ -1635,7 +1709,12 @@ impl Painters {
         draws: &[LayerComposite],
     ) {
         let (w, h) = (target.width(), target.height());
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        // Its first level: a layer with a mip chain is drawn there, and the chain made after.
+        let view = target.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
         // Backdrops sharing a key are filtered **once**: the copy is taken before the
         // first of them and every other one reads the same texture. That is what
         // turns a list of frosted rows from one full-surface blur per row into one.
@@ -1985,6 +2064,11 @@ impl Painters {
     /// cache key; a key that slips — because layers were reordered — only misses the
     /// cache, which re-renders correctly and never wrongly.
     // Same as `render`, one layer at a time.
+    ///
+    /// `(w, h)` is the layer's region; `affine` its transform, and `target` the size of what
+    /// it is composited onto. A transformed layer is drawn at the scale it is shown at, with a
+    /// mip chain when it is shown smaller (milestone 850, see `raster.rs`); the cache keeps
+    /// its texture while the scale moves, until the scale no longer suits it.
     #[allow(clippy::too_many_arguments)]
     fn layer_texture(
         &mut self,
@@ -1994,14 +2078,49 @@ impl Painters {
         index: usize,
         primitives: &[Primitive],
         image: Option<ImageFilter>,
-        w: u32,
-        h: u32,
-    ) -> wgpu::TextureView {
-        let hit = matches!(
+        (w, h): (u32, u32),
+        affine: Option<frus_core::Affine>,
+        target: (u32, u32),
+    ) -> DrawnLayer {
+        let same = matches!(
             self.layer_cache.get(index),
             Some(c) if c.width == w && c.height == h && c.image == image
                 && c.primitives.as_slice() == primitives
         );
+        let kept = self.layer_cache.get(index).map(|c| crate::raster::Kept {
+            scale: c.scale,
+            settled: c.affine == affine,
+        });
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let (scale, levels) = raster_plan(
+            affine,
+            image.is_some(),
+            w,
+            h,
+            target.0,
+            target.1,
+            max_dim,
+            kept,
+        );
+        let (tw, th) = crate::raster::scaled_size(w, h, scale, max_dim);
+        // A chain it no longer needs is kept: its first level reads as it always did. One it
+        // lacks is made from the picture it has, copied into a texture with room for it: a
+        // page that starts to shrink is not drawn again for it.
+        let unchanged = same
+            && self
+                .layer_cache
+                .get(index)
+                .is_some_and(|c| c.scale == scale);
+        if unchanged && levels > 1 {
+            let lacking = &self.layer_cache[index];
+            if lacking.texture.mip_level_count() == 1 && lacking.image.is_none() {
+                let old = lacking.texture.clone();
+                let texture = self.with_chain(device, queue, format, &old, levels);
+                self.layer_cache[index].texture = texture;
+            }
+        }
+        let hit = unchanged
+            && (levels == 1 || self.layer_cache[index].texture.mip_level_count() == levels);
         if !hit {
             // The texture it had, when it is the same size and nothing was filtered into it:
             // drawn into again rather than made anew. A layer whose content moves every frame
@@ -2009,13 +2128,25 @@ impl Painters {
             // screen every frame, which a phone's driver allocates and clears each time
             // (milestone 796).
             let reuse = match self.layer_cache.get(index) {
-                Some(c) if c.width == w && c.height == h && c.image.is_none() => {
+                Some(c)
+                    if c.texture.width() == tw
+                        && c.texture.height() == th
+                        && c.texture.mip_level_count() == levels
+                        && c.image.is_none() =>
+                {
                     Some(c.texture.clone())
                 }
                 _ => None,
             };
+            // Drawn enlarged: its content scaled first, so text is laid out and rasterised at
+            // the size it is shown at.
+            let scaled: std::borrow::Cow<'_, [Primitive]> = if scale == 1.0 {
+                std::borrow::Cow::Borrowed(primitives)
+            } else {
+                std::borrow::Cow::Owned(primitives.iter().map(|p| p.scaled(scale)).collect())
+            };
             let mut texture =
-                self.render_group_into(device, queue, format, primitives, w, h, reuse);
+                self.render_group_into(device, queue, format, &scaled, tw, th, reuse, levels);
             if let Some(f) = image {
                 texture = self.filter.apply(device, queue, format, &texture, f, w, h);
             }
@@ -2025,6 +2156,8 @@ impl Painters {
                 height: h,
                 texture,
                 image,
+                scale,
+                affine,
             };
             if index < self.layer_cache.len() {
                 self.layer_cache[index] = entry;
@@ -2032,9 +2165,15 @@ impl Painters {
                 self.layer_cache.push(entry);
             }
         }
-        self.layer_cache[index]
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default())
+        let cached = &mut self.layer_cache[index];
+        cached.affine = affine;
+        DrawnLayer {
+            view: cached
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+            scale: cached.scale,
+            size: (cached.texture.width(), cached.texture.height()),
+        }
     }
 
     /// Renders a **clip mask**: `path`, in absolute screen coordinates, filled with
@@ -2058,7 +2197,7 @@ impl Painters {
             clip: frus_core::Rect::UNBOUNDED,
             owner: 0,
         };
-        let tex = self.render_group_into(device, queue, format, &[prim], w, h, None);
+        let tex = self.render_group_into(device, queue, format, &[prim], w, h, None, 1);
         tex.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
@@ -2067,6 +2206,9 @@ impl Painters {
     ///
     /// Into `reuse` when it is given — a texture of this size and format, the layer's own from
     /// an earlier frame — and into a new one otherwise.
+    ///
+    /// `levels` above one gives the texture a mip chain, rendered from what was drawn
+    /// (milestone 850).
     #[allow(clippy::too_many_arguments)]
     fn render_group_into(
         &mut self,
@@ -2077,6 +2219,7 @@ impl Painters {
         w: u32,
         h: u32,
         reuse: Option<wgpu::Texture>,
+        levels: u32,
     ) -> wgpu::Texture {
         self.layer_renders += 1;
 
@@ -2112,13 +2255,34 @@ impl Painters {
                 let region = layer_region(*clip, clip_shape, transform, filter, inner, w, h);
                 let (rw, rh) = region.map_or((w, h), |r| (r.width as u32, r.height as u32));
                 let bare = custom_only(filter, inner);
+                let image = filter.image.filter(|f| !f.is_identity());
+                // Drawn at the scale it is shown at, with a chain when shrunk (milestone 850).
+                // Nothing of it is kept from a frame to the next: it is drawn at its exact scale.
+                let max_dim = device.limits().max_texture_dimension_2d;
+                let (scale, levels) = raster_plan(
+                    transform.map(|t| t.affine),
+                    image.is_some(),
+                    rw,
+                    rh,
+                    w,
+                    h,
+                    max_dim,
+                    None,
+                );
+                let size = crate::raster::scaled_size(rw, rh, scale, max_dim);
                 let view = if bare {
                     self.composite.white_mask_view()
                 } else {
                     let local = into_region(inner, region);
-                    let mut texture =
-                        self.render_group_into(device, queue, format, &local, rw, rh, None);
-                    if let Some(f) = filter.image.filter(|f| !f.is_identity()) {
+                    let local = if scale == 1.0 {
+                        local
+                    } else {
+                        std::borrow::Cow::Owned(local.iter().map(|p| p.scaled(scale)).collect())
+                    };
+                    let mut texture = self.render_group_into(
+                        device, queue, format, &local, size.0, size.1, None, levels,
+                    );
+                    if let Some(f) = image {
                         texture = self
                             .filter
                             .apply(device, queue, format, &texture, f, rw, rh);
@@ -2133,6 +2297,9 @@ impl Painters {
                 );
                 entry.region = region.map(|r| r.to_array());
                 entry.quad = region.and_then(|r| layer_quad(r, *clip, transform, w, h));
+                if !bare {
+                    drawn_at(&mut entry, scale, size);
+                }
                 if !self.attach_custom(device, queue, &mut entry, filter, bare, w, h) {
                     continue;
                 }
@@ -2161,7 +2328,7 @@ impl Painters {
                     height: h,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: levels.max(1),
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
@@ -2226,7 +2393,64 @@ impl Painters {
             &cuts,
             &nested,
         );
+        if levels > 1 {
+            // The chain, from what was just drawn: the queue runs the draw first.
+            self.make_chain(device, queue, format, &texture, levels);
+        }
         texture
+    }
+
+    /// Renders levels `1..levels` of a layer's `texture` from its first (milestone 850).
+    fn make_chain(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        texture: &wgpu::Texture,
+        levels: u32,
+    ) {
+        if self
+            .layer_mips
+            .as_ref()
+            .is_none_or(|mips| mips.format() != format)
+        {
+            self.layer_mips = Some(crate::mipmap::MipGenerator::for_layers(device, format));
+        }
+        if let Some(mips) = &self.layer_mips {
+            mips.generate(device, queue, texture, levels);
+            self.layer_chains += 1;
+        }
+    }
+
+    /// A copy of a layer's one-level `texture` with room for `levels`, its chain made: what a
+    /// layer kept as it is gets when it starts to be shown smaller (milestone 850). A copy of
+    /// its picture costs far less than drawing it again.
+    fn with_chain(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        texture: &wgpu::Texture,
+        levels: u32,
+    ) -> wgpu::Texture {
+        let size = texture.size();
+        let chained = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("frus.layer.texture"),
+            size,
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: texture.usage() | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("frus.encoder.layer_chain"),
+        });
+        encoder.copy_texture_to_texture(texture.as_image_copy(), chained.as_image_copy(), size);
+        queue.submit(std::iter::once(encoder.finish()));
+        self.make_chain(device, queue, format, &chained, levels);
+        chained
     }
 
     /// **Warms up** every pipeline by rendering a small scene that exercises each
@@ -3144,5 +3368,305 @@ mod tests {
             kept[0] == kept[1] && kept[1] == kept[2],
             "into the same texture"
         );
+    }
+
+    /// The texel at `(x, y)` of `level` of `texture`, an `Rgba8UnormSrgb` one that may be
+    /// copied from.
+    fn texel(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        level: u32,
+        x: u32,
+        y: u32,
+    ) -> [u8; 4] {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frus.compositor.test.readback"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("frus.compositor.test.readback"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: level,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = slice.get_mapped_range().expect("mapped");
+        [data[0], data[1], data[2], data[3]]
+    }
+
+    /// The chain of a shrunk layer holds its picture, premultiplied, at every level; and the
+    /// layer composited at a half shows it (milestone 850).
+    #[test]
+    fn a_shrunk_layer_s_chain_holds_its_picture() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        for samples in [1, 4] {
+            chain_holds_its_picture(&device, &queue, format, samples);
+            checkerboard_chain_is_grey(&device, &queue, format, samples);
+        }
+    }
+
+    fn chain_holds_its_picture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        samples: u32,
+    ) {
+        let (device, queue) = (device.clone(), queue.clone());
+        let mut painters = Painters::new(&device, &queue, format, samples, None);
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("frus.compositor.test.target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let scene = transformed(frus_core::Affine::scale(0.5, 0.5));
+        painters.render(
+            &device,
+            &queue,
+            format,
+            &view,
+            64,
+            64,
+            &scene,
+            Some(wgpu::Color::BLACK),
+        );
+        let layer = &painters.layer_cache[0].texture;
+        assert!(layer.mip_level_count() > 2);
+        // The square covers 8..40 of the flat content: its middle, 24, at every level.
+        for level in 0..3 {
+            let at = 24 >> level;
+            let t = texel(&device, &queue, layer, level, at, at);
+            assert!(
+                t[0] > 240 && t[1] < 16 && t[3] > 240,
+                "{samples}x, level {level}: {t:?}"
+            );
+        }
+        // Shown at a half: the square covers 4..20 on the target.
+        let p = texel(&device, &queue, &tex, 0, 12, 12);
+        assert!(p[0] > 240 && p[1] < 16, "{samples}x, on the target: {p:?}");
+    }
+
+    /// A one-texel checkerboard image at its own size, in a layer shown at a quarter: its
+    /// chain's third level, and the target, are the grey of linear 0.5. The picture lies
+    /// flat on the target: a transformed layer holds what of its content lies there.
+    fn checkerboard_chain_is_grey(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        samples: u32,
+    ) {
+        let (device, queue) = (device.clone(), queue.clone());
+        let mut painters = Painters::new(&device, &queue, format, samples, None);
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("frus.compositor.test.target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut rgba = Vec::new();
+        for y in 0..64u32 {
+            for x in 0..64u32 {
+                let v = if (x + y) % 2 == 0 { 255 } else { 0 };
+                rgba.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let image = frus_core::ImageData::from_rgba(64, 64, rgba).into_handle();
+        let mut scene = Scene::new();
+        scene.transformed(
+            frus_core::LayerTransform::new(frus_core::Affine::scale(0.25, 0.25)),
+            |s| {
+                s.draw_image_with(
+                    &image,
+                    Rect::new(0.0, 0.0, 64.0, 64.0),
+                    Rect::new(0.0, 0.0, 1.0, 1.0),
+                    Color::WHITE,
+                    false,
+                    frus_core::FilterQuality::Low,
+                );
+            },
+        );
+        painters.render(
+            &device,
+            &queue,
+            format,
+            &view,
+            64,
+            64,
+            &scene,
+            Some(wgpu::Color::BLACK),
+        );
+        let layer = &painters.layer_cache[0].texture;
+        let grey = |t: [u8; 4]| (180..=196).contains(&t[0]) && t[3] > 250;
+        let l0 = texel(&device, &queue, layer, 0, 40, 40);
+        let l2 = texel(&device, &queue, layer, 2, 8, 8);
+        let p = texel(&device, &queue, &tex, 0, 8, 8);
+        eprintln!("{samples}x: level 0 {l0:?}, level 2 {l2:?}, target {p:?}");
+        assert!(grey(l2), "{samples}x, level 2: {l2:?}");
+        assert!(grey(p), "{samples}x, on the target: {p:?}");
+    }
+
+    /// A text-free square in a layer transformed by `affine`, on a `side`-pixel target.
+    fn transformed(affine: frus_core::Affine) -> Scene {
+        let mut scene = Scene::new();
+        scene.transformed(frus_core::LayerTransform::new(affine), |s| {
+            s.fill_rect(Rect::new(8.0, 8.0, 32.0, 32.0), Color::rgb(1.0, 0.0, 0.0));
+        });
+        scene
+    }
+
+    /// A shrunk layer gets its chain once (milestone 850): the frame after, still shrunk,
+    /// draws nothing again — an idle frame costs what it did. A layer at its own size or
+    /// larger gets none.
+    #[test]
+    fn a_shrunk_layer_gets_its_chain_once() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 64);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let clear = Some(wgpu::Color::BLACK);
+        let frame = |painters: &mut Painters, scene: &Scene| {
+            painters.render(&device, &queue, format, &view, 64, 64, scene, clear);
+        };
+
+        frame(
+            &mut painters,
+            &transformed(frus_core::Affine::translation(3.0, 0.0)),
+        );
+        assert_eq!(painters.layer_chains, 0, "moved, not shrunk: no chain");
+        assert_eq!(painters.layer_cache[0].texture.mip_level_count(), 1);
+        let renders = painters.layer_render_count();
+
+        let half = transformed(frus_core::Affine::scale(0.5, 0.5));
+        frame(&mut painters, &half);
+        assert_eq!(painters.layer_chains, 1, "shrunk: a chain");
+        assert!(painters.layer_cache[0].texture.mip_level_count() > 1);
+        assert_eq!(
+            painters.layer_render_count(),
+            renders,
+            "not drawn again: its picture is copied"
+        );
+        let copied = texel(&device, &queue, &painters.layer_cache[0].texture, 1, 12, 12);
+        assert!(copied[0] > 240 && copied[1] < 16, "its chain: {copied:?}");
+        // Idle: the same frame again draws nothing.
+        frame(&mut painters, &half);
+        frame(&mut painters, &half);
+        assert_eq!(painters.layer_chains, 1, "kept");
+        assert_eq!(painters.layer_render_count(), renders, "kept");
+        // A shrinking animation: the chain serves every scale.
+        for step in 1..10 {
+            let s = 0.5 - 0.04 * step as f32;
+            frame(&mut painters, &transformed(frus_core::Affine::scale(s, s)));
+        }
+        assert_eq!(
+            painters.layer_chains, 1,
+            "one chain for the whole animation"
+        );
+        assert_eq!(painters.layer_render_count(), renders);
+        // Back at its own size: the chain is kept, and costs nothing to read.
+        frame(&mut painters, &transformed(frus_core::Affine::IDENTITY));
+        assert_eq!(painters.layer_render_count(), renders);
+    }
+
+    /// A layer scaling up is drawn again a handful of times, ahead of its scale, not every
+    /// frame; at rest it is drawn once more at its exact scale, and then kept (milestone 850).
+    #[test]
+    fn an_enlarging_layer_is_drawn_again_a_handful_of_times() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no GPU adapter available: test skipped");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painters = Painters::new(&device, &queue, format, 1, None);
+        let tex = target(&device, format, 256);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let clear = Some(wgpu::Color::BLACK);
+        let frame = |painters: &mut Painters, scene: &Scene| {
+            painters.render(&device, &queue, format, &view, 256, 256, scene, clear);
+        };
+        frame(&mut painters, &transformed(frus_core::Affine::IDENTITY));
+        let renders = painters.layer_render_count();
+        let frames = 30;
+        for step in 1..=frames {
+            let s = 1.0 + 2.0 * step as f32 / frames as f32;
+            frame(&mut painters, &transformed(frus_core::Affine::scale(s, s)));
+            let drawn = painters.layer_cache[0].scale;
+            assert!(
+                drawn >= s * 0.999,
+                "step {step}: drawn at {drawn}, shown at {s}"
+            );
+        }
+        let during = painters.layer_render_count() - renders;
+        assert!(
+            (1..=6).contains(&during),
+            "drawn again {during} times over {frames} frames"
+        );
+        let at_rest = transformed(frus_core::Affine::scale(3.0, 3.0));
+        frame(&mut painters, &at_rest);
+        let settled = painters.layer_render_count();
+        assert!((painters.layer_cache[0].scale - 3.0).abs() < 1e-3);
+        let cached = &painters.layer_cache[0];
+        assert_eq!(
+            (cached.texture.width(), cached.texture.height()),
+            (cached.width * 3, cached.height * 3),
+            "its region, three times larger"
+        );
+        frame(&mut painters, &at_rest);
+        frame(&mut painters, &at_rest);
+        assert_eq!(
+            painters.layer_render_count(),
+            settled,
+            "idle: nothing drawn"
+        );
+        assert_eq!(painters.layer_chains, 0, "enlarged: no chain");
     }
 }

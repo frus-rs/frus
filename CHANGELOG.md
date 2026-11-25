@@ -8,11 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 847 so far, each documenting the objective, the alternatives
+> record — one per step, 850 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A scaled layer is drawn for the scale it is shown at** (J850, L-026, part of #221 and
+  #224). A layer shown smaller by its transform (a page zooming out, a picker's rows, a
+  thumbnail) gets a mip chain, made on the GPU when its texture is drawn and kept with it, and
+  is read trilinearly: a fine pattern or small text keeps its tone instead of shimmering as the
+  scale moves. A layer shown larger has its content drawn at that scale, so its text is
+  rasterised at the size it is shown at and stays as sharp as text drawn at that size. While a
+  scale grows, the texture is drawn a quarter ahead of it, so it is drawn again a handful of
+  times rather than every frame; at rest it is drawn once more at the exact scale. An enlarged
+  texture never holds more texels than the screen has pixels, and a frame in which nothing
+  changed draws no layer again. A layer with a blur, and a layer holding another transformed
+  layer, are still drawn at their own size when enlarged.
 - **A page follows the system its browser runs on, from the first theme** (J847). A web
   application is made before the shell starts it, and a theme made then (the default one, a
   seeded one) was given Android's conventions in every browser: on a Windows, Linux or Mac
