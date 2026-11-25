@@ -81,8 +81,11 @@ impl TargetPlatform {
     /// `navigator.userAgent` and `navigator.maxTouchPoints`.
     ///
     /// An iPad asks for desktop pages and says it is a Mac; it is told apart by its touch
-    /// screen. Android's `platform` is a Linux, so the user agent is asked first. Anything
-    /// unrecognised is Android.
+    /// screen. Android's `platform` is a Linux, so the user agent is asked first, and an
+    /// iPhone's or an Android phone's user agent wins over a `platform` that says otherwise (a
+    /// desktop browser emulating a phone keeps its own `platform`). A browser
+    /// that keeps its `platform` empty (some do, for privacy) is read from its user agent
+    /// alone. Anything unrecognised is Android.
     pub fn from_browser(platform: &str, user_agent: &str, max_touch_points: i32) -> Self {
         let lower = platform.to_ascii_lowercase();
         if platform.starts_with("Mac") {
@@ -95,10 +98,29 @@ impl TargetPlatform {
             TargetPlatform::Ios
         } else if user_agent.contains("Android") {
             TargetPlatform::Android
-        } else if platform.starts_with("Linux") {
+        } else if user_agent.contains("iPhone")
+            || user_agent.contains("iPad")
+            || user_agent.contains("iPod")
+        {
+            TargetPlatform::Ios
+        } else if platform.starts_with("Linux") || lower.contains("bsd") || lower.contains("x11") {
             TargetPlatform::Linux
         } else if platform.starts_with("Win") {
             TargetPlatform::Windows
+        } else if user_agent.contains("Macintosh") || user_agent.contains("Mac OS X") {
+            if max_touch_points > 2 {
+                TargetPlatform::Ios
+            } else {
+                TargetPlatform::MacOs
+            }
+        } else if user_agent.contains("Windows") {
+            TargetPlatform::Windows
+        } else if user_agent.contains("X11")
+            || user_agent.contains("Linux")
+            || user_agent.contains("CrOS")
+            || user_agent.contains("BSD")
+        {
+            TargetPlatform::Linux
         } else {
             TargetPlatform::Android
         }
@@ -181,8 +203,49 @@ static DETECTED: AtomicU8 = AtomicU8::new(0);
 /// that a theme can change it for a subtree or for the whole application.
 pub fn default_target_platform() -> TargetPlatform {
     debug_default_target_platform_override()
-        .or_else(|| TargetPlatform::from_code(DETECTED.load(Ordering::Relaxed)))
+        .or_else(detected_target_platform)
         .unwrap_or(TargetPlatform::of_build())
+}
+
+/// The browser's operating system on the web, read from the navigator the first time it is
+/// asked for and kept; `None` on every other platform, where the build says it all.
+///
+/// Read here rather than only by the shell at start-up (milestone 847): an application is
+/// made before the shell runs it, and a theme made then (`Theme::default()`, a seeded theme
+/// in the application's constructor) was given the build's platform, Android, in every
+/// browser, so a desktop browser stretched its lists past their ends like a phone.
+fn detected_target_platform() -> Option<TargetPlatform> {
+    if let Some(platform) = TargetPlatform::from_code(DETECTED.load(Ordering::Relaxed)) {
+        return Some(platform);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(platform) = browser::navigator_platform() {
+        DETECTED.store(platform.code(), Ordering::Relaxed);
+        return Some(platform);
+    }
+    None
+}
+
+/// The navigator, read on the web.
+#[cfg(target_arch = "wasm32")]
+mod browser {
+    use super::TargetPlatform;
+    use wasm_bindgen::JsValue;
+
+    /// What the page's navigator (a window's or a worker's) says the system is; `None`
+    /// where there is no navigator.
+    pub(super) fn navigator_platform() -> Option<TargetPlatform> {
+        let navigator = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("navigator"))
+            .ok()
+            .filter(|n| n.is_object())?;
+        let get = |name: &str| {
+            js_sys::Reflect::get(&navigator, &JsValue::from_str(name)).unwrap_or(JsValue::UNDEFINED)
+        };
+        let platform = get("platform").as_string().unwrap_or_default();
+        let user_agent = get("userAgent").as_string().unwrap_or_default();
+        let touch = get("maxTouchPoints").as_f64().unwrap_or(0.0) as i32;
+        Some(TargetPlatform::from_browser(&platform, &user_agent, touch))
+    }
 }
 
 /// The override of [`default_target_platform`], if one is set.
@@ -335,6 +398,20 @@ mod tests {
                 5,
                 TargetPlatform::Ios,
             ),
+            // A phone emulated by a desktop browser: the user agent is the phone's, the
+            // platform the computer's.
+            (
+                "Win32",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+                5,
+                TargetPlatform::Ios,
+            ),
+            (
+                "Win32",
+                "Mozilla/5.0 (Linux; Android 14; Pixel 7)",
+                5,
+                TargetPlatform::Android,
+            ),
             // An iPhone.
             (
                 "iPhone",
@@ -353,6 +430,40 @@ mod tests {
             (
                 "Linux x86_64",
                 "Mozilla/5.0 (X11; Linux x86_64; rv:120.0)",
+                0,
+                TargetPlatform::Linux,
+            ),
+            // Firefox on Windows, with privacy settings that keep the platform empty: the
+            // user agent says it.
+            (
+                "",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0)",
+                0,
+                TargetPlatform::Windows,
+            ),
+            // The same on a Mac, on an iPad, and on a Chromebook.
+            (
+                "",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                0,
+                TargetPlatform::MacOs,
+            ),
+            (
+                "",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                5,
+                TargetPlatform::Ios,
+            ),
+            (
+                "",
+                "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0)",
+                0,
+                TargetPlatform::Linux,
+            ),
+            // A BSD desktop.
+            (
+                "FreeBSD amd64",
+                "Mozilla/5.0 (X11; FreeBSD amd64; rv:120.0)",
                 0,
                 TargetPlatform::Linux,
             ),

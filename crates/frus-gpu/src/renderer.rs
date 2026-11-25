@@ -208,6 +208,48 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         let instance = wgpu::Instance::new(descriptor);
 
+        let target: wgpu::SurfaceTarget<'static> = target.into();
+        // A page's canvas that refuses its `webgpu` context, where a canvas of the device's own
+        // took one, has given no context at all: WebGL 2 can still draw in it (milestone 847).
+        #[cfg(target_arch = "wasm32")]
+        let (instance, opened, surface) = match opened {
+            Some(opened) => {
+                let canvas = match &target {
+                    wgpu::SurfaceTarget::DisplayAndWindow(window) => {
+                        crate::web_backend::canvas_of(window.as_ref())
+                    }
+                    wgpu::SurfaceTarget::Window(window) => {
+                        crate::web_backend::canvas_of(window.as_ref())
+                    }
+                    wgpu::SurfaceTarget::Canvas(canvas) => Some(canvas.clone()),
+                    _ => None,
+                };
+                match instance.create_surface(target) {
+                    Ok(surface) => (instance, Some(opened), surface),
+                    Err(err) => {
+                        let Some(canvas) = canvas else {
+                            return Err(explained(err.into()));
+                        };
+                        log::warn!(
+                            "GPU interface: WebGL 2 (the page's canvas refused WebGPU: {err})"
+                        );
+                        opened.device.destroy();
+                        let instance = crate::web_backend::webgl2_instance();
+                        let surface = instance
+                            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+                            .map_err(|err| explained(err.into()))?;
+                        (instance, None, surface)
+                    }
+                }
+            }
+            None => {
+                let surface = instance
+                    .create_surface(target)
+                    .map_err(|err| explained(err.into()))?;
+                (instance, None, surface)
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let surface = instance
             .create_surface(target)
             .map_err(|err| explained(err.into()))?;
@@ -273,22 +315,8 @@ impl Renderer {
         } else {
             caps.alpha_modes[0]
         };
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
-        // The shaders write linear values, which an sRGB target encodes. A WebGPU canvas
-        // offers only plain formats (`bgra8unorm`): drawn as they are, the linear values are
-        // shown as if encoded, and every colour comes out darker (#234). The canvas lets its
-        // image be drawn through an sRGB view: the frames are drawn in that twin, and the
-        // hardware encodes, as everywhere else.
-        let can_view = adapter
-            .get_downlevel_capabilities()
-            .flags
-            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
-        let (render_format, view_formats) = surface_formats(format, can_view);
+        let (format, render_format, view_formats) = canvas_formats(&adapter, &caps)
+            .ok_or_else(|| anyhow::anyhow!("this surface offers no format"))?;
         if render_format != format.add_srgb_suffix() {
             // Asking for the view anyway is a validation error, which wgpu treats as fatal: the
             // Android emulator's OpenGL ES offers neither an sRGB surface nor views of one, and
@@ -778,6 +806,38 @@ pub struct StartupTimes {
     pub pipelines: std::time::Duration,
     /// A frame drawn before the first real one, which builds what drivers build lazily.
     pub warm_up: std::time::Duration,
+}
+
+/// The format a surface is configured in, the one frames are drawn in, and the views asked
+/// for: an sRGB format where the surface offers one, else its first, drawn through its sRGB
+/// twin where the adapter can view it so. `None` for a surface that offers no format.
+///
+/// The shaders write linear values, which an sRGB target encodes. A WebGPU canvas offers only
+/// plain formats (`bgra8unorm`): drawn as they are, the linear values are shown as if
+/// encoded, and every colour comes out darker (#234). The canvas lets its image be drawn
+/// through an sRGB view: the frames are drawn in that twin, and the hardware encodes, as
+/// everywhere else. Shared with the trial of a page's WebGPU (milestone 847), so that the
+/// trial configures a canvas exactly as the renderer will.
+pub(crate) fn canvas_formats(
+    adapter: &wgpu::Adapter,
+    caps: &wgpu::SurfaceCapabilities,
+) -> Option<(
+    wgpu::TextureFormat,
+    wgpu::TextureFormat,
+    Vec<wgpu::TextureFormat>,
+)> {
+    let format = caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .or_else(|| caps.formats.first().copied())?;
+    let can_view = adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+    let (render_format, view_formats) = surface_formats(format, can_view);
+    Some((format, render_format, view_formats))
 }
 
 /// The format the frames are drawn in, and the view formats the surface is configured with:
