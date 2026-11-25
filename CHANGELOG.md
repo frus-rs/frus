@@ -21,6 +21,19 @@ any release may break.
   `frus-tui` (ratatui over crossterm), which only `frus-cli` depends on, behind its default
   `workbench` feature. Piped, scripted or with `TERM=dumb`, bare `frus` prints the usage as
   before. Leaving with `q` stops every run and the applications they started.
+- **A screen reader on the web reads the whole page and can touch it** (J845, #18). The
+  accessibility bridge's elements left the canvas's fallback content, which is never laid out,
+  for a transparent layer over the canvas, each at the place its widget is drawn: a reader that
+  explores by touch finds them, and a desktop reader's highlight goes around them. Presses still
+  reach the canvas. Fixed from Chromium's computed accessibility tree: the canvas no longer
+  marks the page as an `application` (a browsing reader skipped every text in it); texts and
+  headings are read as text (`role="text"` is not a role); a tab says it is selected; new nodes
+  are read where the tree has them, not last; unnamed images are hidden; only focusable nodes
+  are focusable; a dialog is modal and a password field says so; a toggled button is pressed; a
+  reader's increment moves the slider it is on. The stepper and the rating answer the arrows,
+  so a screen reader's increment reaches them on the web and on Android. A frame that changes
+  nothing writes nothing to the page.
+
 - **3D in a `GpuPass`: a depth buffer and multisampling** (J844, part of #220). `.depth(format)`
   gives a pass a depth buffer the size of its picture, `.samples(4)` a multisampled target
   resolved into it; frus makes them again when the box changes size and clears them every frame

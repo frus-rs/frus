@@ -297,7 +297,7 @@ pub(crate) fn editing<F>(typing: bool, laid_out: Option<F>) -> Editing<F> {
 }
 
 #[cfg(web)]
-pub(crate) use web::{Editor, Field};
+pub(crate) use web::{forward, Editor, Field};
 
 #[cfg(web)]
 mod web {
@@ -588,7 +588,9 @@ mod web {
             let body = self.document.body();
             active == canvas
                 || body.is_some_and(|body| active == AsRef::<web_sys::Element>::as_ref(&body))
-                || (self.canvas.contains(Some(active))
+                || (active
+                    .parent_element()
+                    .is_some_and(|parent| parent.id() == crate::a11y_web::LAYER)
                     && active.get_attribute("role").as_deref() == Some("textbox"))
         }
 
@@ -841,8 +843,9 @@ mod web {
     }
 
     /// Hands a key the element will not act on to the canvas, where winit reads it as it
-    /// reads every key the canvas gets.
-    fn forward(canvas: &HtmlCanvasElement, kind: &str, key: &KeyboardEvent) {
+    /// reads every key the canvas gets. The accessibility layer's elements hand theirs on the
+    /// same way (milestone 845).
+    pub(crate) fn forward(canvas: &HtmlCanvasElement, kind: &str, key: &KeyboardEvent) {
         let init = KeyboardEventInit::new();
         init.set_key(&key.key());
         init.set_code(&key.code());

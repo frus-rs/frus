@@ -2089,6 +2089,7 @@ impl<A: Application> App<A> {
         for action in actions {
             match action {
                 A11yAction::Click(id) => self.activate_for_assistive_tech(id),
+                A11yAction::Adjust(id, up) => self.adjust_for_assistive_tech(id, up),
                 A11yAction::Focus(id) => {
                     // A button of the selection bar takes no focus: the bar acts on the
                     // field, and a focus that left it would end the very selection the bar
@@ -2108,6 +2109,33 @@ impl<A: Application> App<A> {
                     self.request_redraw();
                 }
             }
+        }
+    }
+
+    /// Moves widget `id`'s value one step up (`forward`) or down, as its arrow keys would: a
+    /// screen reader's increment and decrement (Android, and the web since milestone 845).
+    #[cfg(any(android, web))]
+    fn adjust_for_assistive_tech(&mut self, id: WidgetId, forward: bool) {
+        let key = if forward {
+            Key::Right {
+                shift: false,
+                word: false,
+            }
+        } else {
+            Key::Left {
+                shift: false,
+                word: false,
+            }
+        };
+        let response = self
+            .win
+            .tree
+            .as_ref()
+            .and_then(|tree| find_widget(tree.as_ref(), id))
+            .map(|widget| widget.on_key(&key));
+        if let Some(KeyResponse::Handled(Some(message))) = response {
+            self.dispatch(message);
+            self.request_redraw();
         }
     }
 
@@ -2774,29 +2802,7 @@ impl<A: Application> App<A> {
                 }
                 A11yAction::SetValue(id, value) => self.set_value_for_assistive_tech(id, value),
                 A11yAction::Scroll(id, forward) => self.scroll_page_for_assistive_tech(id, forward),
-                A11yAction::Adjust(id, forward) => {
-                    let key = if forward {
-                        Key::Right {
-                            shift: false,
-                            word: false,
-                        }
-                    } else {
-                        Key::Left {
-                            shift: false,
-                            word: false,
-                        }
-                    };
-                    let response = self
-                        .win
-                        .tree
-                        .as_ref()
-                        .and_then(|tree| find_widget(tree.as_ref(), id))
-                        .map(|widget| widget.on_key(&key));
-                    if let Some(KeyResponse::Handled(Some(message))) = response {
-                        self.dispatch(message);
-                        self.request_redraw();
-                    }
-                }
+                A11yAction::Adjust(id, forward) => self.adjust_for_assistive_tech(id, forward),
                 A11yAction::SetFraction(id, fraction) => {
                     let message = self
                         .win
@@ -5349,8 +5355,10 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                 self.sync_web_editing();
                 #[cfg(web)]
                 self.fit_web_keyboard();
-                // Publish the frame's semantic tree to the DOM bridge (#18). The page's
-                // coordinates are CSS pixels, the layout's own: no scale to carry.
+                // Publish the frame's semantic tree to the DOM bridge (#18), each node placed
+                // over the canvas where it is drawn (milestone 845).
+                #[cfg(web)]
+                let (k, origin) = self.page_scale();
                 #[cfg(web)]
                 if let Some(a11y) = self.win.a11y.as_mut() {
                     let focus = self.win.runtime.input.focused;
@@ -5360,7 +5368,15 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                         None => self.app.title(),
                     };
                     if let Some(ui) = self.win.ui.as_ref() {
-                        a11y.update(ui.semantics(), focus, editing, &title, &self.win.announce);
+                        a11y.update(
+                            ui.semantics(),
+                            focus,
+                            editing,
+                            &title,
+                            &self.win.announce,
+                            k,
+                            origin,
+                        );
                     }
                 }
                 // And its text to the layer over the canvas (milestone 830).

@@ -27,7 +27,7 @@ const expect = (label, ok, detail = '') => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? `: ${detail}` : ''}`);
   if (!ok) failures.push(label);
 };
-const ON_SCREEN = "[...document.querySelectorAll('canvas [aria-label]')].map((el) => el.getAttribute('aria-label'))";
+const ON_SCREEN = "[...document.querySelectorAll('#frus-semantics > *')].map((el) => el.getAttribute('aria-label') || el.getAttribute('data-t')).filter(Boolean)";
 const BOXES = "[...document.querySelectorAll('#frus-text .s')].map((el) => Math.round(el.scrollTop))";
 
 const browser = await webkit.launch();
