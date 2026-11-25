@@ -8,11 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 843 so far, each documenting the objective, the alternatives
+> record — one per step, 846 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Bare `frus` opens a terminal workbench** (J846, #375). Typed alone in a terminal, `frus`
+  shows one screen for the dev loop: the devices and emulators, the runs on them with each
+  one's status, their log with each hot-reload patch, `R` restart, a Build tab for `frus build` and a
+  Doctor tab for `frus doctor` and `--fix`. Keys and mouse both work; every key has a button.
+  It is a client of `frus daemon` and `frus run --machine`, in a new dev-only crate,
+  `frus-tui` (ratatui over crossterm), which only `frus-cli` depends on, behind its default
+  `workbench` feature. Piped, scripted or with `TERM=dumb`, bare `frus` prints the usage as
+  before. Leaving with `q` stops every run and the applications they started.
 - **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
   run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
   administrator password, only Perl and `make` (`frus doctor` says when either is missing).

@@ -15,6 +15,7 @@ frus run -d web           # in a browser
 
 | command | what it does |
 |---|---|
+| `frus` | the workbench: devices, runs with their log and hot reload, builds, the doctor |
 | `frus create <dir>` | writes a new application |
 | `frus devices` | lists what the application can run on now |
 | `frus run [-d <device>]` | builds it, starts it there, and shows its log in the terminal |
@@ -48,6 +49,43 @@ with a letter, and neither a Rust keyword nor the name of a crate the applicatio
 
 The template is built into the program, so `frus create` needs no network. Its files are in
 [`template/`](template), which is also a `cargo generate` template.
+
+## The workbench: `frus`
+
+Typed alone in a terminal, `frus` opens a workbench: one screen for the devices, the runs with
+their log, hot reload, builds and the doctor.
+
+```text
+ frus   1 Run   2 Build   3 Doctor                                       my_app
+┌ Devices ─────────────────────┐┌ Log ─────────────────────────────────────────┐
+│[ ] This computer windows ▶   ││   Compiling my_app v0.1.0                    │
+│[ ] Browser web               ││Built in 4.2 s                                │
+│[ ] Phone android (not authori││The application is up: save a file and the cha│
+│Emulators                     ││nge is patched in; R restarts it              │
+│ ⏻  Pixel 7 android           ││count: 1                                      │
+└──────────────────────────────┘│a warning                                     │
+┌ Runs ────────────────────────┐│Patched in 0.3 s                              │
+│● This computer               ││                                              │
+│  up, hot reload              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘
+ Running on This computer
+ Enter run  Space mark  r reload  R restart  s stop  Tab panel  c clear  q quit
+```
+
+- **Run**: `Enter` runs on the selected device, or on every device marked with `Space`, and on
+  an emulator starts it. With hot reload (a debug build's default) each saved file is
+  patched into the running application and the log says so; `r` reloads a run without it, `R`
+  restarts, `s` stops; `Tab` moves between
+  the Devices, Runs and Log panels (with the Runs panel focused, `r` `R` `s` go to that run
+  alone).
+- **Build**: `frus build` for a target, its output and its result; `c` cancels.
+- **Doctor**: `frus doctor`'s report; `f` runs `frus doctor --fix`.
+
+`1` `2` `3` change tabs, `PgUp` `PgDn` `Home` `End` scroll, `q` leaves and stops every run.
+Each key has a button in the bar at the bottom, and the mouse picks tabs, devices and runs.
+The workbench is a client of `frus daemon` and `frus run --machine` (below), in its own crate,
+[`frus-tui`](../frus-tui). Piped, in a script, or with `TERM=dumb`, bare `frus` prints the usage;
+`cargo install frus-cli --no-default-features` builds the tool without the workbench.
 
 ## Running: `frus run` and `frus devices`
 

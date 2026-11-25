@@ -65,6 +65,8 @@ const USAGE: &str = "\
 frus — the frus command-line tool
 
 Usage:
+  frus                                in a terminal: the workbench, one screen for the devices,
+                                      runs with their log and hot reload, builds, the doctor
   frus create <directory> [options]   start a new application
   frus devices                        list what the application can run on
   frus run [options] [-- <args>]      build it, start it on a device, show its log
@@ -382,6 +384,18 @@ enum Command {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Bare `frus`, typed in a terminal: the workbench (milestone 846). Anywhere else — a pipe,
+    // a script, a terminal that cannot draw one — the usage, as before.
+    if args.is_empty() {
+        use std::io::IsTerminal;
+        if opens_workbench(
+            cfg!(feature = "workbench"),
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            std::env::var("TERM").ok().as_deref(),
+        ) {
+            return workbench();
+        }
+    }
     match parse(args) {
         Ok(Command::Help) => {
             print!("{USAGE}");
@@ -458,6 +472,36 @@ fn main() -> ExitCode {
             eprintln!("error: {error}\n\nRun `frus help` for the usage.");
             ExitCode::from(2)
         }
+    }
+}
+
+/// Whether bare `frus` opens the workbench: when it was built in, both ends are a terminal, and
+/// the terminal is not one that says it cannot move the cursor (`TERM=dumb`).
+fn opens_workbench(built_in: bool, terminal: bool, term: Option<&str>) -> bool {
+    built_in && terminal && term != Some("dumb")
+}
+
+/// The workbench, run until the developer leaves it: the usage instead when it cannot open.
+fn workbench() -> ExitCode {
+    #[cfg(feature = "workbench")]
+    {
+        let opened = std::env::current_exe().and_then(frus_tui::workbench);
+        match opened {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!(
+                    "The workbench could not open: {error}
+"
+                );
+                print!("{USAGE}");
+                ExitCode::FAILURE
+            }
+        }
+    }
+    #[cfg(not(feature = "workbench"))]
+    {
+        print!("{USAGE}");
+        ExitCode::SUCCESS
     }
 }
 
@@ -1116,6 +1160,17 @@ mod tests {
             Ok(Command::Create(options)) => options,
             other => panic!("{line}: {other:?}"),
         }
+    }
+
+    #[test]
+    fn bare_frus_opens_the_workbench_only_in_a_terminal() {
+        assert!(opens_workbench(true, true, Some("xterm-256color")));
+        assert!(opens_workbench(true, true, None));
+        // Piped, scripted, or a terminal without a cursor: the usage.
+        assert!(!opens_workbench(true, false, Some("xterm-256color")));
+        assert!(!opens_workbench(true, true, Some("dumb")));
+        // Built without it.
+        assert!(!opens_workbench(false, true, None));
     }
 
     #[test]
