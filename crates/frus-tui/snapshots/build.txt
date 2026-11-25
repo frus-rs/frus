@@ -1,0 +1,24 @@
+ frus   1 Run   2 Build   3 Doctor                                       my_app
+┌ frus build ────────────┐┌ frus build web: done ──────────────────────────────┐
+│ desktop                ││frus build web                                      │
+│   this computer's progr││   Compiling my_app v0.1.0                          │
+│ web                    ││frus build web: done                                │
+│   the page and its .was││                                                    │
+│ apk                    ││                                                    │
+│   an Android package to││                                                    │
+│ appbundle              ││                                                    │
+│   an Android App Bundle││                                                    │
+│ installer              ││                                                    │
+│   this computer's insta││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+│                        ││                                                    │
+└────────────────────────┘└────────────────────────────────────────────────────┘
+ frus build web: done
+ Enter build  ↑↓ target  c cancel  q quit

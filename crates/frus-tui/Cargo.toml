@@ -1,0 +1,26 @@
+[package]
+name = "frus-tui"
+description = "frus — the terminal workbench that bare `frus` opens: devices, runs with their log and hot reload, builds, the doctor"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/frus-tui"
+keywords = ["tui", "cli", "terminal", "gui"]
+categories = ["command-line-utilities", "development-tools"]
+
+# A developer tool, used by `frus-cli` alone: no application built with frus depends on it.
+#
+# The workbench is a client of the commands `frus` already has (`frus daemon`, `frus run
+# --machine`, `frus build`, `frus doctor --machine`), which it starts as processes. It needs
+# nothing of the framework.
+[dependencies]
+# Drawing on the terminal, and its keys and mouse (through crossterm, re-exported by ratatui).
+# Without the default features: no calendar widget, no macros, no layout cache, nothing that is
+# not drawn here.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+# The columns a character takes, to wrap the log: already one of ratatui's.
+unicode-width = "0.2"

@@ -1,0 +1,24 @@
+ frus   1 Run   2 Build   3 Doctor                                       my_app
+┌ Devices ─────────────────────┐┌ Log ─────────────────────────────────────────┐
+│[ ] This computer windows ▶   ││   Compiling my_app v0.1.0                    │
+│[ ] Browser web               ││Built in 4.2 s                                │
+│[ ] Phone android (not authori││The application is up: save a file and the cha│
+│Emulators                     ││nge is patched in; R restarts it              │
+│ ⏻  Pixel 7 android           ││count: 1                                      │
+└──────────────────────────────┘│a warning                                     │
+┌ Runs ────────────────────────┐│Patched in 0.3 s                              │
+│● This computer               ││                                              │
+│  up, hot reload              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘
+ Running on This computer
+ Enter run  Space mark  r reload  R restart  s stop  Tab panel  c clear  q quit

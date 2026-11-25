@@ -1,0 +1,12 @@
+ frus   1 Run   2 Build   3 Doctor
+┌ Devices ─────────┐┌ Log ─────────────┐
+│[ ] This computer ││ up: save a file a│
+│[ ] Browser web   ││nd the change is p│
+│[ ] Phone android ││atched in; R resta│
+└──────────────────┘│rts it            │
+┌ Runs ────────────┐│count: 1          │
+│● This computer   ││a warning         │
+│  up, hot reload  ││Patched in 0.3 s  │
+└──────────────────┘└──────────────────┘
+ Running on This computer
+ Enter run  Space mark  r reload  R rest

@@ -8,11 +8,19 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 845 so far, each documenting the objective, the alternatives
+> record — one per step, 846 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **Bare `frus` opens a terminal workbench** (J846, #375). Typed alone in a terminal, `frus`
+  shows one screen for the dev loop: the devices and emulators, the runs on them with each
+  one's status, their log with each hot-reload patch, `R` restart, a Build tab for `frus build` and a
+  Doctor tab for `frus doctor` and `--fix`. Keys and mouse both work; every key has a button.
+  It is a client of `frus daemon` and `frus run --machine`, in a new dev-only crate,
+  `frus-tui` (ratatui over crossterm), which only `frus-cli` depends on, behind its default
+  `workbench` feature. Piped, scripted or with `TERM=dumb`, bare `frus` prints the usage as
+  before. Leaving with `q` stops every run and the applications they started.
 - **A screen reader on the web reads the whole page and can touch it** (J845, #18). The
   accessibility bridge's elements left the canvas's fallback content, which is never laid out,
   for a transparent layer over the canvas, each at the place its widget is drawn: a reader that

@@ -34,6 +34,15 @@ skera = "0.10"
 # The font types skera's interface is written in, at the version it uses.
 read-fonts = { version = "0.47", default-features = false, features = ["std"] }
 
+# The terminal workbench bare `frus` opens (milestone 846): ratatui and crossterm, behind the
+# default feature `workbench`. `cargo install frus-cli --no-default-features` leaves it out, and
+# bare `frus` then prints the usage. A tool's dependency: applications never see it.
+frus-tui = { path = "../frus-tui", version = "0.6", optional = true }
+
+[features]
+default = ["workbench"]
+workbench = ["dep:frus-tui"]
+
 # For the tests only, and left out when published: the simulated devices listed here are
 # checked against the core's own list, which the shell simulates.
 [dev-dependencies]
