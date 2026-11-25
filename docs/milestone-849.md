@@ -136,6 +136,12 @@ keeps them as they came. A value the application sets is its own and is not rewr
   (Ctrl+Backspace twice, two undos, Ctrl+Delete, Alt+Backspace) and
   `option_and_cmd_backspace_on_an_apple_keyboard`. Whole lib suite: 664 passed, 2 ignored.
 
+`cargo clippy -- -D warnings` is clean for the four touched crates natively (all targets) and
+for `wasm32-unknown-unknown`; for `aarch64-linux-android --no-deps` (`frus-shell`,
+`frus-widgets`) it is clean except `missing_const_for_thread_local` in files this milestone does
+not touch (`component.rs`, `locale.rs` and nine others), which the current toolchain reports on
+that target only, and which was allowed for the run.
+
 The `frus-widgets` and `frus-shell` tests were written with the change and were not run
 against the code before it (they use the new keys and functions); the `frus-text` ones were.
 
@@ -153,6 +159,10 @@ against the code before it (they use the new keys and functions); the `frus-text
   Linux, and on the test machine (Windows) the field holds compositions to the limit.
 - Not run on a phone (Android's hardware keyboard path is covered by the plan's unit test) or
   on a Mac.
+- **The goldens were not run.** The build lock was held by other builds for hours and a fresh
+  golden build under WSL did not fit. By reading the fixtures: no golden text holds a CR, and the
+  two that are cut with an ellipsis (`crates/frus-test/tests/goldens.rs`) are plain ASCII, where
+  a grapheme cluster is one character and the cut lands where it did. Not verified by a run.
 - L-038 is marked `fixed in 0.7.0`, assuming the next release is 0.7.0.
 - The rest of #56 — per-character versus per-run fallback, emoji rendering where no emoji face
   exists, bidi details beyond earlier milestones — is unchanged.
