@@ -84,6 +84,19 @@ frus-cli --no-default-features` builds the tool without it; bare `frus` then pri
 ratatui is used without its default features (`crossterm` only: no calendar widget, macros or
 layout cache). `unicode-width`, for wrapping, was already in ratatui's tree.
 
+What it costs the tool, measured on Windows with the profile `cargo install` uses (the crate's
+own: no LTO, 16 codegen units, symbols kept):
+
+| `frus.exe`, release | size |
+|---|---|
+| `--no-default-features` (no workbench) | 4 544 512 bytes |
+| default (with the workbench) | 5 007 872 bytes |
+
+That is **+463 KB, about 10 %**. Compiling it adds about 55 crates: ratatui's three, crossterm
+and its Windows layer, and the proc-macros under them (`syn` 2, `darling`, `strum_macros`,
+`derive_more`, `instability`). Both builds took about three minutes on a machine shared with
+two other builds, so the compile time it adds was not measured apart.
+
 ## Tests
 
 - `cargo test -p frus-tui`: 31 tests.
