@@ -21,8 +21,7 @@ any release may break.
   `navigator.platform` empty is read from its user agent, and an iPhone's or an Android phone's
   user agent wins over a desktop `platform` (a desktop browser emulating a phone). Chromium's
   phone emulation still draws at the wrong scale with an emulated pixel ratio (L-055). Every
-  scroll default still follows
-  `Theme::platform` and `ScrollConfiguration`.
+  scroll default still follows `Theme::platform` and `ScrollConfiguration`.
 - **WebGPU that fails at the canvas falls back to WebGL 2** (J847, L-008). A WebGPU device is
   first tried on a canvas the page never shows; when that canvas gives no `webgpu` context, refuses
   its configuration or gives no frame, the page draws with WebGL 2 instead of staying blank. A page
@@ -34,7 +33,18 @@ any release may break.
   it and with a WebGPU that fails at the canvas, in the installed Firefox and Playwright's,
   in WebKit, and as an Android and an iOS phone, and checks that it draws, follows the right
   platform and scrolls.
-
+- **3D in a `GpuPass`: a depth buffer and multisampling** (J844, part of #220). `.depth(format)`
+  gives a pass a depth buffer the size of its picture, `.samples(4)` a multisampled target
+  resolved into it; frus makes them again when the box changes size and clears them every frame
+  (the depth to 1.0, or to `.depth_clear`). `ctx.targets` (`PassTargets`) says what pipelines
+  must be made for and gives their multisample, depth and colour states;
+  `ctx.begin_render_pass` begins a pass on all of them, and `ctx.depth` / `ctx.multisampled`
+  are there for a pass described by hand. What the device cannot make is said once and replaced.
+  `.version(n)` keeps the last picture while `n` and the size stay the same, without running the
+  callback. Composition is unchanged: a 3D pass is clipped, faded and transformed like any
+  widget. The shaders example has a "3D in a list" page: a lit cube, depth-tested and
+  multisampled, one row of a scrolling list. `clippy -p frus-gpu --all-targets` now passes
+  without the `warm-shaders` feature too.
 - **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
   run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
   administrator password, only Perl and `make` (`frus doctor` says when either is missing).

@@ -216,7 +216,10 @@ pub use frus_shell::FileDialog;
 pub use frus_shell::wgpu;
 /// **Drawing on the GPU yourself** (milestone 792): a [`GpuPass`] box is given frus's device,
 /// queue and a picture to draw into, then composited with the widgets around it.
-pub use frus_shell::{GpuCallback, GpuPass, GpuPassContext, PassState, GPU_PASS_FORMAT};
+pub use frus_shell::{
+    GpuCallback, GpuPass, GpuPassContext, PassState, PassTargets, GPU_PASS_DEPTH_FORMAT,
+    GPU_PASS_FORMAT,
+};
 
 /// A page driven by a test, with no window (feature `testing`).
 #[cfg(feature = "testing")]
