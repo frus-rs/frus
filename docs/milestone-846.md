@@ -170,4 +170,7 @@ returned at once.
 - **The Doctor and Build tabs were not run in the real terminal.** They are covered by the
   reducer and snapshot tests, and `frus doctor --machine`'s output format is the one parsed.
 - **No in-terminal DevTools or plugin dialogs.** The issue leaves them out of the first cut.
+- **`frus-tui` is a new crate name on crates.io.** It must be published before the next
+  `frus-cli`, which depends on it (`cargo publish --workspace` orders them). It carries the
+  licence and NOTICE copies that every published crate keeps.
 - **Wrapping is by character**, not by word, and the log keeps its last 10 000 lines.
