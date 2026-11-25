@@ -495,7 +495,34 @@ pub(crate) fn keep_touches(window: &winit::window::Window) {
             .style()
             .set_property("touch-action", CANVAS_TOUCH_ACTION);
     }
+    // Nor the page's own end-of-scroll effects (milestone 847): a desktop browser's elastic
+    // bounce on a touchpad, its swipe back through the history at a sideways edge, a phone's
+    // pull to refresh. The application shows its own edge, the platform's. A page that sets
+    // `overscroll-behavior` itself keeps what it set.
+    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        let roots = [
+            document
+                .document_element()
+                .and_then(|root| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(root).ok()),
+            document.body(),
+        ];
+        for root in roots.into_iter().flatten() {
+            let style = root.style();
+            if style
+                .get_property_value("overscroll-behavior")
+                .unwrap_or_default()
+                .is_empty()
+            {
+                let _ = style.set_property("overscroll-behavior", PAGE_OVERSCROLL_BEHAVIOR);
+            }
+        }
+    }
 }
+
+/// What the page does at the end of a scroll by itself: nothing (milestone 847). Without it a
+/// desktop browser bounces the whole page on a touchpad, or goes back in the history on a
+/// sideways swipe, over the application's own edge effect.
+pub(crate) const PAGE_OVERSCROLL_BEHAVIOR: &str = "none";
 
 /// Asks `window` for a frame whenever the visual viewport changes size — the keyboard
 /// coming or going, which resizes nothing a resize observer would see.
@@ -760,6 +787,13 @@ mod tests {
     #[test]
     fn the_browser_keeps_no_touch_for_itself() {
         assert_eq!(CANVAS_TOUCH_ACTION, "none");
+    }
+
+    /// Nor any end-of-scroll effect of its own (milestone 847): the application draws the
+    /// platform's.
+    #[test]
+    fn the_page_has_no_overscroll_effect_of_its_own() {
+        assert_eq!(PAGE_OVERSCROLL_BEHAVIOR, "none");
     }
 
     /// The scrolls a keyboard set off are put back when the page pans after all

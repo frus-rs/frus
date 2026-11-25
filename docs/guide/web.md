@@ -130,6 +130,27 @@ for the rest, and a live region for announcements. NVDA, JAWS, VoiceOver on a Ma
 read them, and Tab moves through them. A phone's screen reader cannot explore the page by touch,
 because those elements have no position. See [Accessibility](accessibility.md).
 
+## Browsers
+
+A frus page runs in Chrome, Edge, Firefox and Safari, on the desktop and on phones, with or
+without WebGPU:
+
+- **The GPU.** WebGPU where the browser has it and it works, WebGL 2 everywhere else: no
+  `navigator.gpu`, a GPU the browser blocks, no device, or a device that cannot draw in a canvas
+  (it is tried on a canvas of its own before the page's is touched). The browser's console says
+  which: `GPU interface: WebGPU`, or `GPU interface: WebGL 2 (why)`.
+- **The platform's conventions.** A page follows the system the browser runs on, not the
+  browser: in a browser on Windows, Linux or a Mac, lists stop at their ends as they do on that
+  desktop (and bounce on a Mac); on an Android phone they stretch, on an iPhone or an iPad they
+  bounce. `Theme::platform` and `ScrollConfiguration` change it like anywhere else.
+- **The page's own effects.** frus turns off the browser's end-of-scroll effects on the page
+  (`overscroll-behavior: none`): the elastic bounce of a touchpad, a sideways swipe back through
+  the history, a phone's pull to refresh. A page that sets `overscroll-behavior` keeps its own.
+
+`scripts/web-browsers-check.mjs` checks a built site in all of them that the computer can run:
+Edge with WebGPU, without it, and with a WebGPU that fails at the canvas; Firefox; WebKit, the
+engine of Safari; and both as phones.
+
 ## What a browser does not allow
 
 - **Files and dialogs.** The desktop's file dialogs, tray, taskbar and global shortcuts do not

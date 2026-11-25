@@ -64,3 +64,6 @@ wgpu = { workspace = true, features = ["webgl"] }
 # `navigator.gpu`, looked for before WebGPU is tried; both already come with wgpu.
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+# The canvas a page's WebGPU device is tried on before the page's own is given a context
+# (milestone 847). Already in every web build, through wgpu and winit.
+web-sys = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "Window"] }

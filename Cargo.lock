@@ -1701,8 +1701,10 @@ name = "frus-core"
 version = "0.6.0"
 dependencies = [
  "bytemuck",
+ "js-sys",
  "log",
  "naga",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1791,6 +1793,7 @@ dependencies = [
  "naga",
  "pollster 0.3.0",
  "wasm-bindgen",
+ "web-sys",
  "web-time",
  "wgpu",
 ]

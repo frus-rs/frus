@@ -175,13 +175,18 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** platform: web
 - **Platforms:** Web
-- **Status:** open
-- **What you hit:** frus picks WebGPU where the browser offers it and WebGL 2 otherwise. A
-  WebGPU device that is created and then fails when the canvas is configured cannot fall back:
-  the canvas already holds its WebGPU context, and a new canvas belongs to the windowing layer.
-  WebGL 2 also draws without the GPU's clock and without a pipeline cache.
+- **Status:** partial
+- **What you hit:** frus picks WebGPU where the browser offers it and WebGL 2 otherwise. Since
+  milestone 847 a WebGPU device is first tried on a canvas of its own that the page never shows
+  (a `webgpu` context, configured as the renderer configures it, one frame drawn), and the page
+  draws with WebGL 2 when that fails; a page canvas that refuses its `webgpu` context also falls
+  back. What is left: a canvas that passes the trial and then fails at configuration on the
+  page's own canvas keeps its WebGPU context and cannot fall back (no browser has been seen to do
+  it), and a renderer made again after a lost device stays on the interface the canvas already
+  holds. WebGL 2 also draws without the GPU's clock and without a pipeline cache.
 - **Workaround:** None in the application.
-- **Evidence:** [docs/milestone-745.md](docs/milestone-745.md)
+- **Evidence:** [docs/milestone-745.md](docs/milestone-745.md),
+  [docs/milestone-847.md](docs/milestone-847.md)
 
 ### L-009 SQLite and the secure store answer `Unsupported` on the web
 
@@ -196,6 +201,23 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Evidence:** [docs/guide/data.md](docs/guide/data.md),
   [docs/guide/platform.md](docs/guide/platform.md),
   [docs/milestone-795.md](docs/milestone-795.md)
+
+### L-055 Chromium's phone emulation draws the page at the wrong scale
+
+- **Area:** platform: web
+- **Platforms:** Web
+- **Status:** open
+- **What you hit:** In Chromium's device emulation with a pixel ratio other than the screen's
+  (a Pixel 7 at 2.625 in headless Edge, through the DevTools protocol's device metrics), the
+  browser reports the canvas's device-pixel size at its CSS size. The windowing layer sizes the
+  canvas's image from that report and the application draws at the emulated ratio, so
+  everything is about 2.6 times too large, cut off at the right and bottom, and touches land in
+  the wrong place. Real phones, desktop browsers and WebKit's emulation report the right size.
+- **Workaround:** Emulate the phone at a pixel ratio of 1 (its size and user agent are enough
+  to try the layout and the platform's conventions), or try it in WebKit's emulation or on a
+  real phone.
+- **Evidence:** [docs/milestone-847.md](docs/milestone-847.md),
+  [scripts/web-browsers-check.mjs](scripts/web-browsers-check.mjs)
 
 ## Platform: desktop (Windows, macOS, Linux)
 

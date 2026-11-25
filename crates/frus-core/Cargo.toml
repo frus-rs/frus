@@ -25,3 +25,9 @@ log.workspace = true
 # block read when the shader is made, so an error is said with its line before anything is
 # drawn. The same naga, with the same feature, that wgpu already builds in.
 naga = { version = "30", features = ["wgsl-in"] }
+
+# The web (milestone 847): the browser's operating system, read from the navigator the first
+# time the default target platform is asked for. Both already come with wgpu on wasm32.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"

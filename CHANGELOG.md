@@ -8,10 +8,32 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 843 so far, each documenting the objective, the alternatives
+> record — one per step, 847 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A page follows the system its browser runs on, from the first theme** (J847). A web
+  application is made before the shell starts it, and a theme made then (the default one, a
+  seeded one) was given Android's conventions in every browser: on a Windows, Linux or Mac
+  desktop a list stretched past its end like a phone's and had no scrollbar. The platform is now
+  read from the navigator the first time it is asked for, and a browser that keeps
+  `navigator.platform` empty is read from its user agent, and an iPhone's or an Android phone's
+  user agent wins over a desktop `platform` (a desktop browser emulating a phone). Chromium's
+  phone emulation still draws at the wrong scale with an emulated pixel ratio (L-055). Every
+  scroll default still follows
+  `Theme::platform` and `ScrollConfiguration`.
+- **WebGPU that fails at the canvas falls back to WebGL 2** (J847, L-008). A WebGPU device is
+  first tried on a canvas the page never shows; when that canvas gives no `webgpu` context, refuses
+  its configuration or gives no frame, the page draws with WebGL 2 instead of staying blank. A page
+  canvas that refuses its `webgpu` context falls back too.
+- **The page's own end-of-scroll effects are off** (J847): `overscroll-behavior: none` on the
+  page, so a touchpad's elastic bounce, a sideways swipe back through the history or a phone's pull
+  to refresh no longer act over the application. A page that sets it keeps its own.
+- **`scripts/web-browsers-check.mjs`** (J847) starts a built site in Edge with WebGPU, without
+  it and with a WebGPU that fails at the canvas, in the installed Firefox and Playwright's,
+  in WebKit, and as an Android and an iOS phone, and checks that it draws, follows the right
+  platform and scrolls.
 
 - **Hot reload on Linux needs no system OpenSSL** (J843, part of #288). The patch engine `frus
   run` installs now builds OpenSSL from its sources and links it in: no `libssl-dev`, so no
