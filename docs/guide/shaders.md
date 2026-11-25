@@ -187,6 +187,76 @@ The pass runs every frame its box is drawn. Several from the same closure (the r
 list) tell themselves apart with `.key(n)`, each with its own picture and state.
 `crates/frus-shaders` draws a turning triangle with its own pipeline this way.
 
+### 3D: a depth buffer and multisampling
+
+A 3D scene needs a **depth buffer**, so that the nearer surface wins whatever order its
+triangles are drawn in, and usually **multisampling**, so that its edges are smooth. Ask the
+pass for them and frus makes them the size of the picture, makes them again when the box
+changes size, and clears them at the start of every frame (the depth to 1.0, or to what
+`.depth_clear` says):
+
+```rust,no_run
+use frus::{wgpu, GpuPass, GPU_PASS_DEPTH_FORMAT};
+
+let cube: GpuPass = GpuPass::new(|ctx| {
+    // What the pipelines must be made for: colour format, depth format, sample count.
+    let targets = ctx.targets;
+    let pipeline = ctx
+        .state(move |device, _format| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("cube"),
+                source: wgpu::ShaderSource::Wgsl("/* your WGSL */".into()),
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("cube"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs"),
+                    targets: &[Some(targets.color_target())],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: targets.depth_stencil(wgpu::CompareFunction::Less),
+                multisample: targets.multisample(),
+                multiview_mask: None,
+                cache: None,
+            })
+        })
+        .clone();
+    // A pass on the multisampled target (resolved into the picture) and the depth buffer.
+    let mut pass = ctx.begin_render_pass(Some("cube"));
+    pass.set_pipeline(&pipeline);
+    pass.draw(0..36, 0..1);
+})
+.depth(GPU_PASS_DEPTH_FORMAT)
+.samples(4)
+.playing(true)
+.size(320.0, 240.0);
+```
+
+- `ctx.depth` and `ctx.multisampled` are the views themselves, and `ctx.color_attachment()` /
+  `ctx.depth_stencil_attachment()` the attachments, for a render pass described by hand (a
+  stencil, several passes, a different load). `PassTargets::depth_stencil` is a starting
+  point: change its fields for transparent surfaces, a stencil or a depth bias.
+- 4 samples and `Depth32Float` (`GPU_PASS_DEPTH_FORMAT`) work on every backend frus runs on,
+  WebGL 2 included. A format or a sample count the device cannot make is said once in the
+  console and replaced (no depth buffer; 4, or else 1 sample).
+- Changing the depth format or the sample count drops what `ctx.state` keeps, since its
+  pipelines were made for the old targets; a new size keeps it.
+- A view that changes on input rather than with the clock says so with `.version(n)`: while
+  `n` and the size stay the same the callback is not run, and its last picture is shown again.
+
+The picture is composited like any other: clipped by a scrolling list's edges, faded, rounded
+and transformed with the widgets around it. The "3D in a list" page of `crates/frus-shaders`
+turns a lit cube this way, one row of a scrolling list.
+
 ## On every platform
 
 - **Windows, macOS, Linux, Android**: through Vulkan, Metal, Direct3D 12, or OpenGL ES where

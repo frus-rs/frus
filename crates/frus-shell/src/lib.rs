@@ -282,7 +282,9 @@ pub use file_dialog::FileDialog;
 pub use frus_gpu::wgpu;
 /// A box the application draws on frus's GPU device itself (milestone 792), and what it
 /// draws with.
-pub use frus_gpu::{GpuCallback, GpuPassContext, PassState, GPU_PASS_FORMAT};
+pub use frus_gpu::{
+    GpuCallback, GpuPassContext, PassState, PassTargets, GPU_PASS_DEPTH_FORMAT, GPU_PASS_FORMAT,
+};
 pub use gpu_pass::GpuPass;
 pub use haptics::HapticsError;
 #[cfg(any(desktop, ios))]

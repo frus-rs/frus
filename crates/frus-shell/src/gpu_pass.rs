@@ -81,6 +81,36 @@ impl<Msg> GpuPass<Msg> {
         self
     }
 
+    /// **A depth buffer** of `format` (`frus::GPU_PASS_DEPTH_FORMAT` for most), the size of
+    /// the picture, cleared every frame: for 3D, where the nearer surface must win whatever
+    /// order things are drawn in. See [`GpuCallback::depth`].
+    pub fn depth(mut self, format: frus_gpu::wgpu::TextureFormat) -> Self {
+        self.callback = self.callback.depth(format);
+        self
+    }
+
+    /// The value the depth buffer is cleared to: 1.0 unless set. See
+    /// [`GpuCallback::depth_clear`].
+    pub fn depth_clear(mut self, value: f32) -> Self {
+        self.callback = self.callback.depth_clear(value);
+        self
+    }
+
+    /// **Multisampling** with `samples` per pixel (4 for most), resolved into the picture:
+    /// smooth edges for 3D geometry. See [`GpuCallback::samples`].
+    pub fn samples(mut self, samples: u32) -> Self {
+        self.callback = self.callback.samples(samples);
+        self
+    }
+
+    /// Says when the picture changes: while `version` and the size stay the same the
+    /// callback is not run and its last picture is shown again. See
+    /// [`GpuCallback::version`].
+    pub fn version(mut self, version: u64) -> Self {
+        self.callback = self.callback.version(version);
+        self
+    }
+
     /// Its size in logical pixels. Unset, it fills the room it is given.
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.width = Some(width);
@@ -170,5 +200,24 @@ mod tests {
         assert!(external.payload().downcast_ref::<GpuCallback>().is_some());
         let still: GpuPass<()> = GpuPass::new(|_ctx| {});
         assert!(!Widget::<()>::continuous(&still));
+    }
+
+    /// What the widget asks for reaches the callback it paints: the same pass, with its
+    /// depth buffer, samples and version (checked rendered in `frus-test`'s `gpu_depth`).
+    #[test]
+    fn the_targets_asked_for_reach_the_callback() {
+        let pass: GpuPass<()> = GpuPass::new(|_ctx| {})
+            .depth(frus_gpu::GPU_PASS_DEPTH_FORMAT)
+            .samples(4)
+            .version(3);
+        let plain = GpuCallback::new(|_ctx| {});
+        assert_ne!(
+            format!("{:?}", pass.callback),
+            format!("{plain:?}"),
+            "the configuration is carried"
+        );
+        let shown = format!("{:?}", pass.callback);
+        assert!(shown.contains("Depth32Float") && shown.contains("samples: 4"));
+        assert!(shown.contains("version: Some(3)"));
     }
 }
