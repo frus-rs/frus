@@ -345,7 +345,7 @@ impl Shape {
             }
             // The last run was ellipsised to the width on its own, but it shares its line
             // with the runs before it: with them, it may still not fit and wrap onto a line
-            // past the limit. Shortened a character at a time until the kept runs fit.
+            // past the limit. Shortened a grapheme cluster at a time until the kept runs fit.
             let ellipsis = crate::text::ELLIPSIS;
             while frus_text::runs_cut_at(&kept, Some(width), self.wrap, max).is_some() {
                 let Some(last) = kept.last_mut() else {
@@ -367,7 +367,10 @@ impl Shape {
                     }
                     continue;
                 }
-                body.pop();
+                // A whole grapheme cluster: a flag or an emoji sequence goes in one piece
+                // (milestone 849).
+                let ends = crate::text::cluster_ends(&body);
+                body.truncate(ends[ends.len().saturating_sub(2)]);
                 last.text = format!("{}{ellipsis}", body.trim_end());
             }
         }

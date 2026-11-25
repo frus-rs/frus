@@ -475,23 +475,151 @@ pub(crate) fn word_boundary_right(chars: &[char], cursor: usize) -> usize {
     i
 }
 
-/// Start of the **logical line** (after the previous `\n`, or 0) containing `cursor`.
+/// Whether `c` breaks a line: a line feed, a carriage return — alone, or the first half of
+/// a CR LF — or another paragraph separator, as the text is laid out.
+fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{1C}' | '\u{1D}' | '\u{1E}' | '\u{85}' | '\u{2029}'
+    )
+}
+
+/// Start of the **logical line** (after the previous line break, or 0) containing `cursor`.
 pub(crate) fn line_start(chars: &[char], cursor: usize) -> usize {
-    let mut i = cursor;
-    while i > 0 && chars[i - 1] != '\n' {
+    let mut i = cursor.min(chars.len());
+    while i > 0 && !is_line_break(chars[i - 1]) {
         i -= 1;
     }
     i
 }
 
-/// End of the **logical line** (before the next `\n`, or the end) containing `cursor`.
+/// End of the **logical line** (before the next line break, or the end) containing
+/// `cursor` — before the whole of a CR LF, never between its two halves.
 pub(crate) fn line_end(chars: &[char], cursor: usize) -> usize {
     let len = chars.len();
-    let mut i = cursor;
-    while i < len && chars[i] != '\n' {
+    let mut i = cursor.min(len);
+    while i < len && !is_line_break(chars[i]) {
         i += 1;
     }
     i
+}
+
+/// The stretch of `chars` a word or line deletion takes from `cursor` with nothing selected
+/// (milestone 849), as `(start, end)`: from the caret back to the start of the word before it
+/// ([`word_boundary_left`]) or on to the end of the word after it ([`word_boundary_right`]);
+/// a word deletion stops at a line break, so that at the start of a line it takes the break
+/// rather than the last word of the line above. For a `line`, to the start or the end of the
+/// logical line, where at the line's very start there is nothing to take.
+///
+/// In an `obscured` field the words and the lines cannot be seen, and a boundary between them
+/// would tell what the dots hide: everything on that side goes.
+pub(crate) fn deletion_range(
+    chars: &[char],
+    cursor: usize,
+    forward: bool,
+    line: bool,
+    obscured: bool,
+) -> (usize, usize) {
+    let len = chars.len();
+    let cursor = cursor.min(len);
+    let target = match (obscured, line, forward) {
+        (true, _, false) => 0,
+        (true, _, true) => len,
+        // A word deletion does not cross a line break: at the start of a line it takes the
+        // break (and the spaces after it), not the last word of the line above.
+        (false, false, false) => {
+            let word = word_boundary_left(chars, cursor);
+            match (word..cursor).rev().find(|&i| is_line_break(chars[i])) {
+                Some(i) if i > 0 && chars[i] == '\n' && chars[i - 1] == '\r' => i - 1,
+                Some(i) => i,
+                None => word,
+            }
+        }
+        (false, false, true) => {
+            let word = word_boundary_right(chars, cursor);
+            match (cursor..word).find(|&i| is_line_break(chars[i])) {
+                Some(i) if chars[i] == '\r' && chars.get(i + 1) == Some(&'\n') => i + 2,
+                Some(i) => i + 1,
+                None => word,
+            }
+        }
+        (false, true, false) => line_start(chars, cursor),
+        (false, true, true) => line_end(chars, cursor),
+    };
+    if forward {
+        (cursor, target.max(cursor))
+    } else {
+        (target.min(cursor), cursor)
+    }
+}
+
+/// Whether a composition the input method has not finished may run past a field's
+/// `max_length` until it is finished — so that a word composed in Chinese or Japanese is not
+/// cut under the writer's fingers — and is cut once it is (milestone 849). On Android and on
+/// Windows the limit holds throughout, as their own fields hold it; elsewhere, and in a
+/// browser, it waits for the end of the composition.
+const COMPOSITION_MAY_EXCEED: bool = cfg!(any(
+    target_arch = "wasm32",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux"
+));
+
+/// The number of grapheme clusters — characters as a reader counts them — in `chars`.
+pub(crate) fn cluster_count(chars: &[char]) -> usize {
+    grapheme_stops_of(chars).len() - 1
+}
+
+/// `chars` held to at most `max` grapheme clusters after an edit (milestone 849), the caret
+/// and anchor following. `inserted` is where the edit typed or pasted its text, as
+/// `(start, count)` in characters.
+///
+/// What the edit inserted gives way first, from its end and a whole cluster at a time, so
+/// that a paste in the middle of the text keeps what was already there and lands what fits;
+/// if that is not enough — a value over the limit to begin with — the text is cut at the
+/// boundary after its `max`-th cluster. A flag, an emoji sequence or a letter with its marks
+/// that does not fit whole does not land in part.
+///
+/// `exempt`: a composition still open, which may run over (see `COMPOSITION_MAY_EXCEED`).
+pub(crate) fn limit_clusters(
+    chars: &mut Vec<char>,
+    cursor: &mut usize,
+    anchor: &mut Option<usize>,
+    inserted: Option<(usize, usize)>,
+    max: usize,
+    exempt: bool,
+) {
+    let total = cluster_count(chars);
+    if total <= max || exempt {
+        return;
+    }
+    if let Some((at, count)) = inserted {
+        let end = (at + count).min(chars.len());
+        let stops = grapheme_stops_of(&chars[at..end]);
+        let clusters = stops.len() - 1;
+        let keep = stops[clusters.saturating_sub(total - max)];
+        chars.drain(at + keep..end);
+        // An index after what was dropped moves back with the text; one inside it goes to
+        // where the kept part ends.
+        let (kept_end, dropped) = (at + keep, end - (at + keep));
+        let shift = move |i: usize| -> usize {
+            if i >= end {
+                i - dropped
+            } else {
+                i.min(kept_end)
+            }
+        };
+        for index in std::iter::once(&mut *cursor).chain(anchor.as_mut()) {
+            *index = shift(*index);
+        }
+    }
+    let stops = grapheme_stops_of(chars);
+    if stops.len() - 1 > max {
+        let cut = stops[max];
+        chars.truncate(cut);
+        *cursor = (*cursor).min(cut);
+        *anchor = anchor.map(|a| a.min(cut));
+    }
 }
 
 /// The side of a selection handle's box (`text_selection.dart:17`).
@@ -1158,6 +1286,10 @@ impl<Msg> TextField<Msg> {
 
     /// Switches the field to **multi-line**: Enter inserts a line break (instead of
     /// submitting), and the box shows `rows` lines (see [`rows`](Self::rows)).
+    ///
+    /// A multi-line field keeps the line breaks of what is pasted into it as they came — a
+    /// CR LF from Windows is one break, and the caret and Backspace cross it in one step. A
+    /// single-line field leaves them out of what is typed or pasted, and the lines run on.
     pub fn multiline(mut self) -> Self {
         self.multiline = true;
         self
@@ -1610,8 +1742,16 @@ impl<Msg> TextField<Msg> {
     /// reference puts one, and reserves that line even when there is no helper text to
     /// share it with.
     ///
-    /// The limit is in **characters**, not bytes: "é" is one, and a name in an alphabet
-    /// that is not Latin is counted the way its writer would count it.
+    /// The limit is in **characters as a reader counts them** — grapheme clusters — not
+    /// bytes or code points: "é" is one whether it is typed as one code point or as an `e`
+    /// and an accent, a flag is one, a family emoji joined from five code points is one, and
+    /// a syllable of Devanagari is one. A paste is cut at the boundary between two of them,
+    /// never through one, and the counter counts the same way.
+    ///
+    /// A word an input method is still **composing** — Chinese, Japanese, Korean — may run
+    /// past the limit until it is finished on macOS, Linux, iOS and the web, and is cut then;
+    /// on Android and Windows the limit holds throughout, as those platforms' own fields hold
+    /// it.
     pub fn max_length(mut self, max: usize) -> Self {
         self.max_length = Some(max);
         self
@@ -2018,9 +2158,10 @@ impl<Msg> TextField<Msg> {
         match &self.counter_text {
             Some(text) if text.is_empty() => None,
             Some(text) => Some(text.clone()),
-            None => self
-                .max_length
-                .map(|max| format!("{}/{}", self.value.chars().count(), max)),
+            None => self.max_length.map(|max| {
+                let chars: Vec<char> = self.value.chars().collect();
+                format!("{}/{}", cluster_count(&chars), max)
+            }),
         }
     }
 
@@ -2730,19 +2871,31 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
         let selection = anchor
             .map(|a| (a.min(cursor), a.max(cursor)))
             .filter(|(s, e)| s < e);
+        let original = chars.clone();
+        let (original_cursor, original_anchor) = (cursor, anchor);
 
         let mut changed = false;
         // The last character typed, which the caret is left beside.
         let mut typed_last = None;
+        // Where the text typed or pasted went, and how many characters it is: the first to
+        // give way to the length limit.
+        let mut inserted_at = None;
+        // An edit that may come to nothing once the limit has had its say.
+        let mut may_be_refused = false;
 
         match key {
             Key::Text(text) => {
+                // A single-line field has no line to break: the line breaks of a paste are
+                // left out — a CR LF whole — and the lines it held run on.
+                let typed = text
+                    .chars()
+                    .filter(|&c| self.multiline || !is_line_break(c));
                 // The filter, one character at a time: a rejected one never arrives and
                 // a substituted one takes the same place, so the caret arithmetic below
                 // is the arithmetic it always was.
                 let inserted: Vec<char> = match &self.input_filter {
-                    Some(filter) => text.chars().filter_map(filter).collect(),
-                    None => text.chars().collect(),
+                    Some(filter) => typed.filter_map(filter).collect(),
+                    None => typed.collect(),
                 };
                 // Nothing typed and nothing selected is nothing done: emitting the value
                 // unchanged would rebuild the tree for a keystroke that was refused.
@@ -2756,9 +2909,16 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
                     let n = inserted.len();
                     typed_last = inserted.last().copied();
                     chars.splice(cursor..cursor, inserted);
+                    inserted_at = Some((cursor, n));
                     cursor += n;
                     anchor = None;
                     changed = true;
+                } else if text.is_empty() {
+                    // Nothing, typed as a whole: what a browser's input method sends as it
+                    // finishes a composition. The length limit it was allowed to run over
+                    // applies now, and nothing else changes.
+                    changed = true;
+                    may_be_refused = true;
                 }
             }
             Key::Backspace => {
@@ -2786,6 +2946,23 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
                     let end = grapheme_after(&grapheme_stops_of(&chars), cursor);
                     chars.drain(cursor..end);
                     changed = true;
+                }
+                anchor = None;
+            }
+            // A word, or the rest of the line, on one side of the caret (milestone 849).
+            Key::DeleteWord { forward } | Key::DeleteLine { forward } => {
+                if let Some((s, e)) = selection {
+                    chars.drain(s..e);
+                    cursor = s;
+                    changed = true;
+                } else {
+                    let line = matches!(key, Key::DeleteLine { .. });
+                    let (from, to) = deletion_range(&chars, cursor, *forward, line, self.obscure);
+                    if from < to {
+                        chars.drain(from..to);
+                        cursor = from;
+                        changed = true;
+                    }
                 }
                 anchor = None;
             }
@@ -2844,17 +3021,29 @@ impl<Msg: Clone + 'static> Widget<Msg> for TextField<Msg> {
         // A value the **caller** supplied over the limit is left alone: it is the
         // application's state, not something typed, and silently shortening it would be
         // editing a value nobody edited. The counter shows it over.
+        //
+        // The limit counts **grapheme clusters**, the characters a reader counts (milestone
+        // 849): a flag, a family emoji, a letter with its accent is one, however many code
+        // points it is made of, and none of them lands in part.
         if changed {
             if let Some(max) = self.max_length {
-                if chars.len() > max {
-                    // Cut at a grapheme boundary: an emoji that does not fit whole does not
-                    // land as a part of itself — a bare hand without its skin tone, a lone
-                    // regional indicator.
-                    let max = grapheme_floor(&grapheme_stops_of(&chars), max);
-                    chars.truncate(max);
-                    cursor = cursor.min(max);
-                    anchor = anchor.map(|a| a.min(max));
-                }
+                let exempt = COMPOSITION_MAY_EXCEED && edit.composing.is_some();
+                may_be_refused |= cluster_count(&chars) > max && !exempt;
+                limit_clusters(
+                    &mut chars,
+                    &mut cursor,
+                    &mut anchor,
+                    inserted_at,
+                    max,
+                    exempt,
+                );
+            }
+            // Refused whole — a keystroke into a full field — is nothing done: the value is
+            // not emitted again, and the caret stays where it was.
+            if may_be_refused && chars == original {
+                changed = false;
+                cursor = original_cursor;
+                anchor = original_anchor;
             }
         }
 
@@ -5136,11 +5325,14 @@ mod limit_tests {
         msg.map(|Msg::Changed(v)| v)
     }
 
-    /// A keystroke past the limit does not reach the value.
+    /// A keystroke past the limit does not reach the value, and is not even reported: the
+    /// value did not change (milestone 849).
     #[test]
     fn a_keystroke_past_the_limit_goes_nowhere() {
         let full = field("abcde").max_length(5);
-        assert_eq!(value_of(typed(&full, "f").0), Some("abcde".into()));
+        let (msg, edit) = typed(&full, "f");
+        assert_eq!(value_of(msg), None);
+        assert_eq!(edit.cursor, 5, "the caret stays where it was");
         let room = field("abcd").max_length(5);
         assert_eq!(value_of(typed(&room, "e").0), Some("abcde".into()));
     }
@@ -5161,7 +5353,7 @@ mod limit_tests {
         let f = field("").max_length(3);
         assert_eq!(value_of(typed(&f, "éàü").0), Some("éàü".into()));
         let full = field("éàü").max_length(3);
-        assert_eq!(value_of(typed(&full, "e").0), Some("éàü".into()));
+        assert_eq!(value_of(typed(&full, "e").0), None);
     }
 
     /// A value the caller supplied over the limit is left alone — it is the application's
@@ -6617,14 +6809,331 @@ mod grapheme_tests {
     /// does not land as a part of itself — a thumb without its skin tone.
     #[test]
     fn the_length_limit_never_splits_a_cluster() {
-        let f = field("ab").max_length(3);
+        let f = field("ab").max_length(2);
         let mut edit = at(2);
         let msg = Widget::on_edit(&f, &mut edit, &Key::Text(THUMB.to_string()));
-        assert_eq!(changed(msg), "ab");
+        assert_eq!(msg, None, "a full field takes nothing");
         assert_eq!(edit.cursor, 2);
-        let f = field("a").max_length(3);
+        let f = field("a").max_length(2);
         let mut edit = at(1);
         let msg = Widget::on_edit(&f, &mut edit, &Key::Text(THUMB.to_string()));
         assert_eq!(changed(msg), format!("a{THUMB}"), "it fits whole");
+    }
+
+    /// Devanagari "ki" (KA + vowel sign I), one cluster of two characters.
+    const KI: &str = "\u{915}\u{93F}";
+    /// Arabic "ba" with its fatha, one cluster of two characters, right to left.
+    const BA: &str = "\u{628}\u{64E}";
+
+    /// **The length limit counts what a reader counts** (milestone 849): a family emoji, a
+    /// flag, a thumb with its skin tone, a decomposed `é`, a Devanagari syllable and an Arabic
+    /// letter with its vowel are one each, however many code points they are, and the
+    /// counter counts the same way. Before, the limit counted code points: the family alone
+    /// cost five.
+    #[test]
+    fn the_length_limit_counts_grapheme_clusters() {
+        let six = format!("{FAMILY}{TOGO}{THUMB}{E_ACUTE}{KI}{BA}");
+        let f = field("").max_length(6);
+        let mut edit = at(0);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(six.clone()));
+        assert_eq!(changed(msg), six, "six clusters fit a limit of six");
+        assert_eq!(edit.cursor, six.chars().count());
+        let full = field(&six).max_length(6);
+        assert_eq!(full.counter().as_deref(), Some("6/6"));
+        let mut edit = at(six.chars().count());
+        assert_eq!(
+            Widget::on_edit(&full, &mut edit, &Key::Text("x".into())),
+            None,
+            "and a seventh is refused"
+        );
+        // Ten families fit a limit of ten, and a paste of twenty lands ten whole ones.
+        let ten = FAMILY.repeat(10);
+        let f = field("").max_length(10);
+        let mut edit = at(0);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(ten.repeat(2)));
+        assert_eq!(changed(msg), ten);
+    }
+
+    /// **A paste past the limit gives way from its own end, a cluster at a time** (milestone
+    /// 849): the text already in the field stays, what fits of the paste lands where the
+    /// caret was, and no flag or emoji lands in part.
+    #[test]
+    fn a_paste_past_the_limit_keeps_the_text_around_it() {
+        // Into the middle: "a|d", four allowed, "b", two flags and "c" pasted.
+        let f = field("ad").max_length(4);
+        let mut edit = at(1);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(format!("b{TOGO}{TOGO}c")));
+        assert_eq!(changed(msg), format!("ab{TOGO}d"));
+        assert_eq!(edit.cursor, 4, "after what landed");
+        // Over a selection: the selection goes, and the paste fills what it freed.
+        let f = field("abcd").max_length(4);
+        let mut edit = Edit {
+            cursor: 3,
+            anchor: Some(1),
+            ..Default::default()
+        };
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text(format!("{KI}{BA}{THUMB}")));
+        assert_eq!(changed(msg), format!("a{KI}{BA}d"));
+        assert_eq!((edit.cursor, edit.anchor), (5, None));
+    }
+
+    /// The limit and an **open composition** (milestone 849): where a composition may run
+    /// over, the field holds what the input method composed until it finishes, then cuts it
+    /// at a cluster boundary; elsewhere it is held to the limit throughout.
+    #[test]
+    fn a_composition_runs_over_the_limit_only_where_the_platform_lets_it() {
+        // The rule itself, both ways.
+        for exempt in [true, false] {
+            let mut chars: Vec<char> = format!("ab{TOGO}{TOGO}").chars().collect();
+            let (mut cursor, mut anchor) = (6, None);
+            limit_clusters(
+                &mut chars,
+                &mut cursor,
+                &mut anchor,
+                Some((2, 4)),
+                3,
+                exempt,
+            );
+            let kept: String = chars.iter().collect();
+            if exempt {
+                assert_eq!(
+                    kept,
+                    format!("ab{TOGO}{TOGO}"),
+                    "left whole while composing"
+                );
+            } else {
+                assert_eq!(kept, format!("ab{TOGO}"));
+                assert_eq!(cursor, 4);
+            }
+        }
+        // Through the field, as the platform the test runs on has it.
+        let f = field("ab").max_length(3);
+        let mut edit = Edit {
+            cursor: 2,
+            composing: Some((2, 2)),
+            ..Default::default()
+        };
+        let composed = Widget::on_edit(&f, &mut edit, &Key::Text("\u{4F60}\u{597D}".into()));
+        if COMPOSITION_MAY_EXCEED {
+            assert_eq!(changed(composed), "ab\u{4F60}\u{597D}");
+        } else {
+            assert_eq!(changed(composed), "ab\u{4F60}");
+        }
+        // The composition finished: nothing typed, and the limit applies.
+        let over = field("ab\u{4F60}\u{597D}").max_length(3);
+        let mut edit = at(4);
+        let msg = Widget::on_edit(&over, &mut edit, &Key::Text(String::new()));
+        assert_eq!(changed(msg), "ab\u{4F60}");
+        assert_eq!(edit.cursor, 3);
+        // Nothing typed into a field within its limit is nothing done.
+        let mut edit = at(2);
+        assert_eq!(
+            Widget::on_edit(&f, &mut edit, &Key::Text(String::new())),
+            None
+        );
+    }
+
+    fn delete_word(forward: bool) -> Key {
+        Key::DeleteWord { forward }
+    }
+
+    fn delete_line(forward: bool) -> Key {
+        Key::DeleteLine { forward }
+    }
+
+    /// `f` edited by `key` with the caret at `cursor`: its new value and caret.
+    fn edited(f: &TextField<Msg>, cursor: usize, key: &Key) -> (String, usize) {
+        let mut edit = at(cursor);
+        let value = match Widget::on_edit(f, &mut edit, key) {
+            Some(Msg::Changed(value)) => value,
+            None => f.value.clone(),
+        };
+        (value, edit.cursor)
+    }
+
+    /// **Ctrl+Backspace deletes the word before the caret, Ctrl+Delete the one after it**
+    /// (milestone 849, L-038): to the start of the previous word — the spaces before the
+    /// caret with it — and to the end of the next one; never through a grapheme cluster, in
+    /// a word whose letters carry marks, in Devanagari and in Arabic alike. Before, the field
+    /// had no such key.
+    #[test]
+    fn a_word_is_deleted_whole_on_either_side() {
+        let f = field("one two three");
+        assert_eq!(edited(&f, 13, &delete_word(false)), ("one two ".into(), 8));
+        assert_eq!(edited(&f, 8, &delete_word(false)), ("one three".into(), 4));
+        assert_eq!(
+            edited(&f, 6, &delete_word(false)),
+            ("one o three".into(), 4)
+        );
+        assert_eq!(edited(&f, 0, &delete_word(true)), (" two three".into(), 0));
+        assert_eq!(edited(&f, 3, &delete_word(true)), ("one three".into(), 3));
+        assert_eq!(
+            edited(&f, 0, &delete_word(false)),
+            ("one two three".into(), 0)
+        );
+        assert_eq!(
+            edited(&f, 13, &delete_word(true)),
+            ("one two three".into(), 13)
+        );
+
+        // A letter with its accent is one letter of the word.
+        let f = field(&format!("caf{E_ACUTE} ok"));
+        assert_eq!(edited(&f, 5, &delete_word(false)), (" ok".into(), 0));
+        assert_eq!(edited(&f, 0, &delete_word(true)), (" ok".into(), 0));
+        // Devanagari: "kitab" and a second word.
+        let hindi = format!("{KI}\u{924}\u{93E}\u{92C} \u{915}\u{92E}");
+        let f = field(&hindi);
+        let len = hindi.chars().count();
+        assert_eq!(
+            edited(&f, len, &delete_word(false)),
+            (format!("{KI}\u{924}\u{93E}\u{92C} "), 6)
+        );
+        // Arabic, right to left: the order of the text, not the screen's.
+        let arabic = format!("{BA}\u{627}\u{628} \u{643}\u{62A}\u{628}");
+        let f = field(&arabic);
+        assert_eq!(
+            edited(&f, arabic.chars().count(), &delete_word(false)),
+            (format!("{BA}\u{627}\u{628} "), 5)
+        );
+        assert_eq!(
+            edited(&f, 0, &delete_word(true)),
+            (" \u{643}\u{62A}\u{628}".into(), 0)
+        );
+        // An emoji sequence or a flag after a word is never split.
+        let f = field(&format!("hi {FAMILY}{TOGO}"));
+        assert_eq!(edited(&f, 10, &delete_word(false)), (String::new(), 0));
+        assert_eq!(
+            edited(&f, 3, &delete_word(true)),
+            ("hi ".into(), 3),
+            "to the end, as Ctrl+Right goes: no word stops it"
+        );
+    }
+
+    /// A word deletion **stops at a line break**: at the start of a line it takes the break —
+    /// a CR LF whole — and the spaces beside it, not the last word of the line above.
+    #[test]
+    fn a_word_deletion_stops_at_a_line_break() {
+        let f = field("one\r\n  two").multiline();
+        assert_eq!(edited(&f, 7, &delete_word(false)), ("onetwo".into(), 3));
+        assert_eq!(edited(&f, 5, &delete_word(false)), ("one  two".into(), 3));
+        assert_eq!(edited(&f, 3, &delete_word(true)), ("one  two".into(), 3));
+        let f = field("one\ntwo").multiline();
+        assert_eq!(edited(&f, 7, &delete_word(false)), ("one\n".into(), 4));
+    }
+
+    /// A word deletion over a **selection** deletes the selection, as Backspace does.
+    #[test]
+    fn a_word_deletion_takes_the_selection_when_there_is_one() {
+        let f = field("one two three");
+        let mut edit = Edit {
+            cursor: 7,
+            anchor: Some(5),
+            ..Default::default()
+        };
+        let msg = Widget::on_edit(&f, &mut edit, &delete_word(false));
+        assert_eq!(changed(msg), "one t three");
+        assert_eq!((edit.cursor, edit.anchor), (5, None));
+    }
+
+    /// **Cmd+Backspace on a Mac deletes to the start of the line** (Alt+Backspace elsewhere),
+    /// and Cmd+Delete to its end: in a multi-line field the logical line only, and a CR LF
+    /// stays whole.
+    #[test]
+    fn a_line_deletion_stops_at_the_line_break() {
+        let text = "first\r\nsecond line\nthird";
+        let f = field(text).multiline();
+        // From the middle of "second line".
+        assert_eq!(
+            edited(&f, 13, &delete_line(false)),
+            ("first\r\n line\nthird".into(), 7)
+        );
+        assert_eq!(
+            edited(&f, 13, &delete_line(true)),
+            ("first\r\nsecond\nthird".into(), 13)
+        );
+        // At the start of a line, back: nothing — the break above is not the line's.
+        assert_eq!(edited(&f, 7, &delete_line(false)), (text.into(), 7));
+        // From the end of the first line, forwards: nothing, the CR LF is not taken.
+        assert_eq!(edited(&f, 5, &delete_line(true)), (text.into(), 5));
+        // From the start of the first line: the whole of it, and none of its break.
+        assert_eq!(
+            edited(&f, 0, &delete_line(true)),
+            ("\r\nsecond line\nthird".into(), 0)
+        );
+    }
+
+    /// **In an obscured field a word or line deletion takes everything on that side**: the
+    /// words cannot be seen, and stopping between two would tell where the dots hide a space.
+    #[test]
+    fn an_obscured_field_deletes_to_the_end_whatever_the_words() {
+        let f = field("open sesame now").obscure(true);
+        assert_eq!(edited(&f, 11, &delete_word(false)), (" now".into(), 0));
+        assert_eq!(edited(&f, 4, &delete_word(true)), ("open".into(), 4));
+        assert_eq!(
+            edited(&f, 4, &delete_line(false)),
+            (" sesame now".into(), 0)
+        );
+    }
+
+    /// A read-only field refuses a word deletion, as it refuses every change.
+    #[test]
+    fn a_read_only_field_keeps_its_words() {
+        let f = field("one two").read_only();
+        let mut edit = at(7);
+        assert_eq!(Widget::on_edit(&f, &mut edit, &delete_word(false)), None);
+    }
+
+    /// **A CR LF is one step for the caret and for deletion** (milestone 849): Backspace after
+    /// it and Delete before it take both halves, the arrows without a layout cross it at once,
+    /// and End stops before it, never between the CR and the LF — on screen as well.
+    #[test]
+    fn a_crlf_is_crossed_and_deleted_whole() {
+        let f = field("ab\r\ncd").multiline();
+        assert_eq!(edited(&f, 4, &Key::Backspace), ("abcd".into(), 2));
+        assert_eq!(edited(&f, 2, &Key::Delete), ("abcd".into(), 2));
+        assert_eq!(edited(&f, 4, &LEFT).1, 2);
+        assert_eq!(edited(&f, 2, &RIGHT).1, 4);
+        let end = Key::End {
+            shift: false,
+            doc: false,
+        };
+        let home = Key::Home {
+            shift: false,
+            doc: false,
+        };
+        assert_eq!(edited(&f, 0, &end).1, 2, "before the CR");
+        assert_eq!(edited(&f, 5, &home).1, 4, "after the LF");
+        // On screen, through the layout: End on the first line is before the CR too.
+        let mut edit = at(0);
+        assert!(Widget::<Msg>::caret_key(&f, 300.0, &mut edit, &end));
+        assert_eq!(edit.cursor, 2);
+        let mut edit = at(2);
+        assert!(Widget::<Msg>::caret_key(&f, 300.0, &mut edit, &RIGHT));
+        assert_eq!(
+            edit.cursor, 4,
+            "right from the end of a line: the next line's start"
+        );
+    }
+
+    /// **A single-line field leaves the line breaks of a paste out** (milestone 849): the
+    /// lines run on, and a CR LF goes whole. A multi-line field keeps them as they came.
+    #[test]
+    fn a_single_line_field_leaves_line_breaks_out() {
+        let f = field("");
+        let mut edit = at(0);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text("one\r\ntwo\nthree\r".into()));
+        assert_eq!(changed(msg), "onetwothree");
+        assert_eq!(edit.cursor, 11);
+        let f = field("").multiline();
+        let mut edit = at(0);
+        let msg = Widget::on_edit(&f, &mut edit, &Key::Text("one\r\ntwo".into()));
+        assert_eq!(changed(msg), "one\r\ntwo");
+        // A paste of nothing but a line break, into a single line: nothing done.
+        let f = field("ab");
+        let mut edit = at(2);
+        assert_eq!(
+            Widget::on_edit(&f, &mut edit, &Key::Text("\r\n".into())),
+            None
+        );
     }
 }

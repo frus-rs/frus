@@ -61,6 +61,16 @@ impl<'text> Iterator for BidiParagraphs<'text> {
     fn next(&mut self) -> Option<Self::Item> {
         let para = self.info.next()?;
         let paragraph = &self.text[para.range];
+        // frus: a CR LF is one line break. The bidirectional analysis ends a paragraph at
+        // each of its two characters, which made an empty line of the LF; it is taken with
+        // the CR before it instead.
+        if paragraph.ends_with('\r') {
+            if let Some(next) = self.info.as_slice().first() {
+                if &self.text[next.range.clone()] == "\n" {
+                    self.info.next();
+                }
+            }
+        }
         // `para.range` includes the newline that splits the line, so remove it if present
         let mut char_indices = paragraph.char_indices();
         char_indices
