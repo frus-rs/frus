@@ -331,6 +331,8 @@ web-sys = { version = "0.3", features = [
     # window to, and the element type its fallback-content nodes are built as.
     "HtmlCanvasElement",
     "HtmlElement",
+    # Its layer's nodes take the focus without scrolling anything (milestone 845).
+    "FocusOptions",
     # The element a text field is edited through (milestone 711): the two kinds, the keys it
     # hands to the canvas, a composition's text, and where the canvas is on the page.
     "HtmlInputElement",

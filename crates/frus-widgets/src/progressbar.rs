@@ -427,6 +427,9 @@ impl<Msg> Widget<Msg> for LinearProgressIndicator {
             s = s.label(label.clone());
         }
         if let Some(value) = self.value {
+            // A value that is not a number (nothing done out of nothing to do) is read as none
+            // done, not as "NaN" (found reading the web's accessibility tree, milestone 845).
+            let value = if value.is_nan() { 0.0 } else { value };
             let pct = (value * 100.0).round();
             s = s.range(0.0, pct, 100.0);
             s = s.value(self.semantics_value.clone().unwrap_or(format!("{pct}")));
@@ -441,6 +444,13 @@ impl<Msg> Widget<Msg> for LinearProgressIndicator {
 mod tests {
     use super::*;
     use frus_core::Primitive;
+
+    #[test]
+    fn a_value_that_is_not_a_number_reads_as_none_done() {
+        let s = Widget::<()>::semantics(&LinearProgressIndicator::new(f32::NAN)).unwrap();
+        assert_eq!(s.range, Some((0.0, 0.0, 100.0)));
+        assert_eq!(s.value.as_deref(), Some("0"));
+    }
 
     fn painted_at(
         bar: &LinearProgressIndicator,
