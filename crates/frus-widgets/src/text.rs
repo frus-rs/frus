@@ -582,7 +582,7 @@ impl Text {
     /// ```
     /// use frus_widgets::Text;
     ///
-    /// let section = Text::<()>::new("Notifications").heading_level(2);
+    /// let section = Text::new("Notifications").heading_level(2);
     /// # let _ = section;
     /// ```
     pub fn heading_level(mut self, level: u32) -> Self {
