@@ -145,6 +145,40 @@ mod tests {
     /// A widget that carries `enabled` and forgets one of the hooks is not a widget that
     /// looks wrong — it is a widget that looks right and answers a tap. That is the exact
     /// failure milestone 320 caught by hand in `Chip`, and by hand is not a method.
+    /// The container roles by name, for the source check below; kept honest by
+    /// [`container_roles_are_containers`].
+    const CONTAINER_ROLES: [&str; 9] = [
+        "List",
+        "ListItem",
+        "Group",
+        "TabList",
+        "Toolbar",
+        "Navigation",
+        "ScrollView",
+        "Dialog",
+        "Tree",
+    ];
+
+    #[test]
+    fn container_roles_are_containers() {
+        use frus_core::Role;
+        let roles = [
+            Role::List,
+            Role::ListItem,
+            Role::Group,
+            Role::TabList,
+            Role::Toolbar,
+            Role::Navigation,
+            Role::ScrollView,
+            Role::Dialog,
+            Role::Tree,
+        ];
+        for (role, name) in roles.iter().zip(CONTAINER_ROLES) {
+            assert!(role.is_container(), "{name}");
+            assert_eq!(format!("{role:?}"), name);
+        }
+    }
+
     #[test]
     fn every_control_with_an_enabled_flag_honours_all_four() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
@@ -197,7 +231,25 @@ mod tests {
                         // `None` from `on_click`, which is already the disabled answer for
                         // every state there is.
                         let inert = body.trim_end().ends_with("None");
-                        if !body.contains("enabled") && !inert {
+                        // A node that only **holds** others (milestone 848) — a list, its
+                        // rows, a tab bar, a card's group — offers no action of its own, so
+                        // there is nothing for the flag to withhold; the controls inside
+                        // answer for themselves.
+                        let structural = *hook == "fn semantics("
+                            && body.contains("SemanticsProperties::new(")
+                            && !body.contains(".clickable(")
+                            && {
+                                let roles: Vec<&str> = body
+                                    .split("Role::")
+                                    .skip(1)
+                                    .map(|r| {
+                                        r.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("")
+                                    })
+                                    .collect();
+                                !roles.is_empty()
+                                    && roles.iter().all(|r| CONTAINER_ROLES.contains(r))
+                            };
+                        if !body.contains("enabled") && !inert && !structural {
                             offenders.push(format!("{name}::{hook} (byte {at})"));
                         }
                     }

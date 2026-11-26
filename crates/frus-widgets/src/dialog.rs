@@ -194,6 +194,12 @@ impl<Msg: Clone> Widget<Msg> for DialogSurface<Msg> {
     fn on_click(&self) -> Option<Msg> {
         None
     }
+
+    /// A dialog holding what it shows (milestone 848): a reader is kept inside it while it
+    /// is open.
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(frus_core::Role::Dialog))
+    }
 }
 
 /// A **modal surface** over the screen: rounded, elevated, held off the window's edges.

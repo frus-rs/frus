@@ -33,6 +33,12 @@
 //! sends; the browser keeps its own shortcuts; every other key is handed on to the canvas,
 //! where the shell treats it as any key.
 //!
+//! **A tree, not a list** (milestone 848). Each node's element is inside its parent's: a
+//! list's items inside the `role="list"` element, a checkbox inside its item, a dialog's
+//! content inside the `role="dialog"` element, so the browser's own accessibility tree has
+//! the shape of the interface. An element is placed relative to its parent's box, and a
+//! container lets what it holds show past its edges.
+//!
 //! **Cost.** With no change in the tree, a frame compares each node's annotation and
 //! rectangle with last frame's and touches the DOM not at all; a node that changed has only
 //! the attributes that changed written. Nothing here knows whether an assistive technology is
@@ -68,6 +74,11 @@ fn aria_role(role: Role) -> Option<&'static str> {
         Role::Splitter => "separator",
         Role::Tree => "tree",
         Role::TreeItem => "treeitem",
+        Role::List => "list",
+        Role::Group | Role::ScrollView => "group",
+        Role::TabList => "tablist",
+        Role::Toolbar => "toolbar",
+        Role::Navigation => "navigation",
     })
 }
 
@@ -77,7 +88,16 @@ fn aria_role(role: Role) -> Option<&'static str> {
 fn focus_target(role: Role) -> bool {
     !matches!(
         role,
-        Role::Label | Role::Heading | Role::Image | Role::ProgressBar
+        Role::Label
+            | Role::Heading
+            | Role::Image
+            | Role::ProgressBar
+            | Role::List
+            | Role::Group
+            | Role::TabList
+            | Role::Toolbar
+            | Role::Navigation
+            | Role::ScrollView
     )
 }
 
@@ -117,9 +137,17 @@ fn number(value: f32) -> String {
     }
 }
 
-/// The element for a node's annotation.
+/// The element for a node's annotation, for a node that holds nothing.
+#[cfg(test)]
 pub(crate) fn node_dom(sem: &SemanticsProperties) -> NodeDom {
-    let button = sem.clickable;
+    node_dom_holding(sem, false)
+}
+
+/// The element for a node's annotation. A node that `holds` others is never a `<button>`: a
+/// button's content is not read as elements of their own, and a card that can be pressed
+/// would hide the controls inside it (milestone 848).
+pub(crate) fn node_dom_holding(sem: &SemanticsProperties, holds: bool) -> NodeDom {
+    let button = sem.clickable && !holds;
     let mut attrs: Vec<(&'static str, String)> = Vec::new();
     if button {
         attrs.push(("type", "button".into()));
@@ -210,6 +238,18 @@ pub(crate) fn node_dom(sem: &SemanticsProperties) -> NodeDom {
         // What is behind a dialog is not to be read while it is open.
         attrs.push(("aria-modal", "true".into()));
     }
+    // A heading's level and a tree item's depth; an item's place among its siblings
+    // (milestone 848).
+    if let Some(level) = sem
+        .level
+        .filter(|_| matches!(sem.role, Role::Heading | Role::TreeItem))
+    {
+        attrs.push(("aria-level", level.to_string()));
+    }
+    if let Some((position, count)) = sem.position {
+        attrs.push(("aria-posinset", position.to_string()));
+        attrs.push(("aria-setsize", count.to_string()));
+    }
     NodeDom {
         tag: if button { "button" } else { "div" },
         attrs,
@@ -239,6 +279,31 @@ pub(crate) fn place_style(place: [i32; 4]) -> String {
         px(place[2]),
         px(place[3])
     )
+}
+
+/// `place`, moved to be relative to its parent's place: an element is positioned inside its
+/// parent's box (milestone 848).
+pub(crate) fn relative(place: [i32; 4], parent: Option<[i32; 4]>) -> [i32; 4] {
+    match parent {
+        Some(parent) => [
+            place[0] - parent[0],
+            place[1] - parent[1],
+            place[2],
+            place[3],
+        ],
+        None => place,
+    }
+}
+
+/// The inline style of an element at `place` relative to its parent; one that `holds` other
+/// elements lets them show past its edges, which a clipped scroll view's children may.
+pub(crate) fn element_style(place: [i32; 4], holds: bool) -> String {
+    let style = place_style(place);
+    if holds {
+        format!("{style};overflow:visible")
+    } else {
+        style
+    }
 }
 
 /// What a key pressed on one of the layer's elements does.
@@ -295,7 +360,7 @@ const STYLE: &str = "frus-semantics-style";
 const CSS: &str = "\
 #frus-semantics{position:fixed;left:0;top:0;width:0;height:0;overflow:clip;pointer-events:none;\
 color:transparent;margin:0;padding:0;z-index:0}\
-#frus-semantics>*{position:absolute;margin:0;padding:0;border:0;box-sizing:border-box;\
+#frus-semantics *{position:absolute;margin:0;padding:0;border:0;box-sizing:border-box;\
 background:transparent;color:transparent;outline:none;overflow:hidden;font:12px/1 sans-serif;\
 white-space:nowrap;pointer-events:none;-webkit-appearance:none;appearance:none}\
 #frus-semantics [data-t]::before{content:attr(data-t)}";
@@ -319,7 +384,8 @@ mod live {
     use frus_widgets::{Rect, SemanticsProperties, WidgetId};
 
     use super::{
-        adjustable, key_route, node_dom, place, place_style, KeyRoute, NodeDom, CSS, LAYER, STYLE,
+        adjustable, element_style, key_route, node_dom_holding, place, place_style, relative,
+        KeyRoute, NodeDom, CSS, LAYER, STYLE,
     };
 
     /// An action a screen reader asked for, replayed by the shell's main loop.
@@ -343,7 +409,10 @@ mod live {
         el: HtmlElement,
         dom: NodeDom,
         sem: SemanticsProperties,
+        /// Its place, relative to its parent's (milestone 848).
         place: [i32; 4],
+        /// Whether it holds other elements.
+        holds: bool,
         hidden: bool,
         /// Whether the arrows adjust the widget, read by the key listener.
         adjustable: Rc<Cell<bool>>,
@@ -357,8 +426,9 @@ mod live {
         root_style: String,
         live_region: HtmlElement,
         nodes: HashMap<WidgetId, Live>,
-        /// The nodes in the order the layer has them, which is the order they are read in.
-        order: Vec<WidgetId>,
+        /// The nodes in the order the layer has them, which is the order they are read in,
+        /// each with its parent (milestone 848).
+        order: Vec<(WidgetId, Option<WidgetId>)>,
         actions: Actions,
         /// Set for the duration of a `.focus()` call we made ourselves, so the `focus`
         /// listener it fires is not queued back as an assistive-technology request.
@@ -439,6 +509,7 @@ mod live {
         pub(crate) fn update(
             &mut self,
             nodes: &[(WidgetId, Rect, SemanticsProperties)],
+            parents: &[Option<usize>],
             focus: Option<WidgetId>,
             editing: Option<WidgetId>,
             title: &str,
@@ -483,25 +554,38 @@ mod live {
                     .is_some_and(|active| active == AsRef::<Element>::as_ref(el))
             };
             let mut lost_focus = false;
-            let root = &self.root;
             self.nodes.retain(|id, live| {
                 let keep = present.contains(id);
                 if !keep {
                     lost_focus |= is_active(&live.el);
-                    let _ = root.remove_child(&live.el);
+                    // Out of whichever element holds it; what it held and is still present is
+                    // put back below, where it now belongs.
+                    AsRef::<Element>::as_ref(&live.el).remove();
                 }
                 keep
             });
 
+            // Each node's parent, and whether it holds any other.
+            let parent_of =
+                |index: usize| parents.get(index).copied().flatten().filter(|p| *p < index);
+            let mut holds = vec![false; nodes.len()];
+            for index in 0..nodes.len() {
+                if let Some(parent) = parent_of(index) {
+                    holds[parent] = true;
+                }
+            }
+
             let mut reordered = self.order.len() != nodes.len();
             for (index, (id, rect, sem)) in nodes.iter().enumerate() {
-                reordered |= self.order.get(index) != Some(id);
+                let parent = parent_of(index);
+                reordered |= self.order.get(index) != Some(&(*id, parent.map(|p| nodes[p].0)));
                 let hidden = Some(*id) == editing;
-                let at = place(*rect, k);
+                let at = relative(place(*rect, k), parent.map(|p| place(nodes[p].1, k)));
+                let holding = holds[index];
                 let mut respawn = false;
                 if let Some(live) = self.nodes.get_mut(id) {
-                    if live.sem != *sem {
-                        let dom = node_dom(sem);
+                    if live.sem != *sem || live.holds != holding {
+                        let dom = node_dom_holding(sem, holding);
                         if dom.tag == live.dom.tag {
                             write_attrs(&live.el, &live.dom, &dom);
                             live.dom = dom;
@@ -517,20 +601,23 @@ mod live {
                 if respawn {
                     if let Some(old) = self.nodes.remove(id) {
                         lost_focus |= is_active(&old.el);
-                        let _ = self.root.remove_child(&old.el);
+                        AsRef::<Element>::as_ref(&old.el).remove();
                     }
                 }
                 if !self.nodes.contains_key(id) {
-                    if let Some(live) = self.spawn(*id, sem) {
+                    if let Some(live) = self.spawn(*id, sem, holding) {
                         self.nodes.insert(*id, live);
                         reordered = true;
                     }
                 }
                 if let Some(live) = self.nodes.get_mut(id) {
-                    if live.place != at {
-                        live.el.set_attribute("style", &place_style(at)).ok();
+                    if live.place != at || live.holds != holding {
+                        live.el
+                            .set_attribute("style", &element_style(at, holding))
+                            .ok();
                         live.place = at;
                     }
+                    live.holds = holding;
                     if live.hidden != hidden {
                         live.el.set_hidden(hidden);
                         live.hidden = hidden;
@@ -538,20 +625,35 @@ mod live {
                 }
             }
 
-            // In the tree's order: a node added to a list goes where the list has it, not at
-            // the end of everything, or a reader reading on would meet it last.
+            // In the tree's order and shape: a node added to a list goes where the list has
+            // it, inside the list, not at the end of everything, or a reader reading on would
+            // meet it last and outside it. Walked backwards, so each element's next sibling is
+            // already in place; touched only when the order or a parent changed.
             if reordered {
-                self.order = nodes.iter().map(|(id, _, _)| *id).collect();
-                let mut next: Option<web_sys::Node> = None;
-                for id in self.order.iter().rev() {
+                self.order = nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (id, _, _))| (*id, parent_of(index).map(|p| nodes[p].0)))
+                    .collect();
+                let mut next: HashMap<Option<WidgetId>, web_sys::Node> = HashMap::new();
+                for (id, parent) in self.order.iter().rev() {
                     let Some(live) = self.nodes.get(id) else {
                         continue;
                     };
+                    let holder: web_sys::Node = match parent.and_then(|p| self.nodes.get(&p)) {
+                        Some(parent) => parent.el.clone().into(),
+                        None => self.root.clone().into(),
+                    };
+                    let key = parent.filter(|p| self.nodes.contains_key(p));
                     let node: &web_sys::Node = live.el.as_ref();
-                    if node.next_sibling() != next || node.parent_node().is_none() {
-                        let _ = self.root.insert_before(node, next.as_ref());
+                    let after = next.get(&key);
+                    if node.next_sibling().as_ref() != after
+                        || node.parent_node().as_ref() != Some(&holder)
+                    {
+                        lost_focus |= is_active(&live.el);
+                        let _ = holder.insert_before(node, after);
                     }
-                    next = Some(node.clone());
+                    next.insert(key, node.clone());
                 }
             }
 
@@ -579,9 +681,9 @@ mod live {
         }
 
         /// Builds the element for a new widget and attaches its listeners.
-        fn spawn(&self, id: WidgetId, sem: &SemanticsProperties) -> Option<Live> {
+        fn spawn(&self, id: WidgetId, sem: &SemanticsProperties, holds: bool) -> Option<Live> {
             let document = self.canvas.owner_document()?;
-            let dom = node_dom(sem);
+            let dom = node_dom_holding(sem, holds);
             let el: HtmlElement = document
                 .create_element(dom.tag)
                 .ok()?
@@ -596,6 +698,9 @@ mod live {
                 &dom,
             );
             let button = dom.tag == "button";
+            // A node that can be pressed and holds others is not a `<button>` (milestone 848),
+            // and is activated the same way.
+            let pressable = button || sem.clickable;
             let adjust = Rc::new(Cell::new(adjustable(sem)));
             let mut listeners = Vec::new();
             let mut listen = |kind: &str, closure: Listener| {
@@ -603,13 +708,21 @@ mod live {
                     .add_event_listener_with_callback(kind, closure.as_ref().unchecked_ref());
                 listeners.push(closure);
             };
-            if button {
+            if pressable {
                 // A reader's "activate", and Enter or Space on the button.
                 let actions = self.actions.clone();
                 let window = self.window.clone();
                 listen(
                     "click",
-                    Closure::new(move |_event: web_sys::Event| {
+                    Closure::new(move |event: web_sys::Event| {
+                        // Elements nest (milestone 848): a click on a button inside a pressable
+                        // card bubbles to the card. The innermost pressable answers it and
+                        // marks it handled; a click on a label inside the card still reaches
+                        // the card, which nothing inside it answered.
+                        if event.default_prevented() {
+                            return;
+                        }
+                        event.prevent_default();
                         actions.borrow_mut().push(A11yAction::Click(id));
                         window.request_redraw();
                     }),
@@ -639,6 +752,12 @@ mod live {
                 listen(
                     kind,
                     Closure::new(move |event: web_sys::Event| {
+                        // Only the focused element's own listener routes a key: elements nest
+                        // (milestone 848), and a list item that heard its checkbox's Enter
+                        // bubble up would send it to the shell and cancel the browser's click.
+                        if event.event_phase() != web_sys::Event::AT_TARGET {
+                            return;
+                        }
                         let Some(key) = event.dyn_ref::<KeyboardEvent>() else {
                             return;
                         };
@@ -676,6 +795,7 @@ mod live {
                 sem: sem.clone(),
                 // Placed by the caller.
                 place: [i32::MIN; 4],
+                holds,
                 hidden: false,
                 adjustable: adjust,
                 _listeners: listeners,
@@ -970,5 +1090,51 @@ mod tests {
             key_route("r", true, false, false, true, false),
             KeyRoute::Browser
         );
+    }
+
+    /// **A tree's words for the web** (milestone 848): a heading's level, an item's place,
+    /// the roles of what holds others, and a pressable card that is not a `<button>`.
+    #[test]
+    fn levels_places_and_containers() {
+        let dom = node_dom(&sem(Role::Heading).label("Settings").level(2));
+        assert_eq!(dom.attr("aria-level"), Some("2"));
+        let dom = node_dom(&sem(Role::ListItem).position(3, 5));
+        assert_eq!(dom.attr("role"), Some("listitem"));
+        assert_eq!(dom.attr("aria-posinset"), Some("3"));
+        assert_eq!(dom.attr("aria-setsize"), Some("5"));
+        let dom = node_dom(&sem(Role::TreeItem).label("src").level(3).position(1, 2));
+        assert_eq!(dom.attr("aria-level"), Some("3"));
+        // A level means nothing on a button.
+        assert_eq!(
+            node_dom(&sem(Role::Button).level(2).clickable()).attr("aria-level"),
+            None
+        );
+        assert_eq!(node_dom(&sem(Role::List)).attr("role"), Some("list"));
+        assert_eq!(node_dom(&sem(Role::List)).attr("tabindex"), None);
+        assert_eq!(node_dom(&sem(Role::Group)).attr("role"), Some("group"));
+        assert_eq!(node_dom(&sem(Role::TabList)).attr("role"), Some("tablist"));
+        assert_eq!(
+            node_dom(&sem(Role::Navigation)).attr("role"),
+            Some("navigation")
+        );
+        let card = sem(Role::Group).label("Order").clickable();
+        assert_eq!(node_dom_holding(&card, true).tag, "div");
+        assert_eq!(node_dom_holding(&card, false).tag, "button");
+    }
+
+    /// **An element sits in its parent's box** (milestone 848), and one that holds others
+    /// lets them show past its edges.
+    #[test]
+    fn an_element_is_placed_inside_its_parent() {
+        assert_eq!(
+            relative([1000, 2000, 500, 400], Some([800, 1500, 3000, 3000])),
+            [200, 500, 500, 400]
+        );
+        assert_eq!(
+            relative([1000, 2000, 500, 400], None),
+            [1000, 2000, 500, 400]
+        );
+        assert!(element_style([0, 0, 100, 100], true).ends_with(";overflow:visible"));
+        assert!(!element_style([0, 0, 100, 100], false).contains("overflow"));
     }
 }

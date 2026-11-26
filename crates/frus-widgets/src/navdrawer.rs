@@ -820,6 +820,13 @@ impl<Msg: Clone + 'static> Widget<Msg> for NavigationDrawer<Msg> {
         scene.fill_rect(bounds, fill.fade(o));
     }
 
+    /// The application's destinations, held together (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(
+            frus_core::Role::Navigation,
+        ))
+    }
+
     fn on_click(&self) -> Option<Msg> {
         None
     }

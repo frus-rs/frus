@@ -55,6 +55,8 @@ pub struct Container<Msg = crate::callback::Callback> {
     background_blend_mode: Option<frus_core::BlendMode>,
     on_click: Option<Msg>,
     on_long_press: Option<Msg>,
+    /// What the box is to assistive technology, when it is something (milestone 848).
+    semantics: Option<frus_core::SemanticsProperties>,
     /// A repaint boundary: it caches the painted subtree (see
     /// [`crate::Widget::repaint_boundary`]).
     repaint_boundary: bool,
@@ -177,6 +179,13 @@ impl<Msg> Container<Msg> {
         self
     }
 
+    /// States what the box is to assistive technology: the framework's own bars mark their
+    /// surface this way (milestone 848).
+    pub(crate) fn semantics_node(mut self, props: frus_core::SemanticsProperties) -> Self {
+        self.semantics = Some(props);
+        self
+    }
+
     /// Creates an empty container (automatic size, no decoration).
     pub fn new() -> Self {
         Self {
@@ -201,6 +210,7 @@ impl<Msg> Container<Msg> {
             background_blend_mode: None,
             on_click: None,
             on_long_press: None,
+            semantics: None,
             repaint_boundary: false,
             opacity: None,
             opacity_anim: None,
@@ -737,6 +747,10 @@ impl<Msg: Clone> Widget<Msg> for Container<Msg> {
 
     fn on_long_press(&self) -> Option<Msg> {
         self.on_long_press.clone()
+    }
+
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        self.semantics.clone()
     }
 
     fn repaint_boundary(&self) -> bool {

@@ -1349,6 +1349,13 @@ impl<Msg: Clone + 'static> Widget<Msg> for NavigationRail<Msg> {
         }
     }
 
+    /// The application's destinations, held together (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(
+            frus_core::Role::Navigation,
+        ))
+    }
+
     fn on_click(&self) -> Option<Msg> {
         None
     }
@@ -1629,6 +1636,13 @@ impl<Msg: Clone> Widget<Msg> for BottomBar<Msg> {
             Rect::new(bounds.x, bounds.y, bounds.width, 1.0),
             theme.scheme.outline_variant.fade(status.opacity),
         );
+    }
+
+    /// The application's destinations, held together (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(
+            frus_core::Role::Navigation,
+        ))
     }
 
     fn on_click(&self) -> Option<Msg> {

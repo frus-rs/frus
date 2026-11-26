@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the demo's accessibility bridge in Firefox (milestone 845, #18).
+"""Checks the demo's accessibility bridge in Firefox (milestones 845 and 848, #18).
 
 Firefox hands no accessibility tree to automation (WebDriver BiDi has none), so this reads
 what Firefox builds its tree from: the bridge's layer over the canvas, the attributes of its
@@ -13,7 +13,7 @@ On the settings screen of the demo:
 - a text's words are its generated content (what Firefox's tree reads), and a find does not
   reach them twice;
 - every element has a box over its widget, and a press there still lands on the canvas;
-- the tab showing is selected;
+- the tab showing is selected, and its element is inside its tablist's (milestone 848);
 - a click on the switch's element (a reader's "activate") turns it on;
 - an increment on the volume's element (the arrow a browser sends for it) moves it;
 - a real arrow key, with the slider's element focused, moves the volume.
@@ -102,6 +102,10 @@ def main(base):
         top = page.js("document.querySelector('canvas').getBoundingClientRect().top")
         print(f"    tabs: {tabs}; canvas top {top}")
         expect_true("the tab showing is selected", bool(tabs) and any(t.endswith("=true") for t in tabs), str(tabs))
+        # The tree has a shape (milestone 848): a tab's element is inside its tablist's.
+        expect("the tabs' elements are inside the tablist's",
+               page.js(f"[...{LAYER}.querySelectorAll('[role=tab]')].every((t) => !!t.parentElement.closest('[role=tablist]'))"),
+               True)
         page.js(f"{node('[role=switch]')}.click()")
         time.sleep(1)
         expect("a click on the switch's element turns it on",
