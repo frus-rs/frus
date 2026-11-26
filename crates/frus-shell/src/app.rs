@@ -174,6 +174,24 @@ fn word_held(apple: bool, ctrl: bool, alt: bool) -> bool {
     }
 }
 
+/// What **Backspace** — or **Delete**, `forward` — does under the modifiers held (milestone
+/// 849): a word with the modifier that makes the arrows jump one (Option on an Apple keyboard,
+/// Ctrl elsewhere), the rest of the line with Cmd on an Apple keyboard and Alt elsewhere, and
+/// one grapheme cluster otherwise. An Android keyboard with Ctrl and Alt keys is read the same
+/// way, as a keyboard that is not Apple's.
+pub(crate) fn deletion_key(apple: bool, ctrl: bool, alt: bool, meta: bool, forward: bool) -> Key {
+    let line = if apple { meta } else { alt };
+    if line {
+        Key::DeleteLine { forward }
+    } else if word_held(apple, ctrl, alt) {
+        Key::DeleteWord { forward }
+    } else if forward {
+        Key::Delete
+    } else {
+        Key::Backspace
+    }
+}
+
 /// On an Apple keyboard, **Cmd with an arrow** goes to a bound of the text (milestone 736):
 /// left and right to the start and the end of the line, up and down to those of the whole
 /// field — what Home and End, and Ctrl+Home and Ctrl+End, do elsewhere, and are spelled as
@@ -2058,6 +2076,12 @@ impl<A: Application> App<A> {
                 continue;
             }
             let (value, browser) = crate::web_editing::read(&element);
+            let was_composing = self
+                .win
+                .runtime
+                .edits
+                .get(&id)
+                .is_some_and(|edit| edit.composing.is_some());
             // Through the field's own typing, so its filter and its limit apply (milestone
             // 749).
             let Some((message, edit)) = self
@@ -2065,7 +2089,9 @@ impl<A: Application> App<A> {
                 .tree
                 .as_ref()
                 .and_then(|tree| find_widget(tree.as_ref(), id))
-                .map(|widget| crate::web_editing::browser_change(widget, &value, browser))
+                .map(|widget| {
+                    crate::web_editing::browser_change(widget, &value, browser, was_composing)
+                })
             else {
                 continue;
             };
@@ -10869,8 +10895,22 @@ impl<A: Application> App<A> {
 
         let shift = self.shift;
         let key = match &event.logical_key {
-            WinitKey::Named(NamedKey::Backspace) => Some(Key::Backspace),
-            WinitKey::Named(NamedKey::Delete) => Some(Key::Delete),
+            // With Ctrl, a word; with Alt, the rest of the line — Option and Cmd on an Apple
+            // keyboard (milestone 849).
+            WinitKey::Named(NamedKey::Backspace) => Some(deletion_key(
+                self.apple_keys,
+                self.ctrl,
+                self.alt,
+                self.meta,
+                false,
+            )),
+            WinitKey::Named(NamedKey::Delete) => Some(deletion_key(
+                self.apple_keys,
+                self.ctrl,
+                self.alt,
+                self.meta,
+                true,
+            )),
             // Repeating Enter does not submit again; text and deletion do
             // repeat normally.
             // Shift+Enter asks for a line break, which a field that sends on Enter still
@@ -13291,6 +13331,53 @@ mod tests {
             ),
             Some(ClipCommand::Copy)
         );
+    }
+
+    /// **Backspace and Delete delete a word or the rest of the line under a modifier**
+    /// (milestone 849, L-038): Ctrl and Alt elsewhere, Option and Cmd on an Apple keyboard.
+    #[test]
+    fn a_modifier_deletes_a_word_or_a_line_as_the_keyboard_has_it() {
+        use super::{deletion_key, Key};
+        let back = |apple, ctrl, alt, meta| deletion_key(apple, ctrl, alt, meta, false);
+        let forward = |apple, ctrl, alt, meta| deletion_key(apple, ctrl, alt, meta, true);
+        // Windows, Linux, Android: Ctrl a word, Alt the line.
+        assert_eq!(back(false, false, false, false), Key::Backspace);
+        assert_eq!(forward(false, false, false, false), Key::Delete);
+        assert_eq!(
+            back(false, true, false, false),
+            Key::DeleteWord { forward: false }
+        );
+        assert_eq!(
+            forward(false, true, false, false),
+            Key::DeleteWord { forward: true }
+        );
+        assert_eq!(
+            back(false, false, true, false),
+            Key::DeleteLine { forward: false }
+        );
+        assert_eq!(
+            back(false, false, false, true),
+            Key::Backspace,
+            "the logo key is not an editing modifier elsewhere"
+        );
+        // An Apple keyboard: Option a word, Cmd the line, Ctrl nothing more.
+        assert_eq!(
+            back(true, false, true, false),
+            Key::DeleteWord { forward: false }
+        );
+        assert_eq!(
+            forward(true, false, true, false),
+            Key::DeleteWord { forward: true }
+        );
+        assert_eq!(
+            back(true, false, false, true),
+            Key::DeleteLine { forward: false }
+        );
+        assert_eq!(
+            forward(true, false, false, true),
+            Key::DeleteLine { forward: true }
+        );
+        assert_eq!(back(true, true, false, false), Key::Backspace);
     }
 
     /// **An arrow jumps a word with Option on an Apple keyboard and with Ctrl elsewhere**,

@@ -37,9 +37,19 @@ pub(crate) enum ImeEvent {
     Delete { before: u32, after: u32 },
     /// An editor action: the keyboard's Enter, OK or Search.
     Action,
-    /// A key relayed by the IME (`sendKeyEvent`), already filtered on the Java side.
-    Key { code: i32, unicode: u32 },
+    /// A key relayed by the IME (`sendKeyEvent`), already filtered on the Java side, with the
+    /// modifiers held (`KeyEvent.getMetaState`).
+    Key { code: i32, unicode: u32, meta: i32 },
 }
+
+/// Android's Backspace key (`KeyEvent.KEYCODE_DEL`).
+pub(crate) const KEYCODE_DEL: i32 = 67;
+/// Android's forward Delete key (`KeyEvent.KEYCODE_FORWARD_DEL`).
+pub(crate) const KEYCODE_FORWARD_DEL: i32 = 112;
+/// Either Ctrl key is held (`KeyEvent.META_CTRL_ON`).
+const META_CTRL_ON: i32 = 0x1000;
+/// Either Alt key is held (`KeyEvent.META_ALT_ON`).
+const META_ALT_ON: i32 = 0x02;
 
 /// One thing to do to the focused field, in order.
 #[derive(Debug, Clone, PartialEq)]
@@ -182,9 +192,21 @@ pub(crate) fn plan(event: &ImeEvent, edit: &Edit, text: &str) -> Vec<Step> {
             steps
         }
         ImeEvent::Action => vec![Step::Key(Key::Enter)],
-        ImeEvent::Key { code, unicode } => match code {
+        ImeEvent::Key {
+            code,
+            unicode,
+            meta,
+        } => match *code {
             66 => vec![Step::Key(Key::Enter)],
-            67 => vec![Step::Key(Key::Backspace)],
+            // Backspace and forward Delete: with Ctrl a word, with Alt the line, as on any
+            // keyboard that is not Apple's (milestone 849).
+            KEYCODE_DEL | KEYCODE_FORWARD_DEL => vec![Step::Key(crate::app::deletion_key(
+                false,
+                meta & META_CTRL_ON != 0,
+                meta & META_ALT_ON != 0,
+                false,
+                *code == KEYCODE_FORWARD_DEL,
+            ))],
             _ => char::from_u32(*unicode)
                 .filter(|c| !c.is_control())
                 .map(|c| vec![Step::Key(Key::Text(c.to_string()))])
@@ -404,16 +426,19 @@ mod tests {
         field.run(ImeEvent::Key {
             code: 67,
             unicode: 0,
+            meta: 0,
         });
         assert_eq!(field.text(), "abc", "67 is Backspace");
         field.run(ImeEvent::Key {
             code: 29,
             unicode: 'x' as u32,
+            meta: 0,
         });
         assert_eq!(field.text(), "abcx", "a character is typed");
         field.run(ImeEvent::Key {
             code: 61,
             unicode: '\t' as u32,
+            meta: 0,
         });
         assert_eq!(field.text(), "abcx", "a control character is not");
         field.edit.cursor = 2;
@@ -427,8 +452,43 @@ mod tests {
         field.run(ImeEvent::Key {
             code: 66,
             unicode: 0,
+            meta: 0,
         });
         assert_eq!(field.submitted, 2, "the action and 66 are Enter");
+    }
+
+    /// **Ctrl+Backspace on a keyboard plugged into a phone deletes a word** (milestone 849):
+    /// the key arrives with its modifiers, and Ctrl makes Backspace and forward Delete delete
+    /// a word, Alt the rest of the line. Before, the modifiers were dropped on the way and
+    /// forward Delete was not taken at all.
+    #[test]
+    fn a_hardware_keyboard_deletes_words_with_ctrl() {
+        let key = |code, meta| {
+            plan(
+                &ImeEvent::Key {
+                    code,
+                    unicode: 0,
+                    meta,
+                },
+                &Edit::default(),
+                "one two",
+            )
+        };
+        let ctrl = META_CTRL_ON | 0x2000; // Ctrl, and which of the two (the left one).
+        assert_eq!(
+            key(KEYCODE_DEL, ctrl),
+            vec![Step::Key(Key::DeleteWord { forward: false })]
+        );
+        assert_eq!(
+            key(KEYCODE_FORWARD_DEL, ctrl),
+            vec![Step::Key(Key::DeleteWord { forward: true })]
+        );
+        assert_eq!(
+            key(KEYCODE_DEL, META_ALT_ON | 0x10),
+            vec![Step::Key(Key::DeleteLine { forward: false })]
+        );
+        assert_eq!(key(KEYCODE_DEL, 0), vec![Step::Key(Key::Backspace)]);
+        assert_eq!(key(KEYCODE_FORWARD_DEL, 0), vec![Step::Key(Key::Delete)]);
     }
 
     /// **Deleting around the caret removes the units the input method named** (milestone
