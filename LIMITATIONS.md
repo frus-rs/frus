@@ -605,12 +605,16 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** input
 - **Platforms:** Windows, macOS, Linux, Android with a keyboard
-- **Status:** open
-- **What you hit:** Ctrl+Backspace (Option+Backspace on a Mac) deletes one character, as
-  Backspace does: the field's editing has no word deletion. On the web the browser's own input
-  element does it.
-- **Workaround:** None.
+- **Status:** fixed in 0.7.0
+- **What you hit:** Up to 0.6.0, Ctrl+Backspace (Option+Backspace on a Mac) deleted one
+  character, as Backspace does: the field's editing had no word deletion. On the web the
+  browser's own input element did it. Since milestone 849, Ctrl+Backspace and Ctrl+Delete
+  delete a word (Option on an Apple keyboard, Ctrl on an Android hardware keyboard), and
+  Cmd+Backspace and Cmd+Delete delete to the ends of the line on an Apple keyboard (Alt
+  elsewhere); one undo brings the deleted text back.
+- **Workaround:** None needed.
 - **Evidence:** [docs/milestone-736.md](docs/milestone-736.md),
+  [docs/milestone-849.md](docs/milestone-849.md),
   [crates/frus-widgets/src/interaction.rs](crates/frus-widgets/src/interaction.rs)
 
 ## Accessibility

@@ -1334,15 +1334,10 @@ pub fn line_spans_resolved(
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
-    // A buffer line per explicit newline; a layout run's glyph offsets are into its own
+    // A buffer line per explicit line break; a layout run's glyph offsets are into its own
     // buffer line, so the starts of those lines are what turns them into offsets into the
     // whole.
-    let mut line_start = Vec::new();
-    let mut at = 0usize;
-    for line in &buffer.lines {
-        line_start.push(at);
-        at += line.text().len() + 1;
-    }
+    let line_start = buffer_line_starts(text, &buffer);
 
     let mut spans = Vec::new();
     for run in buffer.layout_runs() {
@@ -1468,15 +1463,11 @@ pub fn runs_cut_at(
     buffer.set_rich_text(spans, &Attrs::new(), Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut font_system, false);
 
-    // A buffer line per explicit newline; the offsets a layout run carries are into its
+    // A buffer line per explicit line break; the offsets a layout run carries are into its
     // own buffer line, so the starts of those lines are what turns them back into offsets
     // into the whole.
-    let mut line_start = Vec::new();
-    let mut at = 0usize;
-    for line in &buffer.lines {
-        line_start.push(at);
-        at += line.text().len() + 1;
-    }
+    let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+    let line_start = buffer_line_starts(&text, &buffer);
     for (index, run) in buffer.layout_runs().enumerate() {
         if index < max_lines {
             continue;
@@ -1485,6 +1476,44 @@ pub fn runs_cut_at(
         return Some(line_start.get(run.line_i).copied().unwrap_or(0) + start);
     }
     None
+}
+
+/// Whether `c` ends a paragraph, as the shaper splits a text into lines: a line feed, a
+/// carriage return, and the other paragraph separators of the bidirectional algorithm.
+fn is_paragraph_separator(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{1C}' | '\u{1D}' | '\u{1E}' | '\u{85}' | '\u{2029}'
+    )
+}
+
+/// The byte offset in `text` at which each of `buffer`'s lines starts — `buffer` having been
+/// given `text`, whole or as runs.
+///
+/// Read from the lines themselves rather than by splitting `text` again: the shaper breaks a
+/// line at a CR LF (one break, two characters), a lone CR and a lone LF alike, and an offset
+/// counted as "the line and one more byte" put every line after a CR LF one byte early.
+fn buffer_line_starts(text: &str, buffer: &Buffer) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(buffer.lines.len());
+    let mut at = 0usize;
+    for line in &buffer.lines {
+        starts.push(at);
+        at = (at + line.text().len()).min(text.len());
+        let rest = text.get(at..).unwrap_or("");
+        let ending = line.ending().as_str();
+        at += if !ending.is_empty() && rest.starts_with(ending) {
+            ending.len()
+        } else if rest.starts_with("\r\n") {
+            // A rich text's line says LF whatever ended it, and may have left the CR out.
+            2
+        } else {
+            rest.chars()
+                .next()
+                .filter(|&c| is_paragraph_separator(c))
+                .map_or(0, char::len_utf8)
+        };
+    }
+    starts
 }
 
 /// One shaped line of a [`TextLayout`]: where each of its characters was drawn and where
@@ -1796,16 +1825,27 @@ impl TextLayout {
         let mut height = 0.0_f32;
 
         if let Some(buffer) = buffer.filter(|_| !text.is_empty()) {
-            // The byte offset of every **hard** line's start (those split by `\n`).
-            let hard: Vec<&str> = text.split('\n').collect();
-            let mut line_byte_start = Vec::with_capacity(hard.len());
-            {
-                let mut b = 0usize;
-                for l in &hard {
-                    line_byte_start.push(b);
-                    b += l.len() + 1; // +1 for the `\n`
-                }
-            }
+            // The byte offset of every **hard** line's start, and its text: the shaper's own
+            // lines, so that a CR LF — or a lone CR, which it breaks on too — is one break
+            // here as it is on screen.
+            let line_byte_start = buffer_line_starts(text, buffer);
+            let hard: Vec<&str> = buffer
+                .lines
+                .iter()
+                .zip(&line_byte_start)
+                .map(|(line, &start)| {
+                    let end = (start + line.text().len()).min(text.len());
+                    let line_text = text.get(start..end).unwrap_or("");
+                    // A rich text's lines are split at the `\n` alone, and keep the CR of a
+                    // CR LF: it is part of the break, not a character of the line, and the
+                    // caret must not stop between the two.
+                    let next = text.get(end..).and_then(|rest| rest.chars().next());
+                    match line_text.strip_suffix('\r') {
+                        Some(kept) if next.is_some_and(is_paragraph_separator) => kept,
+                        _ => line_text,
+                    }
+                })
+                .collect();
 
             // Collect the runs so we can look at the next one, which ends this segment.
             let runs: Vec<_> = buffer.layout_runs().collect();
@@ -1825,7 +1865,9 @@ impl TextLayout {
                     .get(idx + 1)
                     .filter(|r| r.line_i == run.line_i)
                     .and_then(|r| r.glyphs.iter().map(|g| g.start).min())
-                    .unwrap_or(line_text.len());
+                    .unwrap_or(line_text.len())
+                    .min(line_text.len());
+                let lo = lo.min(hi);
 
                 // The segment's character boundaries, in bytes relative to the hard line.
                 let span = &line_text[lo..hi];
@@ -3870,5 +3912,122 @@ mod tests {
                 "index {inside} drawn at {x}, between {before} and {after}"
             );
         }
+    }
+
+    /// Every boundary a press anywhere on `layout` can put the caret at, sweeping each line.
+    fn pressable(layout: &TextLayout) -> Vec<usize> {
+        let size = layout.size();
+        let mut seen = Vec::new();
+        let mut y = 0.5;
+        while y < size.height {
+            let mut x = -4.0;
+            while x < size.width + 4.0 {
+                let at = layout.position_at(Point::new(x, y)).offset;
+                if !seen.contains(&at) {
+                    seen.push(at);
+                }
+                x += 0.5;
+            }
+            y += 2.0;
+        }
+        seen.sort_unstable();
+        seen
+    }
+
+    /// **A CR LF is one line break** (milestone 849): a text pasted from Windows lays out on
+    /// as many lines as the same text with LF alone, the second line starts after both
+    /// characters, and neither a press, an arrow nor End puts the caret between the two.
+    /// Before, the line was split at the LF only and kept the CR as a character of its own:
+    /// End stopped at 3, between the CR and the LF, where typing split the break in two.
+    #[test]
+    fn a_crlf_is_one_line_break() {
+        let crlf = TextLayout::new("ab\r\ncd", 16.0, FontWeight::Regular, false);
+        let lf = TextLayout::new("ab\ncd", 16.0, FontWeight::Regular, false);
+        assert_eq!(
+            crlf.size().height,
+            lf.size().height,
+            "two lines, as with LF"
+        );
+        assert_eq!(
+            crlf.line_bounds(TextPosition::new(0)),
+            (TextPosition::new(0), TextPosition::upstream(2)),
+            "the first line ends before the CR"
+        );
+        assert_eq!(
+            crlf.line_bounds(TextPosition::new(4)).0,
+            TextPosition::new(4),
+            "the second starts after the LF"
+        );
+        assert_eq!(
+            crlf.visual_step(TextPosition::upstream(2), true),
+            TextPosition::new(4),
+            "right from the end of the first line is the start of the second"
+        );
+        assert_eq!(
+            crlf.visual_step(TextPosition::new(4), false),
+            TextPosition::upstream(2),
+            "and back"
+        );
+        assert!(
+            crlf.caret_rect(4).y > crlf.caret_rect(2).y,
+            "the second line is below the first"
+        );
+        assert_eq!(
+            pressable(&crlf),
+            [0, 1, 2, 4, 5, 6],
+            "never between CR and LF"
+        );
+        // The spans a line limit cuts at agree.
+        let spans = line_spans("ab\r\ncd", 16.0, FontWeight::Regular, false, None, true);
+        assert_eq!(spans, [0..2, 4..6]);
+    }
+
+    /// A lone CR breaks the line on screen, so the layout must break it too. Before, the
+    /// layout split at LF only, found one line where the shaper had two, and indexed past
+    /// the end of its own list: a panic.
+    #[test]
+    fn a_lone_cr_is_a_line_break_too() {
+        let layout = TextLayout::new("ab\rcd", 16.0, FontWeight::Regular, false);
+        let lf = TextLayout::new("ab\ncd", 16.0, FontWeight::Regular, false);
+        assert_eq!(layout.size().height, lf.size().height);
+        assert_eq!(
+            layout.line_bounds(TextPosition::new(3)).0,
+            TextPosition::new(3)
+        );
+        assert_eq!(pressable(&layout), [0, 1, 2, 3, 4, 5]);
+    }
+
+    /// Rich text breaks at a CR LF once too, and its caret does not stop between the two,
+    /// in plain ASCII and in text that takes the full bidirectional analysis alike.
+    #[test]
+    fn rich_text_breaks_once_at_a_crlf() {
+        let run = |text: &str| TextRun {
+            text: text.into(),
+            size: 16.0,
+            weight: FontWeight::Regular,
+            italic: false,
+            color: frus_core::Color::WHITE,
+            decoration: frus_core::TextDecoration::default(),
+            decoration_color: None,
+            letter_spacing: 0.0,
+            shaping: frus_core::TextShaping::NONE,
+        };
+        for text in ["ab\r\ncd", "\u{e9}b\r\ncd", "ab\r\n\u{628}\u{627}"] {
+            let crlf = TextLayout::of_runs(&[run(text)], None, true);
+            let lf = TextLayout::of_runs(&[run(&text.replace("\r\n", "\n"))], None, true);
+            assert_eq!(crlf.size().height, lf.size().height, "{text:?}: two lines");
+            let stops = pressable(&crlf);
+            assert!(
+                !stops.contains(&3),
+                "{text:?}: between CR and LF: {stops:?}"
+            );
+            assert_eq!(
+                crlf.line_bounds(TextPosition::new(0)).1,
+                TextPosition::upstream(2),
+                "{text:?}"
+            );
+        }
+        let at = runs_cut_at(&[run("ab\r\ncd\r\nef")], None, true, 2);
+        assert_eq!(at, Some(8), "the third line starts after the second CR LF");
     }
 }

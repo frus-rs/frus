@@ -251,6 +251,9 @@ mod window_system;
 // The Windows host of native views (milestone 802).
 #[cfg(windows)]
 mod windows_platform_view;
+/// Word and line deletion in a field, through the shell (milestone 849).
+#[cfg(all(test, desktop))]
+mod word_deletion_tests;
 // When the next frame comes, with decoration alone moving (milestone 783).
 mod pacing;
 

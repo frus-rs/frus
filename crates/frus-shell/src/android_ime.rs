@@ -450,19 +450,22 @@ extern "system" fn native_key(
     code: jint,
     down: jboolean,
     unicode: jint,
-    _meta: jint,
+    meta: jint,
 ) -> jboolean {
+    use crate::ime::{KEYCODE_DEL, KEYCODE_FORWARD_DEL};
     const KEYCODE_ENTER: jint = 66;
-    const KEYCODE_DEL: jint = 67;
+    let editing = matches!(code, KEYCODE_ENTER | KEYCODE_DEL | KEYCODE_FORWARD_DEL);
     if down != JNI_TRUE {
         // The releases of consumed keys are consumed too, for symmetry.
-        return matches!(code, KEYCODE_ENTER | KEYCODE_DEL) as jboolean | (unicode > 0) as jboolean;
+        return editing as jboolean | (unicode > 0) as jboolean;
     }
-    let handled = matches!(code, KEYCODE_ENTER | KEYCODE_DEL) || unicode > 0;
+    let handled = editing || unicode > 0;
     if handled {
+        // With the modifiers: Ctrl+Backspace deletes a word (milestone 849).
         push(ImeEvent::Key {
             code,
             unicode: unicode.max(0) as u32,
+            meta,
         });
     }
     handled as jboolean
