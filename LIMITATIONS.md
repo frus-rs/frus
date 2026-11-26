@@ -450,11 +450,12 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Area:** rendering
 - **Platforms:** All
 - **Status:** partial
-- **What you hit:** Since milestone 850 a layer shown smaller has a mip chain and one shown
-  larger is drawn at the scale it is shown at, so its text stays sharp. What is left: a layer
+- **What you hit:** Since milestone 850 a scaled layer at rest is drawn at the scale it is
+  shown at, so its edges and text stay sharp; one whose scale moves below its own size is
+  read through a mip chain, about a pixel softer than at rest. What is left: a layer
   with an image filter (a blur) gets neither, and is drawn at its own size; a layer that holds
-  another transformed layer is drawn at its own size when it is enlarged (the inner layer is
-  drawn at its own scale); while a scale grows, the texture is drawn up to a quarter ahead of it
+  another transformed layer, or is clipped to a path, over a backdrop or coloured by a shader,
+  is drawn at its own size, shrunk or enlarged (the inner layer is drawn at its own scale); while a scale grows, the texture is drawn up to a quarter ahead of it
   and shown that much smaller, and it is drawn at the exact scale only on a frame drawn after
   the scale has come to rest. A transformed layer holds only what of its content is laid out
   on the screen, flat: content laid out past the screen's edge and shrunk into view by the

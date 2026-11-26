@@ -14,16 +14,22 @@ any release may break.
 ## [Unreleased]
 
 - **A scaled layer is drawn for the scale it is shown at** (J850, L-026, part of #221 and
-  #224). A layer shown smaller by its transform (a page zooming out, a picker's rows, a
-  thumbnail) gets a mip chain, made on the GPU when its texture is drawn and kept with it, and
-  is read trilinearly: a fine pattern or small text keeps its tone instead of shimmering as the
-  scale moves. A layer shown larger has its content drawn at that scale, so its text is
+  #224). A layer shown smaller by its transform and at rest (a `FittedBox` shrinking its
+  child, a `Transform::scale` below one) has its content drawn at that scale, as sharp as
+  content drawn at that size. While its scale moves (a page zooming out, a picker's rows), it
+  is drawn at its own size with a mip chain, made on the GPU and kept with it, and read
+  trilinearly: a fine pattern or small text keeps its tone instead of shimmering, and it is not
+  drawn again each frame; it is drawn once more at its exact scale when the scale comes to
+  rest. `frus_gpu::render_offscreen_frames` and `frus_test::render_scenes` render frames in a
+  row through one renderer, so a test can show a layer whose scale moves. A layer shown larger has its content drawn at that scale, so its text is
   rasterised at the size it is shown at and stays as sharp as text drawn at that size. While a
   scale grows, the texture is drawn a quarter ahead of it, so it is drawn again a handful of
   times rather than every frame; at rest it is drawn once more at the exact scale. An enlarged
   texture never holds more texels than the screen has pixels, and a frame in which nothing
-  changed draws no layer again. A layer with a blur, and a layer holding another transformed
-  layer, are still drawn at their own size when enlarged.
+  changed draws no layer again. A texture drawn at another scale lies on the screen's pixel
+  grid, so a box shrunk to 0.6 has edges one pixel wide. A layer with a blur, and a layer with
+  the whole target as its texture (a path clip, a backdrop, a shader, another transformed layer
+  inside it), are still drawn at their own size, shrunk or enlarged.
 - **A page follows the system its browser runs on, from the first theme** (J847). A web
   application is made before the shell starts it, and a theme made then (the default one, a
   seeded one) was given Android's conventions in every browser: on a Windows, Linux or Mac

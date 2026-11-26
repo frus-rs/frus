@@ -82,10 +82,14 @@ A `Transform` (and every transition that scales, turns or moves a page) draws it
 into a texture of its own and composites that texture through the transform. The texture is
 drawn for the scale it is shown at:
 
-- **Shown smaller**, it gets a mip chain, made on the GPU when the texture is drawn and kept
-  with it, and is read trilinearly: fine text and patterns keep their tone instead of
-  shimmering as the scale moves. The chain costs a third more memory than the texture, and
-  only layers shown smaller pay it.
+- **Shown smaller and at rest** (a `FittedBox` shrinking its child, a `Transform::scale`
+  below one), its content is drawn at that scale, so its edges and text are as sharp as
+  content drawn at that size.
+- **Shrinking or growing below its own size**, it is drawn at its own size with a mip chain,
+  made on the GPU and kept with it, and is read trilinearly: fine text and patterns keep their
+  tone instead of shimmering as the scale moves, and the texture is not drawn again each
+  frame. The chain costs a third more memory than the texture. When the scale comes to rest,
+  the layer is drawn once more at its exact scale, without a chain.
 - **Shown larger**, its content is drawn at that scale, so text is rasterised at the size it
   is shown at and stays sharp. While the scale grows, the texture is drawn ahead of it and
   drawn again only each time the scale passes it, not every frame. Until then it is shown at
@@ -93,7 +97,8 @@ drawn for the scale it is shown at:
   once more at the exact scale. An enlarged texture never holds more texels than the screen
   has pixels.
 
-Content that changes every frame is drawn again every frame anyway; while it scales, it is
+A layer shown for the first time is drawn at its exact scale. Content that changes every
+frame is drawn again every frame anyway; while it scales, it is
 drawn at the same few sizes, so its glyphs are not rasterised again each frame. A frame in
 which nothing changed draws no layer again.
 

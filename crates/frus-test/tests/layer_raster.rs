@@ -3,9 +3,11 @@
 
 //! **A transformed layer is drawn for the scale it is shown at** (milestone 850).
 //!
-//! - **Shrunk**, a layer's texture gets a mip chain: a fine pattern shows as the tone it has
-//!   from afar, wherever the layer lies on the pixel grid, instead of whichever texels the
-//!   samples landed on.
+//! - **Shrinking**, while its scale moves, a layer's texture gets a mip chain: a fine pattern
+//!   shows as the tone it has from afar, wherever the layer lies on the pixel grid, instead of
+//!   whichever texels the samples landed on.
+//! - **Shrunk and at rest**, its content is drawn at its exact scale: its edges and text are as
+//!   sharp as content drawn at that size, which a chain would soften by about a pixel.
 //! - **Enlarged**, a layer's content is drawn at the scale it is shown at: its text is
 //!   rasterised at its final size and keeps edges as sharp as text drawn at that size,
 //!   instead of a small texture magnified.
@@ -17,7 +19,7 @@ use frus_core::{
     Affine, Color, FilterQuality, ImageData, ImageHandle, LayerFilter, LayerTransform, Point,
     Primitive, Rect, Scene, TextStyle,
 };
-use frus_test::{render_scene, Snapshot};
+use frus_test::{render_scene, render_scenes, Snapshot};
 
 const SIDE: u32 = 256;
 /// Larger than the picture: a transformed layer holds what of its content lies flat on the
@@ -56,20 +58,34 @@ fn layer(content: Scene, affine: Affine) -> Scene {
 }
 
 /// The checkerboard at its own size, read texel for texel (`Low`, no chain of its own), in
-/// a layer shrunk to one eighth and moved to `(x, y)`.
-fn shrunk_checkerboard(image: &ImageHandle, x: f32, y: f32) -> Scene {
+/// a layer scaled by `scale` and moved to `(x, y)`.
+fn checkerboard_layer(image: &ImageHandle, scale: f32, x: f32, y: f32) -> Scene {
     let mut content = Scene::new();
     let whole = Rect::new(0.0, 0.0, 1.0, 1.0);
     let rect = Rect::new(0.0, 0.0, SIDE as f32, SIDE as f32);
     content.draw_image_with(image, rect, whole, Color::WHITE, false, FilterQuality::Low);
     layer(
         content,
-        Affine::scale(0.125, 0.125).then(Affine::translation(x, y)),
+        Affine::scale(scale, scale).then(Affine::translation(x, y)),
     )
 }
 
 fn render(scene: &Scene, w: u32, h: u32) -> Option<Snapshot> {
     let frame = render_scene(scene, w, h, Color::BLACK);
+    if frame.is_none() {
+        eprintln!("no GPU adapter available: test skipped");
+    }
+    frame
+}
+
+/// The checkerboard's layer shrinking: a frame at its own size, then one at an eighth,
+/// moved to `(x, y)`. Its scale is moving, so it is read through its chain.
+fn shrinking_checkerboard(image: &ImageHandle, x: f32, y: f32) -> Option<Snapshot> {
+    let frames = [
+        checkerboard_layer(image, 1.0, x, y),
+        checkerboard_layer(image, 0.125, x, y),
+    ];
+    let frame = render_scenes(&frames, CANVAS, CANVAS, Color::BLACK);
     if frame.is_none() {
         eprintln!("no GPU adapter available: test skipped");
     }
@@ -93,17 +109,13 @@ fn mean_and_spread(values: &[u8]) -> (f32, u8) {
     (mean, spread)
 }
 
-/// A one-pixel checkerboard in a layer shrunk to one eighth is an even grey. The layer
+/// A one-pixel checkerboard in a layer shrinking to one eighth is an even grey. The layer
 /// lies a sixteenth of a pixel off the grid, which puts every bilinear sample of the first
 /// level on a texel centre: without a chain each pixel is exactly one texel, black or white.
 #[test]
 fn a_checkerboard_in_a_shrunk_layer_is_an_even_grey() {
     let image = checkerboard();
-    let Some(frame) = render(
-        &shrunk_checkerboard(&image, 8.0 + 1.0 / 16.0, 8.0 + 1.0 / 16.0),
-        CANVAS,
-        CANVAS,
-    ) else {
+    let Some(frame) = shrinking_checkerboard(&image, 8.0 + 1.0 / 16.0, 8.0 + 1.0 / 16.0) else {
         return;
     };
     let values = inside(&frame);
@@ -134,11 +146,7 @@ fn a_shrunk_layer_does_not_shimmer_as_it_moves() {
         // texel of the picture) further across each step: without a chain, black and white
         // in turn.
         let at = 8.0 + 1.0 / 16.0 + step as f32 / 8.0;
-        let Some(frame) = render(
-            &shrunk_checkerboard(&image, at, 8.0 + 1.0 / 16.0),
-            CANVAS,
-            CANVAS,
-        ) else {
+        let Some(frame) = shrinking_checkerboard(&image, at, 8.0 + 1.0 / 16.0) else {
             return;
         };
         let (mean, spread) = mean_and_spread(&inside(&frame));
@@ -242,4 +250,86 @@ fn text_in_an_enlarged_turned_layer_stays_sharp() {
     let contrast = edge_contrast(&frame);
     eprintln!("text at 3x, turned: edge contrast {contrast:.1}");
     assert!(contrast > 120.0, "blurred: {contrast}");
+}
+
+/// A layer shrunk to 0.6 and at rest, as a `FittedBox` or a `Transform::scale` usually is, is
+/// as sharp as its content drawn at that size: its letters keep their edges, and a box its
+/// one-pixel border. Shown the same way while its scale moves, it is read through its chain,
+/// about a pixel softer; that frame is printed for the milestone note, not asserted on.
+#[test]
+fn a_shrunk_layer_at_rest_is_as_sharp_as_content_drawn_at_its_size() {
+    // Wide enough for the content laid flat: a layer holds what of it lies on the target.
+    const W: u32 = 170;
+    const H: u32 = 70;
+    // Twenty pixels high at (5, 10), shown at 0.6: twelve high at (3, 6). A line of text
+    // reaches across its clip, so the layer's region is the whole target: a texture drawn at
+    // 0.6 must be placed by it, which the first version of this milestone did not do.
+    let content = || {
+        let mut scene = letters(20.0, Point::new(5.0, 10.0));
+        scene.fill_rect(Rect::new(110.0, 10.0, 50.0, 50.0), Color::WHITE);
+        scene
+    };
+    let shrunk = || layer(content(), Affine::scale(0.6, 0.6));
+    let mut drawn = letters(12.0, Point::new(3.0, 6.0));
+    drawn.fill_rect(Rect::new(66.0, 6.0, 30.0, 30.0), Color::WHITE);
+    let (Some(at_rest), Some(drawn)) = (render(&shrunk(), W, H), render(&drawn, W, H)) else {
+        return;
+    };
+    let moving = render_scenes(
+        &[layer(content(), Affine::IDENTITY), shrunk()],
+        W,
+        H,
+        Color::BLACK,
+    )
+    .expect("the adapter is there");
+    let (rest, native, chain) = (
+        edge_contrast(&at_rest),
+        edge_contrast(&drawn),
+        edge_contrast(&moving),
+    );
+    let differ = |f: &Snapshot| f.diff_count(&drawn, 24);
+    eprintln!(
+        "shrunk to 0.6: edge contrast {rest:.1} at rest, {chain:.1} while moving, {native:.1} \
+         drawn at its size; pixels off by more than 24: {} at rest, {} while moving",
+        differ(&at_rest),
+        differ(&moving)
+    );
+    assert!(
+        rest > native * 0.9,
+        "the layer at rest is softer than its content drawn at its size: {rest} against {native}"
+    );
+    // The box's edge, which falls on whole pixels: one step from black to white, as drawn.
+    let row = |f: &Snapshot| [64, 65, 66, 67].map(|x| f.pixel(x, 20)[1]);
+    let (r, d) = (row(&at_rest), row(&drawn));
+    for (a, b) in r.iter().zip(d) {
+        assert!(
+            a.abs_diff(b) <= 24,
+            "the box's edge: {r:?} at rest, {d:?} drawn"
+        );
+    }
+}
+
+/// The same for a layer whose region starts off the target's corner, moved by a fraction of a
+/// pixel: its texture's texels fall on the target's pixels, and its box comes out as the box
+/// drawn where it lands. A texture whose corner fell between pixels was resampled half a pixel
+/// off, and every edge spread over two (the goldens `boxes_that_fit`, `turned_and_rotated`).
+#[test]
+fn a_shrunk_layer_at_rest_lies_on_the_pixel_grid() {
+    const S: u32 = 96;
+    let mut content = Scene::new();
+    content.fill_rect(Rect::new(37.0, 23.0, 50.0, 30.0), Color::WHITE);
+    let affine = Affine::scale(0.6, 0.6).then(Affine::translation(5.0, 4.5));
+    let shrunk = layer(content, affine);
+    // Where it lands: (27.2, 18.3), 30 by 18.
+    let mut drawn = Scene::new();
+    drawn.fill_rect(Rect::new(27.2, 18.3, 30.0, 18.0), Color::WHITE);
+    let (Some(at_rest), Some(drawn)) = (render(&shrunk, S, S), render(&drawn, S, S)) else {
+        return;
+    };
+    let off = at_rest.diff_count(&drawn, 24);
+    eprintln!("shrunk box off the corner: {off} pixels off by more than 24");
+    assert!(
+        off <= 2,
+        "{off} pixels differ from the box drawn where it lands"
+    );
 }

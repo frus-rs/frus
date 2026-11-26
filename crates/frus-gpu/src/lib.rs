@@ -68,7 +68,7 @@ pub use custom::{
     GpuCallback, GpuPassContext, PassState, PassTargets, GPU_PASS_DEPTH_FORMAT, GPU_PASS_FORMAT,
 };
 pub use frus_core::{Color, Rect, Scene};
-pub use offscreen::{render_offscreen, OffscreenFrame};
+pub use offscreen::{render_offscreen, render_offscreen_frames, OffscreenFrame};
 pub use pipeline_cache::set_pipeline_cache_dir;
 pub use renderer::{backdrop, RenderOutcome, RenderTimings, Renderer, StartupTimes, WindowSurface};
 

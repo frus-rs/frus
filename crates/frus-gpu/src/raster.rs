@@ -9,8 +9,10 @@
 //!
 //! - **Shrunk**, each screen pixel covered several texels and a bilinear sample read four of
 //!   them: below one half, texels were skipped, and fine text and patterns shimmered as the
-//!   scale moved. A shrunk layer now gets a **mip chain**, made on the GPU when its texture is
-//!   drawn, and is sampled trilinearly.
+//!   scale moved. While its scale moves, a shrunk layer is drawn at its own size with a **mip
+//!   chain**, made on the GPU, and sampled trilinearly. At rest it is drawn once more **at its
+//!   exact scale**, its content scaled down first, so its edges and text are as sharp as
+//!   content drawn at that size; the chain would soften them by about a pixel.
 //! - **Enlarged**, the texture was magnified, and text in it blurred. An enlarged layer is
 //!   now drawn **at the scale it is shown at**: its content is scaled before it is drawn, so
 //!   text is laid out and rasterised at its final size.
@@ -18,7 +20,8 @@
 //! An enlargement that is animating would be drawn again every frame if the texture followed
 //! the scale exactly. A layer kept from the frame before is drawn again only when the scale
 //! has grown past what its texture holds (with some headroom, so a growing scale is not drawn
-//! again every frame), has fallen well below it, or has stopped moving at another scale. A
+//! again every frame), has fallen well below it, or has stopped moving at another scale. A layer
+//! shown for the first frame, with nothing kept, is drawn at its exact scale. A
 //! layer whose content changed, or whose region moved, is drawn again anyway, but its scale
 //! follows the same rule while its transform moves: a page zooming across the whole screen is
 //! drawn every frame, and its text at a handful of sizes rather than at a new size each frame,
@@ -79,29 +82,55 @@ pub(crate) struct Kept {
     pub(crate) settled: bool,
 }
 
-/// The scale to draw a layer at: `most`, its largest stretch, held between one and `limit`,
-/// and changed from the `kept` texture's scale only when that one no longer serves (see the
-/// module notes). One when the layer is not enlarged.
+/// The least scale a layer is drawn at. Shown smaller still, it is drawn at this one and its
+/// mip chain does the rest: its text would otherwise be rasterised below a pixel or two.
+pub(crate) const MIN_SCALE: f32 = 1.0 / 16.0;
+
+/// The scale to draw a layer at, from `most`, its largest stretch, held between
+/// [`MIN_SCALE`] and `limit` (see the module notes):
+///
+/// - with nothing `kept`, or with its scale at rest, the **exact** scale, shrunk or enlarged:
+///   a layer shown still is drawn as content drawn at that size would be;
+/// - while its scale moves, a shrunk layer is drawn at its own size and read through its mip
+///   chain, and an enlarged one ahead of its scale; the `kept` texture serves as long as it
+///   suits the scale shown.
 pub(crate) fn chosen_scale(most: f32, limit: f32, kept: Option<Kept>) -> f32 {
     // A thousandth of slack: a scale of one that rounding moved a hair is one.
     const SLACK: f32 = 1e-3;
-    let wanted = most.min(limit).max(1.0);
-    let wanted = if wanted < 1.0 + SLACK { 1.0 } else { wanted };
+    let exact = most.min(limit).max(MIN_SCALE);
+    let exact = if (exact - 1.0).abs() < SLACK {
+        1.0
+    } else {
+        exact
+    };
     let Some(kept) = kept else {
-        return wanted;
+        return exact;
     };
     // Held to the limit: the region it was drawn for may have been smaller.
     let k = kept.scale.min(limit.max(1.0));
+    if kept.settled {
+        // At rest: drawn once more at the exact scale if it is not, then kept.
+        return if (k - exact).abs() > exact * SLACK {
+            exact
+        } else {
+            k
+        };
+    }
+    if k < 1.0 && exact <= k * (1.0 + SLACK) {
+        // Drawn shrunk while at rest, and shown no larger: its chain reads it.
+        return k;
+    }
+    // Moving: a shrunk layer is drawn at its own size.
+    let wanted = exact.max(1.0);
     if wanted > k * (1.0 + SLACK) {
+        if wanted == 1.0 {
+            return 1.0;
+        }
         // Grown past it: drawn again, ahead of the scale.
         let ahead = (wanted * HEADROOM).min(limit);
         return if ahead < 1.0 + SLACK { 1.0 } else { ahead };
     }
     if k > wanted * SHRINK {
-        return wanted;
-    }
-    if kept.settled && (k - wanted).abs() > wanted * SLACK {
-        // At rest at another scale: drawn once more, at the exact one.
         return wanted;
     }
     k
@@ -138,6 +167,36 @@ pub(crate) fn scaled_size(rw: u32, rh: u32, scale: f32, max_dim: u32) -> (u32, u
         return (rw.max(1), rh.max(1));
     }
     (side(rw), side(rh))
+}
+
+/// Where a texture drawn at another scale than its own puts the corner of its region, within
+/// its first texel: the fraction of a pixel by which the transform sends that corner off the
+/// screen's grid. The content is drawn that far into the texture, so that, with the scale at
+/// rest and the transform a scale and a move, each texel falls on a pixel of the screen: a
+/// texel grid half a pixel off the screen's would blur every edge as it is sampled.
+pub(crate) fn texel_offset(m: [f32; 6], origin: (f32, f32)) -> [f32; 2] {
+    let [a, b, c, d, e, f] = m;
+    let x = a * origin.0 + c * origin.1 + e;
+    let y = b * origin.0 + d * origin.1 + f;
+    let frac = |v: f32| if v.is_finite() { v - v.floor() } else { 0.0 };
+    [frac(x), frac(y)]
+}
+
+/// The size of a `rw`×`rh` layer's texture drawn at `scale`, its content `offset` into it
+/// (see [`texel_offset`]): whole texels, at least one, at most `max_dim`.
+pub(crate) fn offset_size(
+    rw: u32,
+    rh: u32,
+    scale: f32,
+    offset: [f32; 2],
+    max_dim: u32,
+) -> (u32, u32) {
+    if scale == 1.0 {
+        return scaled_size(rw, rh, scale, max_dim);
+    }
+    let side =
+        |v: u32, o: f32| ((v as f32 * scale + o - 1e-3).ceil() as u32).clamp(1, max_dim.max(1));
+    (side(rw, offset[0]), side(rh, offset[1]))
 }
 
 /// `inverse` (screen → flat, `[a, b, c, d, e, f]`) followed by an enlargement by `scale`:
@@ -198,7 +257,15 @@ mod tests {
     #[test]
     fn a_layer_with_nothing_kept_is_drawn_at_its_exact_scale() {
         assert_eq!(chosen_scale(1.0, 8.0, None), 1.0);
-        assert_eq!(chosen_scale(0.3, 8.0, None), 1.0, "shrunk: its own size");
+        assert!(
+            close(chosen_scale(0.3, 8.0, None), 0.3),
+            "shrunk: at its scale too"
+        );
+        assert_eq!(
+            chosen_scale(0.01, 8.0, None),
+            MIN_SCALE,
+            "no smaller than the floor"
+        );
         assert_eq!(
             chosen_scale(1.0004, 8.0, None),
             1.0,
@@ -265,7 +332,43 @@ mod tests {
             settled: true,
         });
         assert_eq!(chosen_scale(1.0, 8.0, still), 1.0);
-        assert_eq!(chosen_scale(0.5, 8.0, still), 1.0);
+    }
+
+    /// A scale animating from one down to 0.6: drawn at its own size while it moves (its mip
+    /// chain filters it), once at 0.6 when it comes to rest, and kept there.
+    #[test]
+    fn a_shrunk_layer_at_rest_is_drawn_at_its_exact_scale() {
+        let mut kept = Kept {
+            scale: 1.0,
+            settled: false,
+        };
+        let mut drawn = 0;
+        for frame in 1..=30 {
+            let s = 1.0 - 0.4 * frame as f32 / 30.0;
+            let k = chosen_scale(s, 8.0, Some(kept));
+            if k != kept.scale {
+                drawn += 1;
+            }
+            kept.scale = k;
+        }
+        assert_eq!(drawn, 0, "moving: its own size, never drawn again");
+        assert_eq!(kept.scale, 1.0);
+        kept.settled = true;
+        let k = chosen_scale(0.6, 8.0, Some(kept));
+        assert!(close(k, 0.6), "at rest: {k}");
+        kept.scale = k;
+        assert_eq!(chosen_scale(0.6, 8.0, Some(kept)), k, "then kept");
+        // Moving again: kept while shown no larger, its chain reads it...
+        kept.settled = false;
+        assert_eq!(chosen_scale(0.5, 8.0, Some(kept)), k);
+        assert_eq!(chosen_scale(0.6, 8.0, Some(kept)), k);
+        // ...and drawn at its own size once it grows past it.
+        assert_eq!(chosen_scale(0.7, 8.0, Some(kept)), 1.0);
+        // Growing past one: drawn ahead, as any enlarged layer.
+        assert!(close(chosen_scale(1.2, 8.0, Some(kept)), 1.5));
+        // Shown far smaller at rest: no smaller than the floor.
+        kept.settled = true;
+        assert_eq!(chosen_scale(0.001, 8.0, Some(kept)), MIN_SCALE);
     }
 
     #[test]
@@ -281,6 +384,24 @@ mod tests {
         // Stretched far from uniform: three wide, a quarter high.
         assert!(needs_chain(0.25, 3.0));
         assert!(!needs_chain(0.0, 1.0), "flattened: nothing is shown");
+    }
+
+    #[test]
+    fn a_texture_s_texels_fall_on_the_screen_s_pixels() {
+        // Shrunk to 0.6 and moved to (12.5, 3): the corner (20, 10) lands at (24.5, 9).
+        let m = Affine::scale(0.6, 0.6)
+            .then(Affine::translation(12.5, 3.0))
+            .m;
+        let o = texel_offset(m, (20.0, 10.0));
+        assert!(close(o[0], 0.5) && close(o[1], 0.0), "{o:?}");
+        // The content drawn that far in: a 50-wide region at 0.6 needs 31 texels, not 30.
+        assert_eq!(offset_size(50, 10, 0.6, o, 4096), (31, 6));
+        assert_eq!(offset_size(50, 10, 0.6, [0.0, 0.0], 4096), (30, 6));
+        // At its own size, nothing moves.
+        assert_eq!(offset_size(50, 10, 1.0, o, 4096), (50, 10));
+        // Negative positions keep a fraction in [0, 1).
+        let o = texel_offset(Affine::translation(-0.25, -3.0).m, (0.0, 0.0));
+        assert!(close(o[0], 0.75) && close(o[1], 0.0), "{o:?}");
     }
 
     #[test]
