@@ -286,6 +286,8 @@ pub struct ListView<Msg = crate::callback::Callback> {
     to_start: Option<u32>,
     /// What each item says without being built; see [`ListView::item_text`].
     item_text: Option<std::rc::Rc<dyn Fn(usize) -> String>>,
+    /// Whether a reader is told it is a list; see [`ListView::semantic_list`].
+    semantic_list: bool,
 }
 
 /// A scroll report that may say nothing.
@@ -335,6 +337,7 @@ impl<Msg> ListView<Msg> {
             scroll_filter: None,
             to_start: None,
             item_text: None,
+            semantic_list: true,
         }
     }
 
@@ -637,6 +640,25 @@ impl<Msg> ListView<Msg> {
         self
     }
 
+    /// Whether assistive technology is told this is a **list** (milestone 848): on by
+    /// default, a reader then enters it as a list, and every row is one of its items, which
+    /// knows its place among all of them, built or not ("3 of 120").
+    ///
+    /// Off, the list is only an area that scrolls and its rows are read as whatever they
+    /// are: for a list that is not one to the person reading it, a page laid out in rows.
+    ///
+    /// ```
+    /// use frus_widgets::{ListView, Text};
+    ///
+    /// let page = ListView::<()>::new(3, 40.0, |i| Text::new(format!("Section {i}")))
+    ///     .semantic_list(false);
+    /// # let _ = page;
+    /// ```
+    pub fn semantic_list(mut self, list: bool) -> Self {
+        self.semantic_list = list;
+        self
+    }
+
     /// Reports no more often than every `px` of movement — and **always** reports where
     /// it comes to rest, however short the last step was.
     pub fn notify_every(mut self, px: f32) -> Self {
@@ -749,6 +771,12 @@ impl<Msg> Widget<Msg> for ListView<Msg> {
 
     fn scroll_grain(&self) -> f32 {
         self.grain
+    }
+
+    /// A list, holding its rows as its items (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        self.semantic_list
+            .then(|| frus_core::SemanticsProperties::new(frus_core::Role::List))
     }
 }
 

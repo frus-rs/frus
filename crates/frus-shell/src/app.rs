@@ -1885,6 +1885,8 @@ impl<A: Application> App<A> {
                 A11yAction::Click(id) => self.activate_for_assistive_tech(id),
                 A11yAction::SetValue(id, value) => self.set_value_for_assistive_tech(id, value),
                 A11yAction::Custom(id, index) => self.custom_action_for_assistive_tech(id, index),
+                // A reader's "scroll a page" on a list or a scrolling area (milestone 848).
+                A11yAction::Scroll(id, forward) => self.scroll_page_for_assistive_tech(id, forward),
                 A11yAction::Focus(id) => {
                     // A button of the selection bar takes no focus: the bar acts on the
                     // field, and a focus that left it would end the very selection the bar
@@ -2760,6 +2762,7 @@ impl<A: Application> App<A> {
             .collect();
         let mut tree = crate::a11y_android::build(
             ui.semantics(),
+            &ui.semantics_parents(),
             &areas,
             self.win.runtime.input.focused,
             self.total_scale(),
@@ -2865,7 +2868,7 @@ impl<A: Application> App<A> {
     /// Scrolls the area `id` a page forward or back, for a screen reader (milestone 782): the
     /// same eased move a wheel's notch makes, one viewport along the area's axis, never past
     /// its ends.
-    #[cfg(android)]
+    #[cfg(any(android, desktop))]
     fn scroll_page_for_assistive_tech(&mut self, id: WidgetId, forward: bool) {
         let Some(area) = self.win.ui.as_ref().and_then(|ui| ui.scroll_region(id)) else {
             return;
@@ -2879,12 +2882,11 @@ impl<A: Application> App<A> {
             .get(&id)
             .copied()
             .unwrap_or((0.0, 0.0));
-        let target = crate::a11y_android::page_target(
-            area.viewport,
-            (area.max_x, area.max_y),
-            current,
-            forward,
-        );
+        let target = frus_widgets::SemanticsScroll {
+            offset: current,
+            max: (area.max_x, area.max_y),
+        }
+        .paged((area.viewport.width, area.viewport.height), forward);
         self.win.runtime.scroll_target.insert(id, target);
         self.win
             .runtime
@@ -5367,6 +5369,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     if let Some(ui) = self.win.ui.as_ref() {
                         a11y.update(
                             ui.semantics(),
+                            &ui.semantics_parents(),
                             focus,
                             &title,
                             &self.win.announce,
@@ -5396,6 +5399,7 @@ impl<A: Application> ApplicationHandler<A::Message> for App<A> {
                     if let Some(ui) = self.win.ui.as_ref() {
                         a11y.update(
                             ui.semantics(),
+                            &ui.semantics_parents(),
                             focus,
                             editing,
                             &title,

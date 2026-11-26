@@ -67,6 +67,8 @@ pub struct Card<Msg = crate::callback::Callback> {
     /// `None` = the theme's shape, then its radius, then the framework's corner.
     shape: Option<ShapeBorder>,
     children: Vec<Box<dyn Widget<Msg>>>,
+    /// Whether a reader meets the card as one unit; see [`Card::semantic_container`].
+    semantic_container: bool,
 }
 
 impl<Msg> Card<Msg> {
@@ -80,7 +82,20 @@ impl<Msg> Card<Msg> {
             color: None,
             shape: None,
             children: Vec::new(),
+            semantic_container: true,
         }
+    }
+
+    /// Whether assistive technology meets the card as **one unit** (milestone 848): on by
+    /// default, the card is a group holding its words and controls, which a reader can step
+    /// into or over as a whole. Off, the card adds nothing to the tree and what it holds is
+    /// read as if it were not there.
+    ///
+    /// To read a whole card as a single node, its words joined, wrap it in
+    /// [`Semantics::merge`](crate::Semantics::merge).
+    pub fn semantic_container(mut self, container: bool) -> Self {
+        self.semantic_container = container;
+        self
     }
 
     /// Chooses the variant.
@@ -272,6 +287,12 @@ impl<Msg> Widget<Msg> for Card<Msg> {
 
     fn on_click(&self) -> Option<Msg> {
         None
+    }
+
+    /// A group holding what the card holds (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        self.semantic_container
+            .then(|| frus_core::SemanticsProperties::new(frus_core::Role::Group))
     }
 }
 

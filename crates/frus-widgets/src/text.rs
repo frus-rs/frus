@@ -44,6 +44,8 @@ pub struct Text {
     /// Whether this text is a **heading** — a landmark a screen reader's user can jump
     /// to, rather than one more piece of prose. It changes nothing that is drawn.
     heading: bool,
+    /// The heading's level, `1` the topmost; `None` says nothing (milestone 848).
+    heading_level: Option<u32>,
     /// Whether this text is willing to be given **less than it asked for**.
     ///
     /// It is not the same question as what happens when it overflows, and conflating the
@@ -471,6 +473,7 @@ impl Text {
             max_lines: None,
             align: None,
             heading: false,
+            heading_level: None,
             shrinkable: false,
             selection: None,
             shaping: Cell::new(None),
@@ -584,6 +587,22 @@ impl Text {
     /// same thing with `SemanticsProperties(header: true)` around its title.
     pub fn heading(mut self) -> Self {
         self.heading = true;
+        self
+    }
+
+    /// Marks this text as a **heading of level `level`**, `1` the topmost (milestone 848):
+    /// a reader that lists a screen's headings shows how they nest, and the web reads it as
+    /// `h1` to `h6` would be.
+    ///
+    /// ```
+    /// use frus_widgets::Text;
+    ///
+    /// let section = Text::new("Notifications").heading_level(2);
+    /// # let _ = section;
+    /// ```
+    pub fn heading_level(mut self, level: u32) -> Self {
+        self.heading = true;
+        self.heading_level = Some(level.max(1));
         self
     }
 
@@ -1234,7 +1253,9 @@ impl<Msg: Clone + 'static> Widget<Msg> for Text {
         } else {
             frus_core::Role::Label
         };
-        Some(frus_core::SemanticsProperties::new(role).label(self.content.clone()))
+        let mut props = frus_core::SemanticsProperties::new(role).label(self.content.clone());
+        props.level = self.heading_level.filter(|_| self.heading);
+        Some(props)
     }
 }
 

@@ -53,6 +53,123 @@ pub enum Role {
     /// An item of a [`Tree`](Role::Tree): its `expanded` state says whether it is open, and
     /// `toggled` whether it is selected.
     TreeItem,
+    /// A list (milestone 848): its items are its children, each a
+    /// [`ListItem`](Role::ListItem) that knows its place in it.
+    List,
+    /// A group of related nodes read as one unit: a card, a section.
+    Group,
+    /// The row of [`Tab`](Role::Tab)s that switches between pages.
+    TabList,
+    /// A bar of a screen's title and actions: an app bar.
+    Toolbar,
+    /// The destinations of an application: a navigation bar, a rail, a drawer.
+    Navigation,
+    /// An area whose content scrolls; its [`SemanticsScroll`] says where it rests.
+    ScrollView,
+}
+
+impl Role {
+    /// Whether a node of this role **holds** the nodes of its subtree as its children
+    /// (milestone 848), rather than standing beside them.
+    ///
+    /// A list holds its items, a dialog its content, a card its words and controls. A
+    /// button, a checkbox, a text do not: what is inside them is part of them, and on the
+    /// web a button's children are not even read.
+    ///
+    /// ```
+    /// use frus_core::Role;
+    ///
+    /// assert!(Role::List.is_container());
+    /// assert!(Role::Dialog.is_container());
+    /// assert!(!Role::Button.is_container());
+    /// ```
+    pub fn is_container(self) -> bool {
+        matches!(
+            self,
+            Role::List
+                | Role::ListItem
+                | Role::Group
+                | Role::TabList
+                | Role::Toolbar
+                | Role::Navigation
+                | Role::ScrollView
+                | Role::Dialog
+                | Role::Tree
+        )
+    }
+
+    /// The role of the items a container of this role numbers (`3 of 5`), if it numbers
+    /// any: a list's items, a tab bar's tabs.
+    pub fn item_role(self) -> Option<Role> {
+        match self {
+            Role::List => Some(Role::ListItem),
+            Role::TabList => Some(Role::Tab),
+            _ => None,
+        }
+    }
+}
+
+/// Where a scrolling area rests (milestone 848): how far it is scrolled and how far it can
+/// be, across and down, in the layout's pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct SemanticsScroll {
+    /// The offset, `(x, y)`.
+    pub offset: (f32, f32),
+    /// The largest offset, `(x, y)`: zero on an axis that does not scroll.
+    pub max: (f32, f32),
+}
+
+impl SemanticsScroll {
+    /// Whether it scrolls across rather than down.
+    pub fn horizontal(&self) -> bool {
+        self.max.1 <= 0.5 && self.max.0 > 0.5
+    }
+
+    /// The offset and the largest offset along the axis it scrolls on.
+    pub fn along(&self) -> (f32, f32) {
+        if self.horizontal() {
+            (self.offset.0, self.max.0)
+        } else {
+            (self.offset.1, self.max.1)
+        }
+    }
+
+    /// Whether it can move forward (down, or across) from where it rests.
+    pub fn can_forward(&self) -> bool {
+        let (offset, max) = self.along();
+        offset < max - 0.5
+    }
+
+    /// Whether it can move back from where it rests.
+    pub fn can_backward(&self) -> bool {
+        self.along().0 > 0.5
+    }
+
+    /// Where a reader's "scroll a page" takes it from where it rests, in a viewport of
+    /// `viewport` (`width`, `height`): one viewport further, forward or back, along the axis
+    /// it scrolls, never past its ends.
+    ///
+    /// ```
+    /// use frus_core::SemanticsScroll;
+    ///
+    /// let list = SemanticsScroll { offset: (0.0, 100.0), max: (0.0, 500.0) };
+    /// assert_eq!(list.paged((320.0, 300.0), true), (0.0, 400.0));
+    /// assert_eq!(list.paged((320.0, 300.0), false), (0.0, 0.0));
+    /// ```
+    pub fn paged(&self, viewport: (f32, f32), forward: bool) -> (f32, f32) {
+        let sign = if forward { 1.0 } else { -1.0 };
+        if self.horizontal() {
+            (
+                (self.offset.0 + sign * viewport.0).clamp(0.0, self.max.0.max(0.0)),
+                self.offset.1,
+            )
+        } else {
+            (
+                self.offset.0,
+                (self.offset.1 + sign * viewport.1).clamp(0.0, self.max.1.max(0.0)),
+            )
+        }
+    }
 }
 
 /// The checked state of a toggleable control (checkbox, switch, radio).
@@ -108,6 +225,16 @@ pub struct SemanticsProperties {
     /// screen reader lists them in its actions menu; performing one sends the widget's
     /// `on_custom_action` for its index.
     pub custom_actions: Vec<String>,
+    /// The **level** (milestone 848): a heading's, `1` the topmost, or a tree item's depth,
+    /// `1` at the root. `None` says nothing about it.
+    pub level: Option<u32>,
+    /// The node's **place among its siblings** (milestone 848), `(position, count)` with the
+    /// position counted from `1`: the third of five items of a list reads "3 of 5". A list
+    /// numbers its items itself where they say nothing.
+    pub position: Option<(usize, usize)>,
+    /// Where a **scrolling area** rests (milestone 848), for a reader to say how far down it
+    /// is and to scroll it.
+    pub scroll: Option<SemanticsScroll>,
 }
 
 impl SemanticsProperties {
@@ -221,6 +348,39 @@ impl SemanticsProperties {
         self
     }
 
+    /// Sets the **level**: a heading's (`1` the topmost) or a tree item's depth.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let title = SemanticsProperties::new(Role::Heading).label("Settings").level(2);
+    /// assert_eq!(title.level, Some(2));
+    /// ```
+    pub fn level(mut self, level: u32) -> Self {
+        self.level = Some(level.max(1));
+        self
+    }
+
+    /// Sets the node's place among its siblings: `position` counted from `1`, of `count`.
+    ///
+    /// ```
+    /// use frus_core::{Role, SemanticsProperties};
+    ///
+    /// let row = SemanticsProperties::new(Role::ListItem).position(3, 5);
+    /// assert_eq!(row.position, Some((3, 5)));
+    /// ```
+    pub fn position(mut self, position: usize, count: usize) -> Self {
+        let position = position.max(1);
+        self.position = Some((position, count.max(position)));
+        self
+    }
+
+    /// Sets where a scrolling area rests.
+    pub fn scroll(mut self, scroll: SemanticsScroll) -> Self {
+        self.scroll = Some(scroll);
+        self
+    }
+
     /// The value as an assistive technology may read it out: the value itself, or, when it
     /// is [`obscured`](Self::obscured), one dot per character, so the length is known and
     /// the characters are not.
@@ -292,6 +452,9 @@ impl SemanticsProperties {
             } else {
                 self.custom_actions
             },
+            level: self.level.or(under.level),
+            position: self.position.or(under.position),
+            scroll: self.scroll.or(under.scroll),
         }
     }
 }
@@ -330,6 +493,39 @@ mod tests {
         );
         // Merged over another annotation, the field stays hidden.
         assert!(SemanticsProperties::new(Role::None).over(&hidden).obscured);
+    }
+
+    /// **The structure of a tree** (milestone 848): the roles that hold their subtree, the
+    /// items a container numbers, and what merging keeps of a level and a place.
+    #[test]
+    fn containers_hold_and_number_their_items() {
+        for role in [Role::List, Role::Group, Role::Dialog, Role::ScrollView] {
+            assert!(role.is_container(), "{role:?}");
+        }
+        for role in [Role::Button, Role::Label, Role::Heading, Role::TreeItem] {
+            assert!(!role.is_container(), "{role:?}");
+        }
+        assert_eq!(Role::List.item_role(), Some(Role::ListItem));
+        assert_eq!(Role::TabList.item_role(), Some(Role::Tab));
+        assert_eq!(Role::Group.item_role(), None);
+        let merged = SemanticsProperties::new(Role::None).over(
+            &SemanticsProperties::new(Role::Heading)
+                .level(2)
+                .position(1, 3),
+        );
+        assert_eq!(merged.level, Some(2));
+        assert_eq!(merged.position, Some((1, 3)));
+        let down = SemanticsScroll {
+            offset: (0.0, 40.0),
+            max: (0.0, 300.0),
+        };
+        assert!(!down.horizontal());
+        assert!(down.can_forward() && down.can_backward());
+        let across = SemanticsScroll {
+            offset: (0.0, 0.0),
+            max: (120.0, 0.0),
+        };
+        assert!(across.horizontal() && across.can_forward() && !across.can_backward());
     }
 
     #[test]

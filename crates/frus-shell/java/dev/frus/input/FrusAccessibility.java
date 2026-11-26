@@ -82,11 +82,14 @@ public final class FrusAccessibility extends View {
         final int[] scrolls;
         /** The native view each row stands for (milestone 794), or -1. */
         final int[] embeds;
+        /** A list's item count and an item's place, two a row, -1 for none (milestone 848). */
+        final int[] collections;
         final SparseIntArray index = new SparseIntArray();
 
         Tree(int[] ids, int[] parents, int[] bounds, int[] flags, int[] actions,
                 String[] classes, String[] texts, String[] descriptions, String[] hints,
-                String[] customs, float[] ranges, int[] scrolls, int[] embeds) {
+                String[] customs, float[] ranges, int[] scrolls, int[] embeds,
+                int[] collections) {
             this.ids = ids;
             this.parents = parents;
             this.bounds = bounds;
@@ -100,6 +103,7 @@ public final class FrusAccessibility extends View {
             this.ranges = ranges;
             this.scrolls = scrolls;
             this.embeds = embeds;
+            this.collections = collections;
             for (int i = 0; i < ids.length; i++) {
                 index.put(ids[i], i);
             }
@@ -112,7 +116,7 @@ public final class FrusAccessibility extends View {
 
     private static final Tree EMPTY = new Tree(new int[0], new int[0], new int[0], new int[0],
             new int[0], new String[0], new String[0], new String[0], new String[0],
-            new String[0], new float[0], new int[0], new int[0]);
+            new String[0], new float[0], new int[0], new int[0], new int[0]);
 
     /** The tree the screen reader reads; replaced only on the UI thread. */
     private Tree tree = EMPTY;
@@ -156,14 +160,14 @@ public final class FrusAccessibility extends View {
     public static void publish(int[] ids, int[] parents, int[] bounds, int[] flags,
             int[] actions, String[] classes, String[] texts, String[] descriptions,
             String[] hints, String[] customs, float[] ranges, int[] scrolls, int[] embeds,
-            final int[] events,
+            int[] collections, final int[] events,
             final String[] eventTexts, final String announce) {
         final FrusAccessibility view = instance;
         if (view == null) {
             return;
         }
         final Tree next = new Tree(ids, parents, bounds, flags, actions, classes, texts,
-                descriptions, hints, customs, ranges, scrolls, embeds);
+                descriptions, hints, customs, ranges, scrolls, embeds, collections);
         view.post(new Runnable() {
             @Override
             public void run() {
@@ -392,6 +396,20 @@ public final class FrusAccessibility extends View {
             info.setSelected((f & SELECTED) != 0);
             if (Build.VERSION.SDK_INT >= 28) {
                 info.setHeading((f & HEADING) != 0);
+            }
+            // A list says how many items it holds and an item its place (milestone 848):
+            // "in list, 12 items", "3 of 12".
+            if (t.collections.length >= 2 * i + 2) {
+                int rows = t.collections[2 * i];
+                if (rows >= 0) {
+                    info.setCollectionInfo(
+                            AccessibilityNodeInfo.CollectionInfo.obtain(rows, 1, false));
+                }
+                int item = t.collections[2 * i + 1];
+                if (item >= 0) {
+                    info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(
+                            item, 1, 0, 1, false));
+                }
             }
             if (t.texts[i] != null) {
                 info.setText(t.texts[i]);

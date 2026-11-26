@@ -1325,9 +1325,13 @@ impl<Msg: Clone + 'static> AppBar<Msg> {
         // **fixed** height. It used to hug its content, which made the chrome a different
         // shape on every screen and moved the page below it the moment an action appeared
         // or a title wrapped.
+        // A reader meets it as a bar holding the title and the actions (milestone 848).
         let toolbar = Container::new()
             .padding_each(0.0, H_PAD, 0.0, H_PAD)
             .height(toolbar_height)
+            .semantics_node(frus_core::SemanticsProperties::new(
+                frus_core::Role::Toolbar,
+            ))
             .child(row);
 
         // The two opacities are **group** opacities and independent of one another: a

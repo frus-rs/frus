@@ -46,7 +46,8 @@ impl StatefulWidget for CupertinoPage {
 
 /// A section's heading.
 fn heading(label: &str, theme: &Theme) -> Text {
-    text(label).size(13.0).color(theme.muted)
+    // A heading a reader can jump to, one level under the screen's title (milestone 848).
+    text(label).size(13.0).color(theme.muted).heading_level(2)
 }
 
 impl State for CupertinoState {

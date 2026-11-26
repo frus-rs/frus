@@ -130,6 +130,39 @@ enum Line<'a> {
     },
 }
 
+/// Each row's place among its siblings, `(position, count)` (milestone 848): the rows of one
+/// folder are the run of rows at its depth until the tree climbs back above it. A loading
+/// row is not a sibling.
+fn places(lines: &[Line<'_>]) -> Vec<(usize, usize)> {
+    let depth_of = |line: &Line<'_>| match line {
+        Line::Node { depth, .. } => Some(*depth),
+        Line::Loading { .. } => None,
+    };
+    let mut places = vec![(0, 0); lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        let Some(depth) = depth_of(line) else {
+            continue;
+        };
+        if places[i].0 != 0 {
+            continue;
+        }
+        // The first of a run: number every sibling from here on.
+        let mut run = vec![i];
+        for (j, other) in lines.iter().enumerate().skip(i + 1) {
+            match depth_of(other) {
+                Some(d) if d < depth => break,
+                Some(d) if d == depth => run.push(j),
+                _ => {}
+            }
+        }
+        let count = run.len();
+        for (n, j) in run.into_iter().enumerate() {
+            places[j] = (n + 1, count);
+        }
+    }
+    places
+}
+
 /// The rows the open part of `nodes` makes, in reading order.
 fn visible<'a>(
     nodes: &'a [FileNode],
@@ -263,9 +296,10 @@ impl<Msg: Clone + 'static> FileTree<Msg> {
         let text_style = t.text_style.unwrap_or(theme.text.body_medium);
         let mut lines = Vec::new();
         visible(&self.roots, &self.expanded, 0, &mut lines);
+        let places = places(&lines);
         // Rows span the width the tree is given, so the whole row is a click target.
         let mut column = Flex::column().align(Align::Stretch).width_fraction(1.0);
-        for line in lines {
+        for (line, place) in lines.into_iter().zip(places) {
             match line {
                 Line::Node { node, depth, open } => {
                     let selected = self.selected == Some(node.id);
@@ -337,6 +371,8 @@ impl<Msg: Clone + 'static> FileTree<Msg> {
                         ));
                     column = column.child(FileRow {
                         id: node.id,
+                        level: depth as u32 + 1,
+                        place,
                         label: node.label.clone(),
                         folder,
                         open,
@@ -386,6 +422,9 @@ impl<Msg: Clone + 'static> FileTree<Msg> {
 /// One node's row: a focus stop that selects, opens and closes, and paints its selection.
 struct FileRow<Msg> {
     id: u64,
+    /// Its depth, `1` at the root, and its place among its siblings (milestone 848).
+    level: u32,
+    place: (usize, usize),
     label: String,
     folder: bool,
     open: bool,
@@ -462,7 +501,9 @@ impl<Msg: Clone> Widget<Msg> for FileRow<Msg> {
         let mut sem = SemanticsProperties::new(Role::TreeItem)
             .label(self.label.clone())
             .toggled(self.selected)
-            .clickable();
+            .clickable()
+            .level(self.level)
+            .position(self.place.0, self.place.1);
         if self.folder {
             sem = sem.expanded(self.open);
         }

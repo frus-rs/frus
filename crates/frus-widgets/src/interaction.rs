@@ -106,6 +106,16 @@ impl WidgetId {
         WidgetId(h)
     }
 
+    /// Derives the identity of the **list item node** a list gives one of its rows in the
+    /// accessibility tree (milestone 848): the row's own identity names the row's own node,
+    /// when it has one, which the item holds.
+    pub(crate) fn list_item(self) -> WidgetId {
+        let mut h = self.0 ^ 0x2ec5_d2e9_1b4f_6a73;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        h ^= h >> 33;
+        WidgetId(h)
+    }
+
     /// Derives a child's identity **by key** (stable whatever its position).
     /// Distinct from [`WidgetId::child`] (a different constant and shift).
     pub(crate) fn keyed(self, key: u64) -> WidgetId {
