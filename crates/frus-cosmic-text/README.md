@@ -34,3 +34,6 @@ Every change is marked `frus` in the source.
   them. With the feature, the breaks between two letters of those scripts come from ICU4X's
   dictionary segmenter (`icu_segmenter`, Unicode licence); every other break is unchanged.
 - `FontSystem::set_fallback` replaces the fallback lists of a font system already built.
+- **Fallback families per span** (`Attrs::fallback_families`). A span names the families its
+  missing characters are looked for in, in order, right after its own family and before the
+  font system's fallback lists; a run is shaped with one such list (`Attrs::compatible`).

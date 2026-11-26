@@ -323,7 +323,10 @@ fn shape_run(
 
     let fonts = font_system.get_font_matches(&attrs);
 
-    let default_families = [&attrs.family];
+    // frus: the run's own fallback families come right after its family.
+    let default_families: Vec<&Family> = core::iter::once(&attrs.family)
+        .chain(attrs.fallback_families.iter())
+        .collect();
     let mut font_iter = FontFallbackIter::new(
         font_system,
         &fonts,

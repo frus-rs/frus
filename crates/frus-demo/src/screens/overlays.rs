@@ -321,7 +321,7 @@ impl State for OverlaysState {
                     .enabled(false),
             ])
         };
-        let palette = palette.open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl());
+        let palette = palette.open_on(KeyStroke::new(ShortcutKey::Char('k')).primary());
 
         let router = cx.router();
         Scaffold::new()

@@ -707,6 +707,93 @@ pub fn family_for_style(
     }
 }
 
+/// The families a style asks for, as the shaper is to be given them (milestone 852): the
+/// family to shape with, and the ones tried, in order, for the characters it has no glyph
+/// for, before the platform's own fallback.
+///
+/// With no fallback list this is [`family_for_style`] and nothing after it, so a style that
+/// names none shapes exactly as before. With one:
+///
+/// - the chain is the family (the default sans when the style named none) followed by the
+///   list, each resolved to what is loaded as [`family_for_style`] resolves it; a family
+///   that is not loaded is **skipped**, so a missing family never leaves text blank — when the
+///   family itself is missing, the first loaded one of the list takes its place;
+/// - the application's default family closes the chain, so that a character none of them
+///   has is still looked for in a face frus knows is there before the platform's lists,
+///   which are empty on Android;
+/// - Arabic keeps the rule of [`family_for_style`]: the registered Arabic face goes first.
+///
+/// The list is kept for the life of the program, one copy per distinct chain.
+pub fn families_for_style(
+    text: &str,
+    family: Option<frus_core::FontFamily>,
+    fallback: &[frus_core::FontFamily],
+) -> (
+    cosmic_text::Family<'static>,
+    &'static [cosmic_text::Family<'static>],
+) {
+    use frus_core::FontFamily;
+    if fallback.is_empty() {
+        return (family_for_style(text, family), &[]);
+    }
+    let resolve = |family: FontFamily| match family {
+        FontFamily::SansSerif => Some(sans_family()),
+        FontFamily::Serif => Some(cosmic_text::Family::Serif),
+        FontFamily::Monospace => Some(monospace_family()),
+        FontFamily::Named(name) => loaded_family(name).map(cosmic_text::Family::Name),
+    };
+    let mut chain: Vec<cosmic_text::Family<'static>> = Vec::new();
+    let named = std::iter::once(family.unwrap_or(FontFamily::SansSerif));
+    for found in named.chain(fallback.iter().copied()).filter_map(resolve) {
+        if !chain.contains(&found) {
+            chain.push(found);
+        }
+    }
+    if contains_arabic(text) {
+        let arabic = family_for(text);
+        chain.retain(|family| *family != arabic);
+        chain.insert(0, arabic);
+    }
+    let sans = sans_family();
+    if !chain.contains(&sans) {
+        chain.push(sans);
+    }
+    let first = chain.remove(0);
+    (first, interned_chain(chain))
+}
+
+/// One `'static` copy of a fallback chain per distinct chain: the shaper's attributes are
+/// kept with the text they shaped, so the list they carry must outlive the call.
+fn interned_chain(
+    chain: Vec<cosmic_text::Family<'static>>,
+) -> &'static [cosmic_text::Family<'static>] {
+    type Chains = Vec<&'static [cosmic_text::Family<'static>]>;
+    static CHAINS: Mutex<Chains> = Mutex::new(Vec::new());
+    if chain.is_empty() {
+        return &[];
+    }
+    let mut chains = CHAINS.lock().expect("family registry");
+    if let Some(found) = chains.iter().find(|known| **known == chain.as_slice()) {
+        return found;
+    }
+    let kept: &'static [cosmic_text::Family<'static>] = Box::leak(chain.into_boxed_slice());
+    chains.push(kept);
+    kept
+}
+
+/// `attrs` with the families a style asks for: see [`families_for_style`]. The one place a
+/// family becomes shaping attributes, so that every measurement and every paint shape a
+/// text in the same faces.
+pub fn with_families<'a>(
+    attrs: cosmic_text::Attrs<'a>,
+    text: &str,
+    family: Option<frus_core::FontFamily>,
+    fallback: &[frus_core::FontFamily],
+) -> cosmic_text::Attrs<'a> {
+    let (first, rest) = families_for_style(text, family, fallback);
+    attrs.family(first).fallback_families(rest)
+}
+
 /// The monospaced family, for the widgets that ask for one. When neither the family
 /// named nor the platform's generic monospace is there — Android without
 /// `bundled-mono` — it is the default family: text in the wrong face, not none.
@@ -909,6 +996,8 @@ struct MeasureKey {
     /// The family they were measured in. Different faces have different widths, which is
     /// the reason for naming one at all.
     family: Option<frus_core::FontFamily>,
+    /// The families tried for the characters `family` lacks: another face, another width.
+    family_fallback: &'static [frus_core::FontFamily],
     /// The letter spacing, in bits: two spacings give two widths.
     letter_spacing: u32,
     /// Features, axes and language: each can change the glyphs and so the width.
@@ -1179,6 +1268,7 @@ fn measure_at(text: &str, style: &ResolvedTextStyle, max_width: Option<f32>) -> 
         // share a cache entry. Nor can two families: that is the point of naming one.
         line_h: line_h.to_bits(),
         family,
+        family_fallback: style.family_fallback,
         letter_spacing: letter_spacing.to_bits(),
         shaping: style.shaping,
         default_locale: default_locale(),
@@ -1193,10 +1283,9 @@ fn measure_at(text: &str, style: &ResolvedTextStyle, max_width: Option<f32>) -> 
     // A constrained width (wrapping) or a free one; the height is always free.
     buffer.set_size(max_width, None);
     let attrs = spaced(
-        Attrs::new()
-            // The face the **renderer** will use, not the default: measuring in one family
-            // and drawing in another reserves a width for letters of a different shape.
-            .family(family_for_style(text, family))
+        // The face the **renderer** will use, not the default: measuring in one family and
+        // drawing in another reserves a width for letters of a different shape.
+        with_families(Attrs::new(), text, family, style.family_fallback)
             .weight(Weight(available_weight(weight)))
             .style(available_style(italic)),
         letter_spacing,
@@ -1323,8 +1412,7 @@ pub fn line_spans_resolved(
     }
     buffer.set_size(max_width, None);
     let attrs = spaced(
-        Attrs::new()
-            .family(family_for_style(text, style.family))
+        with_families(Attrs::new(), text, style.family, style.family_fallback)
             .weight(Weight(available_weight(style.weight)))
             .style(available_style(style.italic)),
         style.letter_spacing,
@@ -1383,8 +1471,7 @@ pub fn measure_runs_wrapped(runs: &[TextRun], max_width: Option<f32>) -> Size {
             run.text.as_str(),
             shaped(
                 spaced(
-                    Attrs::new()
-                        .family(family_for(&run.text))
+                    with_families(Attrs::new(), &run.text, run.family, run.family_fallback)
                         .weight(Weight(available_weight(run.weight)))
                         .style(available_style(run.italic))
                         .metrics(Metrics::new(run.size, line_height(run.size))),
@@ -1448,8 +1535,7 @@ pub fn runs_cut_at(
             run.text.as_str(),
             shaped(
                 spaced(
-                    Attrs::new()
-                        .family(family_for(&run.text))
+                    with_families(Attrs::new(), &run.text, run.family, run.family_fallback)
                         .weight(Weight(available_weight(run.weight)))
                         .style(available_style(run.italic))
                         .metrics(Metrics::new(run.size, line_height(run.size))),
@@ -1695,8 +1781,7 @@ impl TextLayout {
         buffer.set_size(block.width, None);
         let attrs = shaped(
             spaced(
-                Attrs::new()
-                    .family(family_for_style(text, style.family))
+                with_families(Attrs::new(), text, style.family, style.family_fallback)
                     .weight(Weight(available_weight(style.weight)))
                     .style(available_style(style.italic)),
                 style.letter_spacing,
@@ -1750,8 +1835,7 @@ impl TextLayout {
                 run.text.as_str(),
                 shaped(
                     spaced(
-                        Attrs::new()
-                            .family(family_for(&run.text))
+                        with_families(Attrs::new(), &run.text, run.family, run.family_fallback)
                             .weight(Weight(available_weight(run.weight)))
                             .style(available_style(run.italic))
                             .metrics(Metrics::new(run.size, line_height(run.size))),
@@ -2476,6 +2560,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.0,
             shaping: frus_core::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         // "normal BOLD" is wider than "normal" alone; the height comes from the
         // largest run.
@@ -3204,6 +3290,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.0,
             shaping: frus_core::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         let runs = vec![run("small", 12.0), run("large", 24.0)];
         let mixed = baseline_of_runs(&runs).expect("two runs");
@@ -3313,6 +3401,102 @@ mod tests {
         // And a Latin run in the same style is free to take the name.
         let latin = family_for_style("hello", Some(frus_core::FontFamily::Monospace));
         assert_eq!(format!("{latin:?}"), format!("{:?}", monospace_family()));
+    }
+
+    /// The families each glyph of `text` was shaped in, in order, under `attrs`.
+    fn glyph_families(text: &str, attrs: &Attrs<'_>) -> Vec<String> {
+        let mut font_system = font_system().lock().expect("FontSystem lock");
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
+        buffer.set_text(text, attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut font_system, false);
+        let ids: Vec<_> = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| g.font_id).collect::<Vec<_>>())
+            .collect();
+        ids.into_iter()
+            .map(|id| {
+                font_system
+                    .db()
+                    .face(id)
+                    .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// **A style's fallback families are where its family's missing characters are drawn**
+    /// (milestone 852, L-031): Latin letters asked of the bundled Arabic face, which has
+    /// none, come from the family named after it — here the monospaced one — rather than
+    /// from wherever the platform's lists would have sent them.
+    #[test]
+    fn missing_characters_are_drawn_in_the_fallback_families() {
+        use frus_core::FontFamily;
+        const AFTER: &[FontFamily] = &[FontFamily::Monospace];
+        let arabic = Some(FontFamily::Named(ARABIC_FAMILY));
+        let attrs = with_families(Attrs::new(), "code", arabic, AFTER);
+        let families = glyph_families("code", &attrs);
+        assert_eq!(families.len(), 4, "{families:?}");
+        assert!(
+            families.iter().all(|family| family == MONO_FAMILY),
+            "every letter from the fallback family: {families:?}"
+        );
+    }
+
+    /// **The chain a style asks for**, resolved to what is loaded: nothing changes for a
+    /// style with no fallback list; a family that is not loaded is skipped rather than left
+    /// to draw nothing, so the first loaded one of the list takes its place; the default
+    /// family closes the chain; and one chain is one `'static` copy.
+    #[test]
+    fn the_fallback_chain_skips_what_is_not_loaded() {
+        use frus_core::FontFamily;
+        let _ = font_system();
+        let sans = family_for("x");
+        let mono = monospace_family();
+
+        let (first, rest) = families_for_style("x", Some(FontFamily::Monospace), &[]);
+        assert_eq!(first, family_for_style("x", Some(FontFamily::Monospace)));
+        assert!(rest.is_empty(), "no list, no chain");
+
+        const LIST: &[FontFamily] = &[
+            FontFamily::Named("No Such Family 852"),
+            FontFamily::Monospace,
+        ];
+        let missing = Some(FontFamily::Named("Another Missing Family 852"));
+        let (first, rest) = families_for_style("x", missing, LIST);
+        assert_eq!(first, mono, "the first loaded family of the list");
+        assert_eq!(rest, &[sans][..], "then the default family");
+
+        let (first, rest) = families_for_style("x", None, LIST);
+        assert_eq!(first, sans, "no family named: the default first");
+        assert_eq!(rest, &[mono][..], "and the default is not repeated");
+
+        let (_, again) = families_for_style("y", None, LIST);
+        assert!(std::ptr::eq(rest, again), "one copy of a chain");
+    }
+
+    /// **A rich text's span is measured in its own family** (milestone 852, L-031): the
+    /// runs were all set in the default family before, whatever a span named.
+    #[test]
+    fn a_runs_family_reaches_the_measurement() {
+        let run = |family| TextRun {
+            text: "illicit lilies".into(),
+            size: 16.0,
+            weight: FontWeight::Regular,
+            italic: false,
+            color: frus_core::Color::WHITE,
+            decoration: frus_core::TextDecoration::NONE,
+            decoration_color: None,
+            letter_spacing: 0.0,
+            shaping: TextShaping::NONE,
+            family,
+            family_fallback: &[],
+        };
+        let plain = measure_runs(&[run(None)]);
+        let mono = measure_runs(&[run(Some(frus_core::FontFamily::Monospace))]);
+        assert!(
+            mono.width > plain.width * 1.3,
+            "narrow letters are wider in a monospaced face: {plain:?} {mono:?}"
+        );
     }
 
     /// Two families do not share a cached measurement, for the same reason two line
@@ -4011,6 +4195,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.0,
             shaping: frus_core::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         for text in ["ab\r\ncd", "\u{e9}b\r\ncd", "ab\r\n\u{628}\u{627}"] {
             let crlf = TextLayout::of_runs(&[run(text)], None, true);

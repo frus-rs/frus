@@ -249,6 +249,10 @@ mod window_memory;
 #[cfg(any(all(desktop, target_os = "linux"), test))]
 mod window_system;
 // The Windows host of native views (milestone 802).
+/// Shortcuts written with the primary modifier, and the editing defaults overridden, through
+/// the shell (milestone 852).
+#[cfg(all(test, desktop))]
+mod platform_shortcut_tests;
 #[cfg(windows)]
 mod windows_platform_view;
 /// Word and line deletion in a field, through the shell (milestone 849).

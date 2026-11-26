@@ -1454,7 +1454,28 @@ impl<Msg: Clone> Ui<Msg> {
     ///
     /// Empty means *nobody wanted it*, and the caller should carry on to whatever it would
     /// have done with the key.
+    ///
+    /// A binding's [primary modifier](KeyStroke::primary) is read for the machine's
+    /// keyboard, [`crate::keyboard_platform`]; [`Self::resolve_keystroke`] names another.
     pub fn keystroke(&self, stroke: KeyStroke, focused: Option<WidgetId>) -> Vec<Msg> {
+        self.resolve_keystroke(stroke, focused, crate::keyboard_platform())
+            .0
+    }
+
+    /// [`Self::keystroke`] on a keyboard of `keyboard`'s platform — Cmd is the primary
+    /// modifier on an Apple keyboard, Ctrl on every other — and with the **intent** the
+    /// stroke was bound to, if a [`crate::Shortcuts`] bound it, whether or not anybody
+    /// answered it.
+    ///
+    /// The intent is what the shell needs for the framework's own: an unanswered
+    /// [`Intent::COPY`](crate::Intent::COPY) is the focused field's Copy, and
+    /// [`Intent::DO_NOTHING`](crate::Intent::DO_NOTHING) takes the key from the defaults.
+    pub fn resolve_keystroke(
+        &self,
+        stroke: KeyStroke,
+        focused: Option<WidgetId>,
+        keyboard: crate::TargetPlatform,
+    ) -> (Vec<Msg>, Option<crate::Intent>) {
         let at = focused.and_then(|id| self.focusables.iter().position(|f| f.id == id));
         let covers = |range: &std::ops::Range<usize>| match at {
             Some(i) => range.contains(&i),
@@ -1464,18 +1485,19 @@ impl<Msg: Clone> Ui<Msg> {
         for (range, on_key) in self.listeners.iter().rev() {
             if covers(range) {
                 if let Some(msg) = on_key(stroke) {
-                    return vec![msg];
+                    return (vec![msg], None);
                 }
             }
         }
 
+        let matches = |bound: &KeyStroke| stroke.matches_on(bound, keyboard);
         let mut out = Vec::new();
         for scope in self.scopes.iter().filter(|s| covers(&s.range)) {
-            if let Some((_, msg)) = scope.callbacks.iter().find(|(s, _)| stroke.matches(s)) {
+            if let Some((_, msg)) = scope.callbacks.iter().find(|(s, _)| matches(s)) {
                 out.push(msg.clone());
-                return out;
+                return (out, None);
             }
-            let Some((_, intent)) = scope.strokes.iter().find(|(s, _)| stroke.matches(s)) else {
+            let Some((_, intent)) = scope.strokes.iter().find(|(s, _)| matches(s)) else {
                 continue;
             };
             let answer = self
@@ -1498,9 +1520,9 @@ impl<Msg: Clone> Ui<Msg> {
                     }
                 }
             }
-            return out;
+            return (out, Some(*intent));
         }
-        out
+        (out, None)
     }
 
     /// Topmost scrollable area containing `point`.

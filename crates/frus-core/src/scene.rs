@@ -464,6 +464,9 @@ pub enum Primitive {
         /// reason as `height`: the renderer must shape with the face the measurement used,
         /// and it cannot know which that was from the words alone.
         family: Option<crate::FontFamily>,
+        /// The families tried for the characters `family` lacks, in order — carried for the
+        /// same reason (milestone 852).
+        family_fallback: &'static [crate::FontFamily],
         /// The room added after every character, in logical pixels — carried for the same
         /// reason again: the renderer must space the glyphs as the measurement did
         /// (milestone 623).
@@ -641,6 +644,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip,
@@ -660,6 +664,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing: letter_spacing * sx,
                 shaping,
                 clip: clip.scale_xy(sx, sy),
@@ -797,6 +802,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip,
@@ -816,6 +822,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip: clip.translate(dx, dy),
@@ -1007,6 +1014,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 bounds,
@@ -1026,6 +1034,7 @@ impl Primitive {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip,
@@ -1261,6 +1270,7 @@ impl Scene {
                 decoration_color,
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip,
@@ -1280,6 +1290,7 @@ impl Scene {
                 decoration_color: decoration_color.map(|c| c.fade(opacity)),
                 height,
                 family,
+                family_fallback,
                 letter_spacing,
                 shaping,
                 clip,
@@ -2043,6 +2054,7 @@ impl Scene {
             decoration_color: style.decoration_color,
             height: style.height,
             family: style.family,
+            family_fallback: style.family_fallback,
             letter_spacing: style.letter_spacing,
             shaping: style.shaping,
             clip: self.current_clip,
@@ -2075,6 +2087,7 @@ impl Scene {
             decoration_color: style.decoration_color,
             height: style.height,
             family: style.family,
+            family_fallback: style.family_fallback,
             letter_spacing: style.letter_spacing,
             shaping: style.shaping,
             clip: self.current_clip,
@@ -2112,6 +2125,7 @@ impl Scene {
             decoration_color: style.decoration_color,
             height: style.height,
             family: style.family,
+            family_fallback: style.family_fallback,
             letter_spacing: style.letter_spacing,
             shaping: style.shaping,
             clip: self.current_clip,
@@ -2575,6 +2589,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.25,
             shaping: crate::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         let mut scene = Scene::new();
         scene.rich_text(Point::new(1.0, 2.0), vec![run]);

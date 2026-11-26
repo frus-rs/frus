@@ -408,7 +408,7 @@ fn results<Msg>(
 /// let state = CommandPaletteState::closed();
 /// let page = Text::new("The page");
 /// let palette = CommandPalette::new(page, &state, Msg::Palette)
-///     .open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl())
+///     .open_on(KeyStroke::new(ShortcutKey::Char('k')).primary())
 ///     .command(PaletteCommand::new("Open file", Msg::Open).group("File").shortcut("Ctrl+O"))
 ///     .command(PaletteCommand::new("Save", Msg::Save).group("File").shortcut("Ctrl+S"))
 ///     .command(PaletteCommand::new("Settings", Msg::Settings).keywords(["preferences"]));
@@ -498,7 +498,8 @@ impl<Msg: Clone + 'static> CommandPalette<Msg> {
     }
 
     /// **The key that opens the palette** — and closes it again — wherever the focus is in the
-    /// page: `Ctrl+K` is a common choice. Without one, the application opens it itself.
+    /// page: `KeyStroke::new(ShortcutKey::Char('k')).primary()`, Cmd+K on a Mac and Ctrl+K
+    /// elsewhere, is a common choice. Without one, the application opens it itself.
     #[must_use]
     pub fn open_on(mut self, stroke: KeyStroke) -> Self {
         self.open_on = Some(stroke);
@@ -1119,6 +1120,8 @@ impl<Msg> ResultRow<Msg> {
             decoration_color: None,
             letter_spacing: style.letter_spacing,
             shaping: style.shaping,
+            family: None,
+            family_fallback: &[],
         };
         let mut runs: Vec<TextRun> = Vec::new();
         let mut current = String::new();

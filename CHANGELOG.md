@@ -8,11 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 850 so far, each documenting the objective, the alternatives
+> record — one per step, 852 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **One shortcut for Cmd on a Mac and Ctrl elsewhere, and a font family per span of rich
+  text** (J852, L-037, L-031). `KeyStroke::primary()` is the platform's own modifier: Cmd on an
+  Apple keyboard, a browser on a Mac included, and Ctrl everywhere else, so one binding answers
+  both; `keyboard_platform()` says which keyboard that is, `KeyStroke::matches_on` and
+  `Ui::resolve_keystroke` take another, and `KeyStroke::label_on` writes a stroke as that
+  keyboard has it (`⌘K`, `Ctrl+K`). The framework's editing keys are now a table,
+  `default_editing_shortcuts(platform)`, of primary strokes to `Intent::COPY`, `CUT`, `PASTE`,
+  `SELECT_ALL`, `UNDO` and `REDO`: an application's `Shortcuts` can bind another key to one of
+  them, or switch one off with `Intent::DO_NOTHING`. The default keys are matched exactly, so
+  Ctrl+Shift+C no longer copies. `TextSpan::family` names a span's family, and
+  `family_fallback` (on `TextSpan`, `TextStyle` and `Text`) the families tried, character by
+  character, for what it lacks; both are measured and drawn on every target, and a family that
+  is not loaded is skipped rather than drawn as nothing. `TextRun`, `ResolvedTextStyle` and the
+  text primitive carry the new fields; frus-cosmic-text gained `Attrs::fallback_families`.
 - **A scaled layer is drawn for the scale it is shown at** (J850, L-026, part of #221 and
   #224). A layer shown smaller by its transform and at rest (a `FittedBox` shrinking its
   child, a `Transform::scale` below one) has its content drawn at that scale, as sharp as

@@ -19,10 +19,10 @@ use frus_widgets::{
     build_deferred, build_ui, collect_ids, find_by_key, find_path, find_widget, focus_changes,
     nearest_reorder_slot, reflow_reorder_cards, reflow_reorder_columns, reorder_drop_after,
     reorder_siblings, reorderable_owners, subtree_ids, Accessibility, Brightness, Color,
-    Cursor as UiCursor, Edit, EditKind, EditSnapshot, FocusDirection, Insets, Key, KeyResponse,
-    KeyStroke, MediaQuery, Point, Primitive, Rect, RegionPoint, RegionSelection, ReorderAxis,
-    Runtime, Scene, ScrollTo, Scrollable, SheetTo, ShortcutKey, Size, TextStop, Theme, ToolbarMark,
-    Ui, VelocityEstimate, VelocityTracker, Widget, WidgetId, WindowInsets,
+    Cursor as UiCursor, Edit, EditKind, EditSnapshot, FocusDirection, Insets, Intent, Key,
+    KeyResponse, KeyStroke, MediaQuery, Point, Primitive, Rect, RegionPoint, RegionSelection,
+    ReorderAxis, Runtime, Scene, ScrollTo, Scrollable, SheetTo, ShortcutKey, Size, TextStop, Theme,
+    ToolbarMark, Ui, VelocityEstimate, VelocityTracker, Widget, WidgetId, WindowInsets,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -81,10 +81,10 @@ enum ClipCommand {
     Paste,
 }
 
-/// The clipboard command a key press means, if any: the platform's own modifier with C, X
-/// or V — Ctrl on most keyboards, Cmd on Apple's (milestone 736) — and the Copy, Cut and
-/// Paste keys a keyboard may have for them (milestone 509). `primary` is whether that
-/// modifier is held, as [`primary_held`] answers it.
+/// The clipboard command a key press means, if any: the editing intent the stroke resolved
+/// to — the platform's own modifier with C, X or V by default, Ctrl on most keyboards, Cmd
+/// on Apple's (milestones 736 and 852), or whatever an application bound to those intents —
+/// and the Copy, Cut and Paste keys a keyboard may have for them (milestone 509).
 ///
 /// Both halves of the key are asked. A desktop keyboard's Copy key arrives as a named
 /// logical key; Android's arrives by **physical code only** — winit gives it no logical
@@ -93,23 +93,18 @@ enum ClipCommand {
 fn clipboard_command(
     logical: &WinitKey,
     physical: PhysicalKey,
-    primary: bool,
+    editing: Option<Intent>,
 ) -> Option<ClipCommand> {
     match logical {
         WinitKey::Named(NamedKey::Copy) => return Some(ClipCommand::Copy),
         WinitKey::Named(NamedKey::Cut) => return Some(ClipCommand::Cut),
         WinitKey::Named(NamedKey::Paste) => return Some(ClipCommand::Paste),
-        WinitKey::Character(c) if primary => {
-            if c.eq_ignore_ascii_case("c") {
-                return Some(ClipCommand::Copy);
-            }
-            if c.eq_ignore_ascii_case("x") {
-                return Some(ClipCommand::Cut);
-            }
-            if c.eq_ignore_ascii_case("v") {
-                return Some(ClipCommand::Paste);
-            }
-        }
+        _ => {}
+    }
+    match editing {
+        Some(Intent::COPY) => return Some(ClipCommand::Copy),
+        Some(Intent::CUT) => return Some(ClipCommand::Cut),
+        Some(Intent::PASTE) => return Some(ClipCommand::Paste),
         _ => {}
     }
     match physical {
@@ -129,24 +124,12 @@ fn clipboard_command(
 /// away from the hands at the keyboard. Natively the build says it; on the web it is the
 /// browser's operating system, from the navigator, read the way the target platform is read
 /// at start-up — a Mac, or an iPad with a keyboard, which says it is a Mac.
+///
+/// Since milestone 852 the answer is [`frus_widgets::keyboard_platform`]'s, which an
+/// application's shortcuts read too, so the framework's editing keys and an application's
+/// [primary](KeyStroke::primary) bindings always agree on the keyboard.
 fn apple_keyboard() -> bool {
-    #[cfg(web)]
-    {
-        web_sys::window()
-            .map(|window| window.navigator())
-            .is_some_and(|navigator| {
-                frus_widgets::TargetPlatform::from_browser(
-                    &navigator.platform().unwrap_or_default(),
-                    &navigator.user_agent().unwrap_or_default(),
-                    navigator.max_touch_points(),
-                )
-                .is_apple()
-            })
-    }
-    #[cfg(not(web))]
-    {
-        cfg!(any(target_os = "macos", target_os = "ios"))
-    }
+    frus_widgets::keyboard_platform().is_apple()
 }
 
 /// Whether the **platform's own modifier** is held — what copies with C, selects all with A,
@@ -6470,6 +6453,9 @@ impl<A: Application> App<A> {
             }
             _ => PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
         };
+        // A stroke written with the primary modifier is pressed as this keyboard's: Cmd on
+        // an Apple keyboard, Ctrl on any other (milestone 852).
+        let stroke = stroke.resolve(self.keyboard());
         let held = (self.ctrl, self.shift, self.alt, self.meta);
         (self.ctrl, self.shift, self.alt, self.meta) =
             (stroke.ctrl, stroke.shift, stroke.alt, stroke.meta);
@@ -10165,7 +10151,34 @@ impl<A: Application> App<A> {
             shift: self.shift,
             alt: self.alt,
             meta: self.meta,
+            primary: false,
         })
+    }
+
+    /// The platform whose keyboard conventions this shell's keys follow: the machine's
+    /// ([`frus_widgets::keyboard_platform`]), unless a driver said the keyboard is or is not
+    /// Apple's, which only that question decides.
+    fn keyboard(&self) -> frus_widgets::TargetPlatform {
+        let machine = frus_widgets::keyboard_platform();
+        if machine.is_apple() == self.apple_keys {
+            machine
+        } else if self.apple_keys {
+            frus_widgets::TargetPlatform::MacOs
+        } else {
+            frus_widgets::TargetPlatform::Windows
+        }
+    }
+
+    /// The framework's own **editing intent** a stroke means, by the default table
+    /// ([`frus_widgets::default_editing_shortcuts`]) for this shell's keyboard — `None` for
+    /// a stroke that is not one of them.
+    fn default_editing(&self, stroke: Option<KeyStroke>) -> Option<Intent> {
+        let stroke = stroke?;
+        let keyboard = self.keyboard();
+        frus_widgets::default_editing_shortcuts(keyboard)
+            .into_iter()
+            .find(|(bound, _)| stroke.matches_on(bound, keyboard))
+            .map(|(_, intent)| intent)
     }
 
     fn paint_reorder_preview(&self, ui: &Ui<A::Message>, theme: &Theme, scene: &mut Scene) {
@@ -10588,14 +10601,24 @@ impl<A: Application> App<A> {
         // A stroke with no Ctrl, Alt or Meta goes to a focused field first: a
         // binding on a bare letter would otherwise make every field under it
         // impossible to type in.
-        if let Some(stroke) = self.keystroke(event) {
+        //
+        // A binding can also name one of the framework's own editing intents — Copy, Paste,
+        // Undo… — which the focused field or a selection area then performs, or
+        // `Intent::DO_NOTHING`, which takes the key from them (milestone 852). A stroke no
+        // binding took gets the default editing table's meaning.
+        let stroke = self.keystroke(event);
+        let mut editing = None;
+        if let Some(stroke) = stroke {
             let typing = !stroke.is_command() && self.win.runtime.input.focused.is_some();
             if !typing {
-                let msgs = self
+                let keyboard = self.keyboard();
+                let (msgs, intent) = self
                     .win
                     .ui
                     .as_ref()
-                    .map(|ui| ui.keystroke(stroke, self.win.runtime.input.focused))
+                    .map(|ui| {
+                        ui.resolve_keystroke(stroke, self.win.runtime.input.focused, keyboard)
+                    })
                     .unwrap_or_default();
                 if !msgs.is_empty() {
                     for msg in msgs {
@@ -10604,8 +10627,14 @@ impl<A: Application> App<A> {
                     self.request_redraw();
                     return;
                 }
+                match intent {
+                    Some(Intent::DO_NOTHING) => return,
+                    Some(intent) if intent.is_editing() => editing = Some(intent),
+                    _ => {}
+                }
             }
         }
+        let editing = editing.or_else(|| self.default_editing(stroke));
 
         // Tab and Shift+Tab move between focusables, even with nothing focused.
         if matches!(event.logical_key, WinitKey::Named(NamedKey::Tab)) {
@@ -10638,7 +10667,7 @@ impl<A: Application> App<A> {
         let Some(focused) = self.win.runtime.input.focused else {
             // With nothing focused, a selection an area holds still answers to the
             // clipboard's Copy and to Select all.
-            self.region_key(event);
+            self.region_key(event, editing);
             return;
         };
 
@@ -10827,9 +10856,7 @@ impl<A: Application> App<A> {
 
         // The clipboard: Ctrl+C/X/V (Cmd on an Apple keyboard), and a keyboard's own Copy,
         // Cut and Paste.
-        if let Some(command) =
-            clipboard_command(&event.logical_key, event.physical_key, self.primary())
-        {
+        if let Some(command) = clipboard_command(&event.logical_key, event.physical_key, editing) {
             match command {
                 ClipCommand::Copy => {
                     self.copy_selection(focused);
@@ -10860,32 +10887,27 @@ impl<A: Application> App<A> {
             return;
         }
 
-        // The other editing shortcuts, Ctrl+A/Z/Y — Cmd+A/Z on an Apple keyboard.
-        if self.primary() {
-            match &event.logical_key {
-                WinitKey::Character(c) if c.eq_ignore_ascii_case("a") => {
-                    self.select_all(focused);
-                    return;
-                }
-                // Undo, and redo under both its spellings — Ctrl+Y on Windows,
-                // Ctrl+Shift+Z everywhere else, and people bring the one their
-                // hands already know. An Apple keyboard has the one: Cmd+Y is not
-                // Redo on a Mac (a browser opens its history on it).
-                WinitKey::Character(c) if c.eq_ignore_ascii_case("z") && !self.shift => {
-                    self.step_history(focused, false);
-                    self.request_redraw();
-                    return;
-                }
-                WinitKey::Character(c)
-                    if (c.eq_ignore_ascii_case("y") && !self.apple_keys)
-                        || (c.eq_ignore_ascii_case("z") && self.shift) =>
-                {
-                    self.step_history(focused, true);
-                    self.request_redraw();
-                    return;
-                }
-                _ => {}
+        // The other editing shortcuts, Ctrl+A/Z/Y — Cmd+A/Z on an Apple keyboard — or the
+        // keys an application bound to them (milestone 852). Redo has both its spellings off
+        // Apple keyboards, Ctrl+Y and Ctrl+Shift+Z, and people bring the one their hands
+        // already know; an Apple keyboard has the one, as Cmd+Y is not Redo on a Mac (a
+        // browser opens its history on it). See `default_editing_shortcuts`.
+        match editing {
+            Some(Intent::SELECT_ALL) => {
+                self.select_all(focused);
+                return;
             }
+            Some(Intent::UNDO) => {
+                self.step_history(focused, false);
+                self.request_redraw();
+                return;
+            }
+            Some(Intent::REDO) => {
+                self.step_history(focused, true);
+                self.request_redraw();
+                return;
+            }
+            _ => {}
         }
 
         // With the input bridge active, editing goes EXCLUSIVELY through the
@@ -11925,19 +11947,17 @@ impl<A: Application> App<A> {
 
     /// A key while nothing has the focus: Copy, and Select all, act on a selection an area
     /// holds. Whether the key was one of them.
-    fn region_key(&mut self, event: &KeyDown) -> bool {
+    fn region_key(&mut self, event: &KeyDown, editing: Option<Intent>) -> bool {
         if self.win.runtime.region.is_none() {
             return false;
         }
         if let Some(ClipCommand::Copy) =
-            clipboard_command(&event.logical_key, event.physical_key, self.primary())
+            clipboard_command(&event.logical_key, event.physical_key, editing)
         {
             self.copy_region();
             return true;
         }
-        let select_all = self.primary()
-            && matches!(&event.logical_key, WinitKey::Character(c) if c.eq_ignore_ascii_case("a"));
-        if select_all {
+        if editing == Some(Intent::SELECT_ALL) {
             self.select_all_region();
             return true;
         }
@@ -13052,7 +13072,10 @@ mod tests {
         resolve_focus, spring_toward, Drag, Point, Rect, ReorderAxis, ReorderMotion, Scene, Theme,
         VelocityEstimate, PRECISE_SLOP, TOUCH_SLOP,
     };
-    use super::{clipboard_command, ClipCommand, KeyCode, PhysicalKey, WinitKey};
+    use super::{
+        clipboard_command, ClipCommand, Intent, KeyCode, KeyStroke, PhysicalKey, ShortcutKey,
+        WinitKey,
+    };
     use super::{collect_ids, find_widget, MediaQuery};
     use frus_widgets::Locale;
 
@@ -13230,27 +13253,38 @@ mod tests {
         WinitKey::Character(c.into())
     }
 
-    /// Ctrl+C/X/V are the clipboard, in either case — Caps Lock or Shift is still a
-    /// copy — and the same letters without Ctrl are only letters.
+    /// The editing intent the default table gives `stroke` on an Apple keyboard or another
+    /// (milestone 852).
+    fn default_editing(apple: bool, stroke: KeyStroke) -> Option<Intent> {
+        let keyboard = if apple {
+            frus_widgets::TargetPlatform::MacOs
+        } else {
+            frus_widgets::TargetPlatform::Windows
+        };
+        frus_widgets::default_editing_shortcuts(keyboard)
+            .into_iter()
+            .find(|(bound, _)| stroke.matches_on(bound, keyboard))
+            .map(|(_, intent)| intent)
+    }
+
+    /// Ctrl+C/X/V are the clipboard, in either case — Caps Lock is still a copy — and the
+    /// same letters without Ctrl are only letters.
     #[test]
     fn ctrl_c_x_v_are_the_clipboard_and_the_letters_alone_are_not() {
         let any = PhysicalKey::Code(KeyCode::KeyQ);
         for (letter, command) in [
-            ("c", ClipCommand::Copy),
-            ("X", ClipCommand::Cut),
-            ("v", ClipCommand::Paste),
+            ('c', ClipCommand::Copy),
+            ('X', ClipCommand::Cut),
+            ('v', ClipCommand::Paste),
         ] {
-            assert_eq!(
-                clipboard_command(&character(letter), any, true),
-                Some(command)
-            );
-            assert_eq!(
-                clipboard_command(&character(letter), any, false),
-                None,
-                "{letter}"
-            );
+            let key = character(&letter.to_string());
+            let ctrl = default_editing(false, KeyStroke::new(ShortcutKey::Char(letter)).ctrl());
+            assert_eq!(clipboard_command(&key, any, ctrl), Some(command));
+            let bare = default_editing(false, KeyStroke::new(ShortcutKey::Char(letter)));
+            assert_eq!(clipboard_command(&key, any, bare), None, "{letter}");
         }
-        assert_eq!(clipboard_command(&character("a"), any, true), None);
+        let ctrl_a = default_editing(false, KeyStroke::new(ShortcutKey::Char('a')).ctrl());
+        assert_eq!(clipboard_command(&character("a"), any, ctrl_a), None);
     }
 
     /// **Android's Copy, Cut and Paste keys arrive by physical code alone** — winit gives
@@ -13265,7 +13299,7 @@ mod tests {
             (KeyCode::Paste, ClipCommand::Paste),
         ] {
             assert_eq!(
-                clipboard_command(&unidentified, PhysicalKey::Code(code), false),
+                clipboard_command(&unidentified, PhysicalKey::Code(code), None),
                 Some(command),
                 "{code:?}"
             );
@@ -13274,7 +13308,7 @@ mod tests {
         let named = WinitKey::Named(super::NamedKey::Paste);
         let any = PhysicalKey::Code(KeyCode::KeyQ);
         assert_eq!(
-            clipboard_command(&named, any, false),
+            clipboard_command(&named, any, None),
             Some(ClipCommand::Paste)
         );
     }
@@ -13302,13 +13336,17 @@ mod tests {
             );
         }
         for (letter, command) in [
-            ("c", ClipCommand::Copy),
-            ("x", ClipCommand::Cut),
-            ("V", ClipCommand::Paste),
+            ('c', ClipCommand::Copy),
+            ('x', ClipCommand::Cut),
+            ('V', ClipCommand::Paste),
         ] {
-            let key = character(letter);
-            let on =
-                |apple, ctrl, meta| clipboard_command(&key, any, primary_held(apple, ctrl, meta));
+            let key = character(&letter.to_string());
+            let on = |apple, ctrl, meta| {
+                let mut stroke = KeyStroke::new(ShortcutKey::Char(letter));
+                stroke.ctrl = ctrl;
+                stroke.meta = meta;
+                clipboard_command(&key, any, default_editing(apple, stroke))
+            };
             assert_eq!(
                 on(true, false, true),
                 Some(command),
@@ -13331,7 +13369,7 @@ mod tests {
             clipboard_command(
                 &WinitKey::Unidentified(winit::keyboard::NativeKey::Unidentified),
                 PhysicalKey::Code(KeyCode::Copy),
-                primary_held(true, false, false)
+                None
             ),
             Some(ClipCommand::Copy)
         );

@@ -486,3 +486,31 @@ impl State for SurveyState {
 `FormStep::check` validates what involves several answers at once; `.optional()` offers Skip;
 `StepForm::progress` chooses numbered steps, a bar or dots (by default, numbered steps on a wide
 window and a bar on a phone).
+
+## Keyboard shortcuts
+
+`Shortcuts` binds a key to an intent and `Actions` says what the intent does. Write the key with
+`.primary()` for the platform's own modifier: one binding is Cmd+S on a Mac (in a browser on a
+Mac too) and Ctrl+S everywhere else.
+
+```rust
+use frus::{Actions, Callback, Intent, KeyStroke, ShortcutKey, Shortcuts, Text, TextField, column};
+
+const SAVE: Intent = Intent("save");
+
+let save = Callback::new(|| println!("saved"));
+let screen = Actions::new(
+    Shortcuts::new(column![Text::new("Draft"), TextField::new("")])
+        .bind(KeyStroke::new(ShortcutKey::Char('s')).primary(), SAVE)
+        // The fields' own keys can be moved or switched off below this point.
+        .bind(KeyStroke::new(ShortcutKey::Char('d')).primary(), Intent::SELECT_ALL)
+        .bind(KeyStroke::new(ShortcutKey::Char('a')).primary(), Intent::DO_NOTHING),
+)
+.action(SAVE, save);
+# let _ = screen;
+```
+
+A text field and a selection area answer `Intent::COPY`, `CUT`, `PASTE`, `SELECT_ALL`, `UNDO` and
+`REDO` themselves, on the keys `default_editing_shortcuts(platform)` lists: the primary modifier
+with C, X, V, A and Z, Shift+Z for Redo, and Ctrl+Y as well off Apple keyboards. A binding of
+yours on one of those keys wins; bound to `Intent::DO_NOTHING`, the key does nothing at all.

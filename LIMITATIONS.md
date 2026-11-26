@@ -527,13 +527,17 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** text
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** A `TextRun` carries a size, weight, colour, decoration, letter spacing and
-  shaping (features, axes, language), but no family. A rich text is drawn in the default family
-  (or the Arabic face for Arabic), and an OpenType feature on a span works only if that family
-  has it.
-- **Workaround:** Put the differently set words in their own `Text` inside a `Row` or `Wrap`.
+- **Status:** fixed in 0.7.0
+- **What you hit:** Up to 0.6.0, a `TextRun` carried a size, weight, colour, decoration, letter
+  spacing and shaping (features, axes, language), but no family. A rich text was drawn in the
+  default family (or the Arabic face for Arabic), and an OpenType feature on a span worked only
+  if that family had it. Since milestone 852 a `TextSpan` names its family
+  (`TextSpan::family`) and a list of families for the characters it lacks
+  (`TextSpan::family_fallback`, also on `TextStyle` and `Text`), measured and drawn in them on
+  every target. A family that is not loaded is skipped, never drawn as nothing.
+- **Workaround:** None needed.
 - **Evidence:** [docs/milestone-784.md](docs/milestone-784.md),
+  [docs/milestone-852.md](docs/milestone-852.md),
   [crates/frus-core/src/text_style.rs](crates/frus-core/src/text_style.rs)
 
 ### L-032 The web has no platform fonts
@@ -602,12 +606,16 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** input
 - **Platforms:** All (matters on macOS)
-- **Status:** open
-- **What you hit:** The framework's own editing keys follow the platform, but a `KeyStroke`
-  names Ctrl or the logo key explicitly. An application shortcut meant for Cmd on a Mac and
-  Ctrl elsewhere must be bound twice.
-- **Workaround:** Bind both strokes to the same action.
+- **Status:** fixed in 0.7.0
+- **What you hit:** Up to 0.6.0, the framework's own editing keys followed the platform, but a
+  `KeyStroke` named Ctrl or the logo key explicitly, so an application shortcut meant for Cmd
+  on a Mac and Ctrl elsewhere had to be bound twice. Since milestone 852,
+  `KeyStroke::primary()` is Cmd on an Apple keyboard (a browser on a Mac included) and Ctrl
+  elsewhere, and the framework's editing keys are a table of such strokes
+  (`default_editing_shortcuts`) that an application's `Shortcuts` can rebind or switch off.
+- **Workaround:** None needed.
 - **Evidence:** [docs/milestone-736.md](docs/milestone-736.md),
+  [docs/milestone-852.md](docs/milestone-852.md),
   [crates/frus-widgets/src/shortcuts.rs](crates/frus-widgets/src/shortcuts.rs)
 
 ### L-038 No key deletes a word in a frus text field
