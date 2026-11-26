@@ -284,23 +284,37 @@ pub(crate) const ELLIPSIS: &str = "…";
 /// let a genuinely collapsed box draw its whole label, over whatever was beside it, which
 /// is the one thing ellipsising exists to prevent.
 ///
-/// Character by character from the end: the strings this is used on are a line, not a
-/// document, and a binary search over char boundaries would buy nothing at that length.
+/// A grapheme cluster at a time from the end (milestone 849): a flag, an emoji sequence, a
+/// letter with its marks or an Indic syllable is kept whole or dropped whole, never cut into
+/// a part of itself before the ellipsis. The strings this is used on are a line, not a
+/// document, and a binary search over the boundaries would buy nothing at that length.
 pub(crate) fn truncate(content: &str, style: &ResolvedTextStyle, max_width: f32) -> String {
     let measure = |text: &str| frus_text::measure_resolved(text, style).width;
     if measure(content) <= max_width {
         return content.to_string();
     }
-    let mut chars: Vec<char> = content.chars().collect();
-    while !chars.is_empty() {
-        chars.pop();
-        let kept: String = chars.iter().collect();
-        let candidate = format!("{}{ELLIPSIS}", kept.trim_end());
+    let ends = cluster_ends(content);
+    for &end in ends.iter().rev().skip(1) {
+        let candidate = format!("{}{ELLIPSIS}", content[..end].trim_end());
         if measure(&candidate) <= max_width {
             return candidate;
         }
     }
     ELLIPSIS.to_string()
+}
+
+/// The byte offsets in `text` at which a grapheme cluster ends — `0` first, `text.len()`
+/// last: where a cut may fall without leaving part of a character a reader sees as one.
+pub(crate) fn cluster_ends(text: &str) -> Vec<usize> {
+    let bytes: Vec<usize> = text
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain([text.len()])
+        .collect();
+    frus_text::grapheme_stops(text)
+        .into_iter()
+        .map(|stop| bytes[stop])
+        .collect()
 }
 
 /// `line` cut so that it and an ellipsis together fit `max_width` — **always** ending in
@@ -309,17 +323,18 @@ pub(crate) fn truncate(content: &str, style: &ResolvedTextStyle, max_width: f32)
 /// The difference is which question is being asked. `truncate` asks whether this line
 /// fits; this asks how to end a line that is being cut because the *next* one was
 /// dropped, and there the line usually does fit and still has to say so.
+///
+/// Like `truncate`, it drops a whole grapheme cluster at a time (milestone 849).
 pub(crate) fn ellipsise(line: &str, style: &ResolvedTextStyle, max_width: f32) -> String {
     let measure = |text: &str| frus_text::measure_resolved(text, style).width;
-    let mut chars: Vec<char> = line.trim_end().chars().collect();
-    loop {
-        let kept: String = chars.iter().collect();
-        let candidate = format!("{}{ELLIPSIS}", kept.trim_end());
-        if chars.is_empty() || max_width <= 0.0 || measure(&candidate) <= max_width {
+    let line = line.trim_end();
+    for &end in cluster_ends(line).iter().rev() {
+        let candidate = format!("{}{ELLIPSIS}", line[..end].trim_end());
+        if end == 0 || max_width <= 0.0 || measure(&candidate) <= max_width {
             return candidate;
         }
-        chars.pop();
     }
+    ELLIPSIS.to_string()
 }
 
 /// What a text came to after being fitted to its box: what to draw, and which way it ran
@@ -1270,6 +1285,64 @@ mod tests {
         // A box with no room at all draws an ellipsis and nothing else. It used to draw
         // the whole string, which is the one thing ellipsising exists to prevent.
         assert_eq!(truncate(long, &style.resolved(), 0.0), ELLIPSIS);
+    }
+
+    /// **An ellipsis never cuts through a grapheme cluster** (milestone 849): whatever the
+    /// width, what is kept before the ellipsis ends where a character a reader sees as one
+    /// ends — not inside a family emoji, between the two halves of a flag, after a hand
+    /// without its skin tone, between a letter and its accent, inside a Devanagari or Thai
+    /// syllable, or between an Arabic letter and its vowel. Before, the cut dropped a code
+    /// point at a time and could stop at any of them.
+    #[test]
+    fn an_ellipsis_never_cuts_a_cluster() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let texts = [
+            family.repeat(8),
+            "\u{1F1F9}\u{1F1EC}\u{1F1EB}\u{1F1F7}".repeat(6),
+            "\u{1F44D}\u{1F3FD}".repeat(12),
+            "cafe\u{301} ".repeat(8),
+            "\u{915}\u{93F}\u{924}\u{93E}\u{92C} ".repeat(8),
+            "\u{E01}\u{E33}\u{E44}\u{E14}\u{E49}".repeat(8),
+            "\u{628}\u{64E}\u{627}\u{628}\u{64F} ".repeat(8),
+        ];
+        let style = TextStyle::new(18.0).resolved();
+        for text in &texts {
+            let ends = cluster_ends(text);
+            let full = frus_text::measure_resolved(text, &style).width;
+            let mut width = 8.0;
+            while width < full {
+                for cut in [
+                    truncate(text, &style, width),
+                    ellipsise(text, &style, width),
+                ] {
+                    let kept = cut.strip_suffix(ELLIPSIS).expect("cut with an ellipsis");
+                    assert!(text.starts_with(kept), "a prefix: {cut:?}");
+                    assert!(
+                        ends.contains(&kept.len()),
+                        "{text:?} at {width}px cut inside a cluster: {cut:?}"
+                    );
+                }
+                width += 3.0;
+            }
+        }
+    }
+
+    /// **Right-to-left text ends in its ellipsis on the left** (milestone 849): an Arabic
+    /// line cut short reads right to left to the ellipsis, which is drawn past its last
+    /// word — at the left of the line, where that line ends.
+    #[test]
+    fn a_right_to_left_line_ends_in_its_ellipsis_on_the_left() {
+        let text = "\u{628}\u{64E}\u{627}\u{628}\u{64F} \u{643}\u{62A}\u{627}\u{628} ".repeat(6);
+        let style = TextStyle::new(18.0).resolved();
+        let cut = truncate(&text, &style, 120.0);
+        assert!(cut.ends_with(ELLIPSIS), "cut: {cut:?}");
+        let layout = frus_text::TextLayout::new(&cut, 18.0, frus_core::FontWeight::Regular, false);
+        let last = cut.chars().count() - 1;
+        assert!(layout.line_is_rtl(frus_core::TextPosition::new(0)));
+        assert!(
+            layout.caret_rect(last).x < layout.caret_rect(1).x,
+            "the ellipsis is left of the first letter"
+        );
     }
 
     /// The layout half: an ellipsising text accepts less width than it asked for, a plain
@@ -2459,6 +2532,8 @@ mod selectable_tests {
             Key::Text("x".into()),
             Key::Backspace,
             Key::Delete,
+            Key::DeleteWord { forward: false },
+            Key::DeleteLine { forward: true },
             Key::Enter,
             Key::Escape,
         ] {

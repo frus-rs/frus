@@ -168,15 +168,28 @@ pub(crate) fn splice(old: &str, new: &str) -> (usize, usize, String) {
 /// field took the change as it came; when it took something else — fewer characters, none —
 /// the caret is where the field's typing left it, and the next frame puts the field's own
 /// text back in the element.
+///
+/// A composition still open is typed as one (milestone 849): a field whose length limit lets
+/// a composition run over holds it whole until it ends. `was_composing` says the field had
+/// one open before this change; when the change is that it ended, with the text as it was,
+/// the field is told so with nothing typed, and its limit applies to what was composed.
 pub(crate) fn browser_change<Msg>(
     field: &dyn frus_widgets::Widget<Msg>,
     value: &str,
     browser: Edit,
+    was_composing: bool,
 ) -> (Option<Msg>, Edit) {
     let Some(old) = field.text_value() else {
         return (None, browser);
     };
     if old == value {
+        if was_composing && browser.composing.is_none() && field.takes_typing() {
+            let mut edit = browser;
+            let message = field.on_edit(&mut edit, &frus_widgets::Key::Text(String::new()));
+            if message.is_some() {
+                return (message, edit);
+            }
+        }
         return (None, browser);
     }
     if !field.takes_typing() {
@@ -187,7 +200,7 @@ pub(crate) fn browser_change<Msg>(
     let mut edit = Edit {
         cursor: end,
         anchor: (start < end).then_some(start),
-        composing: None,
+        composing: browser.composing,
         affinity: Default::default(),
     };
     let key = if inserted.is_empty() {
@@ -199,6 +212,12 @@ pub(crate) fn browser_change<Msg>(
     // Taken as it came — a substitution keeps the length — so the browser's caret, its
     // selection and its composition are the field's too.
     let as_it_came = message.is_some() && edit.cursor == start + typed && edit.anchor.is_none();
+    // Otherwise the field's own text goes back in the element, and what the browser was
+    // composing in it with it.
+    let edit = Edit {
+        composing: None,
+        ..edit
+    };
     (message, if as_it_came { browser } else { edit })
 }
 
@@ -1169,7 +1188,7 @@ mod tests {
             composing: Some((1, 3)),
             affinity: Default::default(),
         };
-        let (message, edit) = browser_change(&upper, "Xyz", typed);
+        let (message, edit) = browser_change(&upper, "Xyz", typed, false);
         assert_eq!(message.as_deref(), Some("XYZ"));
         // Taken with the same length: the browser's caret and composition stand.
         assert_eq!(edit, typed);
@@ -1182,6 +1201,7 @@ mod tests {
                 cursor: 2,
                 ..Edit::default()
             },
+            false,
         );
         assert_eq!(message, None);
         assert_eq!(edit.cursor, 1);
@@ -1195,6 +1215,7 @@ mod tests {
                 cursor: 6,
                 ..Edit::default()
             },
+            false,
         );
         assert_eq!(message.as_deref(), Some("abc"));
         assert_eq!(edit.cursor, 3);
@@ -1207,6 +1228,7 @@ mod tests {
                 cursor: 1,
                 ..Edit::default()
             },
+            false,
         );
         assert_eq!(message.as_deref(), Some("a"));
         let (message, _) = browser_change(
@@ -1216,7 +1238,29 @@ mod tests {
                 cursor: 2,
                 ..Edit::default()
             },
+            false,
         );
         assert_eq!(message, None);
+    }
+
+    /// **The end of a composition is the moment the length limit applies to it** (milestone
+    /// 849): a field holding more than its limit because a composition ran over is cut, at a
+    /// grapheme cluster boundary, when the browser reports the composition finished with the
+    /// text unchanged. A field that was not composing is left as it is.
+    #[test]
+    fn a_finished_composition_is_held_to_the_limit() {
+        use frus_widgets::TextField;
+        let over = TextField::new("ab\u{4F60}\u{597D}")
+            .on_input(|s: String| s)
+            .max_length(3);
+        let browser = Edit {
+            cursor: 4,
+            ..Edit::default()
+        };
+        let (message, edit) = browser_change(&over, "ab\u{4F60}\u{597D}", browser, true);
+        assert_eq!(message.as_deref(), Some("ab\u{4F60}"));
+        assert_eq!(edit.cursor, 3);
+        let (message, _) = browser_change(&over, "ab\u{4F60}\u{597D}", browser, false);
+        assert_eq!(message, None, "no composition ended: nothing to do");
     }
 }

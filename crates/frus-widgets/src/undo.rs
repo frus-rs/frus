@@ -123,6 +123,8 @@ impl EditKind {
                 }
             }
             Key::Backspace | Key::Delete if !selected => EditKind::Deleting,
+            // A word or a line deleted at once is one deliberate act, and one undo brings it
+            // back whole (milestone 849).
             _ => EditKind::Chunk,
         }
     }
@@ -608,6 +610,25 @@ mod field_tests {
         assert_eq!(app.value, "one tw", "the cut alone comes back");
         assert!(app.step(false));
         assert_eq!(app.value, "one two", "and then the backspace before it");
+    }
+
+    /// **A word deleted at once comes back in one undo** (milestone 849): Ctrl+Backspace is
+    /// one step, each word deletion its own, and none joins the backspaces before it.
+    #[test]
+    fn a_deleted_word_comes_back_in_one_step() {
+        let mut app = App::new("");
+        app.typing("one two three");
+        app.key(Key::Backspace, 0.05); // "one two thre"
+        app.key(Key::DeleteWord { forward: false }, 0.05);
+        assert_eq!(app.value, "one two ");
+        app.key(Key::DeleteWord { forward: false }, 0.05);
+        assert_eq!(app.value, "one ");
+        assert!(app.step(false));
+        assert_eq!(app.value, "one two ", "the second word alone comes back");
+        assert!(app.step(false));
+        assert_eq!(app.value, "one two thre", "then the first, whole");
+        assert!(app.step(false));
+        assert_eq!(app.value, "one two three", "then the backspace before them");
     }
 
     /// A character the field **refuses** is not a step. This is the one that says why the

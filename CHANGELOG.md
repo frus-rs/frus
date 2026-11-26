@@ -8,10 +8,29 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 848 so far, each documenting the objective, the alternatives
+> record — one per step, 849 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **Word and line deletion in text fields** (J849, L-038, part of #56). Ctrl+Backspace and
+  Ctrl+Delete delete the word before or after the caret on Windows, Linux and an Android
+  hardware keyboard, Option+Backspace and Option+Delete on an Apple keyboard; Cmd+Backspace and
+  Cmd+Delete delete to the start or the end of the line on an Apple keyboard, Alt elsewhere. An
+  obscured field deletes everything on that side. One undo brings the deleted text back. `Key`
+  gains `DeleteWord` and `DeleteLine`.
+- **`TextField::max_length` counts grapheme clusters** (J849): a flag, a family emoji, a letter
+  with its accent or a Devanagari syllable is one character, in the limit and in the counter. A
+  paste past the limit keeps the text around it and lands what fits, cut between clusters; a
+  keystroke into a full field is no longer reported as a change. A composition may run over the
+  limit until it is finished on macOS, Linux, iOS and the web, and is held to it throughout on
+  Android and Windows.
+- **An ellipsis never cuts through a grapheme cluster** (J849), in plain and rich text, left to
+  right and right to left.
+- **CR LF is one line break** (J849): the layout splits lines where the shaper does, so End no
+  longer stops between a CR and its LF, a line limit cuts in the right place after one, and a
+  lone CR no longer panics the layout. A single-line field leaves the line breaks of a paste
+  out.
 
 - **The accessibility tree has a shape** (J848, L-040). A list holds its items and each item
   says its place among all of them, built or not ("3 of 12"); a card is a group a reader steps

@@ -147,6 +147,22 @@ pub enum Key {
     Backspace,
     /// Forward delete (the selection, otherwise the character to the right).
     Delete,
+    /// Deletes a **word** (milestone 849): the selection when there is one, otherwise from
+    /// the caret to the word boundary on that side — the start of the word before it, or the
+    /// end of the word after it. Ctrl+Backspace and Ctrl+Delete; Option on an Apple keyboard.
+    /// In an obscured field, where the words cannot be seen, everything on that side.
+    DeleteWord {
+        /// Towards the end of the text (Delete) rather than its start (Backspace).
+        forward: bool,
+    },
+    /// Deletes to the **end of the line** on that side (milestone 849): the selection when
+    /// there is one, otherwise from the caret to the start or the end of its line.
+    /// Cmd+Backspace and Cmd+Delete on an Apple keyboard, Alt elsewhere. In an obscured
+    /// field, everything on that side.
+    DeleteLine {
+        /// Towards the end of the text (Delete) rather than its start (Backspace).
+        forward: bool,
+    },
     /// Enter.
     Enter,
     /// Shift+Enter: a line break asked for explicitly (milestone 815). A multi-line field
