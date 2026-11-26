@@ -720,13 +720,17 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** widgets
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** `GoRoute::shell` gives tabs their own stacks, but a shell inside a branch of
-  another shell is refused by an assertion when the router is made, so the application panics
-  at start. Branches not on show also restart from their first page after process
-  restoration.
-- **Workaround:** Keep one level of shell.
+- **Status:** partial
+- **What you hit:** Up to 0.6.0, a shell inside a branch of another shell was refused by an
+  assertion when the router was made, so the application panicked at start. Since milestone
+  851 a branch may hold a shell of its own: each level keeps its branches' stacks, the inner
+  frame is drawn in the outer one's body, a push inside the inner branch moves only that
+  branch, and Back works from the inside out. What is left: branches not on show restart from
+  their first page after process restoration, at every level.
+- **Workaround:** None needed for nesting. For restoration, keep what a branch must not lose
+  in the application's own restorable state.
 - **Evidence:** [docs/milestone-781.md](docs/milestone-781.md),
+  [docs/milestone-851.md](docs/milestone-851.md),
   [crates/frus-widgets/src/router.rs](crates/frus-widgets/src/router.rs)
 
 ### L-046 Only a few widgets have an Apple-style look
@@ -747,14 +751,20 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** widgets
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** A table too narrow for its columns runs past its box rather than wrapping the
-  labels. Flexible columns placed where the width is unbounded (a row beside other children, a
-  horizontal scroll) come out at zero width, and in a virtualised table a data label wider
-  than its heading can run into the next column.
-- **Workaround:** Give the table a bounded width and its columns fixed or minimum widths.
+- **Status:** partial
+- **What you hit:** Up to 0.6.0, a table too narrow for its columns ran past its box rather
+  than wrapping the labels, and in a virtualised table a data label wider than its heading ran
+  into the next column. Since milestone 851 a label wider than its column wraps inside it and
+  its row grows, between a least and a most height (`data_row_min_height`,
+  `data_row_max_height`, `heading_row_height`, on the table or in `TableTheme`); a flexible
+  column may shrink to its widest word, and where the width is unbounded every column is as
+  wide as its widest label. What is left: where the rows' heights are set by something else
+  (a virtualised table, frozen columns, a resizable grid) a label stays on one line and is cut
+  at its cell's edge.
+- **Workaround:** In those three, give the columns fixed widths wide enough for their labels.
 - **Evidence:** [docs/milestone-758.md](docs/milestone-758.md),
-  [docs/milestone-767.md](docs/milestone-767.md)
+  [docs/milestone-767.md](docs/milestone-767.md),
+  [docs/milestone-851.md](docs/milestone-851.md)
 
 ### L-048 `FileTree` builds every visible row and has no arrow-key navigation between levels
 

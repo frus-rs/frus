@@ -33,6 +33,8 @@ type RowWidgets<Msg> = Rc<dyn Fn(usize) -> Vec<Box<dyn Widget<Msg>>>>;
 
 const ROW_H: f32 = 34.0;
 const PAD_X: f32 = 10.0;
+/// The room kept above and below a label that wraps onto more lines than a row holds.
+const PAD_Y: f32 = 8.0;
 
 /// A column heading's style: what the table was told, else what the theme says, else the
 /// reference's — a data table's headings are `titleSmall` and its cells `bodyMedium`, and
@@ -110,20 +112,44 @@ fn cell_style(width: Dimension, header: bool, theme: Option<&Theme>) -> Style {
     } else {
         1.0
     };
+    let (least, most) = row_heights(header, theme);
+    // A **floor**, and one that answers to the reader: a line of the label fits whatever
+    // the floor says. A label wrapped onto more lines is measured (milestone 851).
+    let min_height = frus_text::line_box(least, &cell_text_style(header, theme), 0.0);
     Style {
         width,
         height: Dimension::Auto,
-        // A **floor**, and one that answers to the reader: the cell paints its label
-        // rather than laying it out, so its content height is zero and `min_height` is the
-        // only thing standing between a row and text taller than it.
-        min_height: Dimension::Length(frus_text::line_box(
-            ROW_H,
-            &cell_text_style(header, theme),
-            0.0,
-        )),
+        min_height: Dimension::Length(min_height),
+        max_height: most.map_or(Dimension::Auto, |most| {
+            Dimension::Length(most.max(min_height))
+        }),
         flex_grow,
         ..Default::default()
     }
+}
+
+/// How tall a row may be: at least, and at most (`None`: as tall as its tallest label). What
+/// the table was told, else what the theme says, else 34 and no limit (milestone 851).
+fn row_heights(header: bool, theme: Option<&Theme>) -> (f32, Option<f32>) {
+    let table = theme.map(|t| &t.widgets.table);
+    if header {
+        (
+            table.and_then(|t| t.heading_row_height).unwrap_or(ROW_H),
+            None,
+        )
+    } else {
+        (
+            table.and_then(|t| t.data_row_min_height).unwrap_or(ROW_H),
+            table.and_then(|t| t.data_row_max_height),
+        )
+    }
+}
+
+/// The widest word of `text`: how narrow it can wrap.
+fn widest_word(text: &str, style: &ResolvedTextStyle) -> f32 {
+    text.split_whitespace()
+        .map(|word| frus_text::measure_resolved(word, style).width)
+        .fold(0.0f32, f32::max)
 }
 
 /// Side of a header icon (a `24×24` grid, scaled).
@@ -148,7 +174,10 @@ struct HeadingFloor {
 }
 
 /// **The narrowest each flexible column may be** (milestone 767): as wide as the widest
-/// label in it, heading included, with the cell's padding on both sides.
+/// label in it, heading included, with the cell's padding on both sides — or, where labels
+/// wrap (milestone 851), as wide as the widest *word* in it, so that a table narrower than
+/// its labels wraps them instead of running past its box. The widest label is then what a
+/// cell asks for when the width is unbounded, so that the columns still come out apart.
 ///
 /// A cell paints its label rather than laying it out, so to the layout a text cell has no
 /// content and a flexible column no width of its own. Where the table has a width to share
@@ -163,12 +192,19 @@ struct ColumnFloors {
     headings: Vec<HeadingFloor>,
     /// Per column, every data label in it.
     data: Vec<Vec<String>>,
-    measured: std::cell::RefCell<Option<(ResolvedTextStyle, ResolvedTextStyle, Vec<f32>)>>,
+    /// Per column, whether it is flexible: the shared basis is the widest of those.
+    flexible: Vec<bool>,
+    measured: std::cell::RefCell<Option<MeasuredFloors>>,
 }
 
+/// The text styles floors were measured under, and per column the widest word and the
+/// widest label.
+type MeasuredFloors = (ResolvedTextStyle, ResolvedTextStyle, Vec<(f32, f32)>);
+
 impl ColumnFloors {
-    /// The floor of column `c` under `theme`'s text styles.
-    fn of(&self, c: usize, theme: Option<&Theme>) -> f32 {
+    /// The floor of column `c` under `theme`'s text styles: the narrowest it can wrap to, and
+    /// the narrowest that holds every label on one line.
+    fn of(&self, c: usize, theme: Option<&Theme>) -> (f32, f32) {
         let (heading, data) = (heading_style(theme), data_style(theme));
         let mut measured = self.measured.borrow_mut();
         let fresh = matches!(&*measured, Some((h, d, _)) if *h == heading && *d == data);
@@ -183,20 +219,30 @@ impl ColumnFloors {
             let columns = self.headings.len().max(self.data.len());
             let floors = (0..columns)
                 .map(|c| {
-                    let head = self.headings.get(c).map_or(0.0, |h| {
+                    let (head_word, head) = self.headings.get(c).map_or((0.0, 0.0), |h| {
                         let icon = if h.icon { ICON + ICON_GAP } else { 0.0 };
                         let sort = if h.sortable { SORT_ROOM } else { 0.0 };
-                        icon + width(&h.label, &heading) + sort + h.action
+                        let room = icon + sort + h.action;
+                        let line = room + width(&h.label, &heading);
+                        // A heading holding an action paints its label on one line.
+                        let word = if h.action > 0.0 {
+                            line
+                        } else {
+                            room + widest_word(&h.label, &heading)
+                        };
+                        (word, line)
                     });
-                    let cells = self.data.get(c).map_or(0.0, |labels| {
-                        labels
-                            .iter()
-                            .map(|l| width(l, &data))
-                            .fold(0.0f32, f32::max)
+                    let (cell_word, cells) = self.data.get(c).map_or((0.0, 0.0), |labels| {
+                        labels.iter().fold((0.0f32, 0.0f32), |(word, line), l| {
+                            (word.max(widest_word(l, &data)), line.max(width(l, &data)))
+                        })
                     });
                     // Whole pixels, rounded up: the layout rounds boxes, and a floor shaved
                     // by a fraction lets the last letter run into the next column.
-                    (head.max(cells) + 2.0 * PAD_X).ceil()
+                    (
+                        (head_word.max(cell_word) + 2.0 * PAD_X).ceil(),
+                        (head.max(cells) + 2.0 * PAD_X).ceil(),
+                    )
                 })
                 .collect();
             *measured = Some((heading, data, floors));
@@ -204,7 +250,16 @@ impl ColumnFloors {
         measured
             .as_ref()
             .and_then(|(_, _, floors)| floors.get(c).copied())
-            .unwrap_or(0.0)
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Where every flexible column starts from when labels wrap: the widest label of any of
+    /// them, on one line.
+    fn basis(&self, theme: Option<&Theme>) -> f32 {
+        (0..self.flexible.len())
+            .filter(|&c| self.flexible[c])
+            .map(|c| self.of(c, theme).1)
+            .fold(0.0f32, f32::max)
     }
 }
 
@@ -212,20 +267,39 @@ impl ColumnFloors {
 /// column's index.
 type Floor = Option<(Rc<ColumnFloors>, usize)>;
 
-/// `style` with a flexible column's floor applied. A fixed column is fixed.
+/// `style` with a flexible column's floor applied — the widest word where labels wrap, the
+/// widest label where they do not. A fixed column is fixed.
 ///
 /// The basis is zero, so that every cell of the column starts from the same place: with
 /// the default basis a heading holding an action widget started from its content and took
 /// a bigger share of its row than the cells under it took of theirs, and the heading's
 /// edges drifted off the column's. From zero, each cell of a column gets the same share,
 /// and the same floor.
-fn with_floor(style: Style, floor: &Floor, theme: Option<&Theme>) -> Style {
+///
+/// Where labels wrap (milestone 851), every flexible column starts instead from the widest
+/// label of them all and may shrink down to its own widest word: the same basis for each, so
+/// the columns still get equal shares of a table wider than that; and a basis that holds
+/// every label on one line, so that a table with no width to share — in a row beside other
+/// children, in a horizontal scroll — comes out with its labels apart.
+fn with_floor(style: Style, floor: &Floor, theme: Option<&Theme>, wrap: bool) -> Style {
     match floor {
-        Some((floors, c)) if matches!(style.width, Dimension::Auto) => Style {
-            min_width: Dimension::Length(floors.of(*c, theme)),
-            flex_basis: Dimension::Length(0.0),
-            ..style
-        },
+        Some((floors, c)) if matches!(style.width, Dimension::Auto) => {
+            let (word, line) = floors.of(*c, theme);
+            if wrap {
+                Style {
+                    min_width: Dimension::Length(word),
+                    flex_basis: Dimension::Length(floors.basis(theme)),
+                    flex_shrink: 1.0,
+                    ..style
+                }
+            } else {
+                Style {
+                    min_width: Dimension::Length(line),
+                    flex_basis: Dimension::Length(0.0),
+                    ..style
+                }
+            }
+        }
         _ => style,
     }
 }
@@ -254,6 +328,11 @@ struct Cell<Msg> {
     action: Vec<Box<dyn Widget<Msg>>>,
     /// The column's floor, when it is flexible.
     floor: Floor,
+    /// Whether the label wraps onto more lines when its column is narrower than it
+    /// (milestone 851). Not in a table whose rows have a height set by others — a
+    /// virtualised list's, frozen blocks', a resizable grid's — where it is cut at the cell's
+    /// edge instead.
+    wrap: bool,
 }
 
 impl<Msg> Cell<Msg> {
@@ -262,6 +341,9 @@ impl<Msg> Cell<Msg> {
             cell_style(self.width, self.header, theme),
             &self.floor,
             theme,
+            // The column's, not the cell's: a heading holding an action is in a column whose
+            // other cells wrap, and has to start from the same basis as they do.
+            self.wrap,
         );
         // With an action widget, it sits on the **right** (the label goes on being painted
         // on the left) and is vertically centred.
@@ -278,6 +360,28 @@ impl<Msg> Cell<Msg> {
     }
 }
 
+impl<Msg> Cell<Msg> {
+    /// Whether the label is laid out wrapped: a cell holding an action widget paints its
+    /// label on one line beside it.
+    fn wraps(&self) -> bool {
+        self.wrap && self.action.is_empty()
+    }
+
+    /// The room beside the label: the padding, a heading's icon before it and its sort
+    /// arrow after it.
+    fn room(&self) -> (f32, f32) {
+        let before = PAD_X
+            + if self.icon.is_some() {
+                ICON + ICON_GAP
+            } else {
+                0.0
+            };
+        let sortable = self.header && self.message.is_some();
+        let after = PAD_X + if sortable { SORT_ROOM } else { 0.0 };
+        (before, after)
+    }
+}
+
 impl<Msg: Clone> Widget<Msg> for Cell<Msg> {
     fn style(&self) -> Style {
         self.sizing(None)
@@ -289,6 +393,65 @@ impl<Msg: Clone> Widget<Msg> for Cell<Msg> {
 
     fn children(&self) -> &[Box<dyn Widget<Msg>>] {
         &self.action
+    }
+
+    /// **A label wraps inside its column** (milestone 851): the cell is as tall as its label
+    /// laid out at the column's width, between the row's least and most heights. Where the
+    /// width is unbounded it asks for the flexible columns' shared basis, the same in every
+    /// row and every column, so that the rows agree on the columns' edges and no label
+    /// wraps.
+    fn measure(&self, theme: &Theme) -> Option<frus_layout::MeasureFn<'_>> {
+        if !self.wraps() {
+            return None;
+        }
+        let style = cell_text_style(self.header, Some(theme));
+        let (before, after) = self.room();
+        let basis = self.floor.as_ref().map(|(f, _)| f.basis(Some(theme)));
+        Some(Box::new(move |width, _| {
+            let natural = || {
+                frus_core::fits(
+                    frus_text::measure_resolved(&self.label, &style).width + before + after,
+                )
+            };
+            let width = match (width, basis) {
+                (Some(width), _) => width,
+                (None, Some(basis)) => basis,
+                (None, None) => natural(),
+            };
+            let room = (width - before - after).max(1.0);
+            let text = if self.label.is_empty() {
+                style.line_height()
+            } else {
+                frus_text::measure_wrapped_resolved(&self.label, &style, Some(room)).height
+            };
+            frus_core::Size::new(width, frus_core::fits(text + 2.0 * PAD_Y))
+        }))
+    }
+
+    fn measure_key(&self, theme: &Theme) -> Option<u64> {
+        if !self.wraps() {
+            return None;
+        }
+        use std::hash::{Hash, Hasher};
+        let style = cell_text_style(self.header, Some(theme));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.label.hash(&mut hasher);
+        self.header.hash(&mut hasher);
+        self.icon.is_some().hash(&mut hasher);
+        self.message.is_some().hash(&mut hasher);
+        style.size.to_bits().hash(&mut hasher);
+        style.weight.to_u16().hash(&mut hasher);
+        style.italic.hash(&mut hasher);
+        style.height.map(f32::to_bits).hash(&mut hasher);
+        style.family.hash(&mut hasher);
+        style.letter_spacing.to_bits().hash(&mut hasher);
+        if let Some((floors, c)) = &self.floor {
+            let (word, line) = floors.of(*c, Some(theme));
+            word.to_bits().hash(&mut hasher);
+            line.to_bits().hash(&mut hasher);
+            floors.basis(Some(theme)).to_bits().hash(&mut hasher);
+        }
+        Some(hasher.finish())
     }
 
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene) {
@@ -308,7 +471,6 @@ impl<Msg: Clone> Widget<Msg> for Cell<Msg> {
         // this one behind because it was written against a bare constant rather than a
         // style, which is exactly the formulation a compiler cannot find.
         let style = cell_text_style(self.header, Some(theme));
-        let ty = bounds.y + (bounds.height - style.line_height()) * 0.5;
 
         // Leading icon (headers): painted on the left, the label shifted after it.
         let mut text_x = bounds.x + PAD_X;
@@ -318,18 +480,48 @@ impl<Msg: Clone> Widget<Msg> for Cell<Msg> {
             scene.fill_path(&path, color.fade(o));
             text_x += ICON + ICON_GAP;
         }
-        scene.text(
-            Point::new(text_x, ty),
-            self.label.clone(),
-            &style,
-            color.fade(o),
-        );
+        // Measured with the style the label is **drawn** with: a sort arrow placed from a
+        // bare size lands inside the word the moment the reader enlarges it.
+        let lw = frus_text::measure_resolved(&self.label, &style).width;
+        let (before, after) = self.room();
+        let room = (bounds.width - before - after).max(1.0);
+        // A label wider than its column wraps inside it (milestone 851), centred as a
+        // block; one that cannot wrap, or a wrapped one taller than its row, is cut at the
+        // cell's edge rather than drawn over its neighbours.
+        let wrapped = self.wraps() && lw > room;
+        let height = if wrapped {
+            frus_text::measure_wrapped_resolved(&self.label, &style, Some(room)).height
+        } else {
+            style.line_height()
+        };
+        let ty = bounds.y + (bounds.height - height).max(0.0) * 0.5;
+        let spills = lw > room && !wrapped || height > bounds.height;
+        let clip = scene.current_clip();
+        if spills {
+            scene.set_clip(clip.intersect(bounds));
+        }
+        if wrapped {
+            scene.text_wrapped(
+                Point::new(text_x, ty),
+                self.label.clone(),
+                &style,
+                color.fade(o),
+                room,
+            );
+        } else {
+            scene.text(
+                Point::new(text_x, ty),
+                self.label.clone(),
+                &style,
+                color.fade(o),
+            );
+        }
+        if spills {
+            scene.set_clip(clip);
+        }
 
         if let (true, Some(ascending)) = (self.header, self.sort) {
-            // Measured with the style the label was **drawn** with: a sort arrow placed
-            // from a bare size lands inside the word the moment the reader enlarges it.
-            let lw = frus_text::measure_resolved(&self.label, &style).width;
-            let cx = text_x + lw + 8.0;
+            let cx = text_x + lw.min(room) + 8.0;
             let cy = bounds.y + bounds.height * 0.5;
             let (w, h) = (4.0, 4.0);
             let tri = if ascending {
@@ -779,6 +971,9 @@ pub struct Table<Msg = crate::callback::Callback> {
     frozen: (usize, usize),
     heading_text_style: Option<TextStyle>,
     data_text_style: Option<TextStyle>,
+    data_row_min_height: Option<f32>,
+    data_row_max_height: Option<f32>,
+    heading_row_height: Option<f32>,
     root: Box<dyn Widget<Msg>>,
 }
 
@@ -824,6 +1019,9 @@ impl<Msg: Clone + 'static> Table<Msg> {
             frozen: (0, 0),
             heading_text_style: None,
             data_text_style: None,
+            data_row_min_height: None,
+            data_row_max_height: None,
+            heading_row_height: None,
             root: Box::new(Flex::<Msg>::column().gap(ROW_GAP)),
         }
     }
@@ -845,6 +1043,33 @@ impl<Msg: Clone + 'static> Table<Msg> {
     #[must_use]
     pub fn data_text_style(mut self, style: TextStyle) -> Self {
         self.data_text_style = Some(style);
+        self
+    }
+
+    /// The least a data row is tall, over the theme's
+    /// [`data_row_min_height`](crate::TableTheme::data_row_min_height) (34 unset). A row
+    /// whose labels wrap grows past it; in a virtualised table every row is this tall.
+    #[must_use]
+    pub fn data_row_min_height(mut self, height: f32) -> Self {
+        self.data_row_min_height = Some(height);
+        self.rebuild();
+        self
+    }
+
+    /// The most a data row grows to when its labels wrap, over the theme's
+    /// [`data_row_max_height`](crate::TableTheme::data_row_max_height) (no limit unset). A
+    /// label taller than that is cut at the row's edge.
+    #[must_use]
+    pub fn data_row_max_height(mut self, height: f32) -> Self {
+        self.data_row_max_height = Some(height);
+        self
+    }
+
+    /// The least the heading row is tall, over the theme's
+    /// [`heading_row_height`](crate::TableTheme::heading_row_height) (34 unset).
+    #[must_use]
+    pub fn heading_row_height(mut self, height: f32) -> Self {
+        self.heading_row_height = Some(height);
         self
     }
 
@@ -1126,6 +1351,7 @@ impl<Msg: Clone + 'static> Table<Msg> {
         Rc::new(ColumnFloors {
             headings,
             data,
+            flexible: (0..self.columns).map(|c| self.widths[c] <= 0.0).collect(),
             measured: std::cell::RefCell::new(None),
         })
     }
@@ -1173,12 +1399,19 @@ impl<Msg: Clone + 'static> Table<Msg> {
         s > 0 && s < self.row_count()
     }
 
+    /// Whether the resizing handles are laid over the grid: a callback, and every column
+    /// fixed, so that the edges are known.
+    fn resizable(&self) -> bool {
+        self.on_resize.is_some()
+            && (0..self.columns).all(|c| self.widths.get(c).copied().unwrap_or(0.0) > 0.0)
+    }
+
     /// The handle layer (one per column edge, except the last), to be laid over the grid.
     /// `None` when the table is not resizable, or when the columns are not all fixed.
     fn resize_overlay(&self, total_h: f32) -> Option<Flex<Msg>> {
         let on_resize = self.on_resize.as_ref()?;
         // The edges are only known when every column is fixed.
-        if !(0..self.columns).all(|c| self.widths.get(c).copied().unwrap_or(0.0) > 0.0) {
+        if !self.resizable() {
             return None;
         }
         let base = if self.on_check.is_some() {
@@ -1227,6 +1460,9 @@ impl<Msg: Clone + 'static> Table<Msg> {
             reorder: None,
             action: Vec::new(),
             floor: None,
+            // The blocks' rows are separate rows: a label wrapped in one would leave the
+            // others a line short.
+            wrap: false,
         }
     }
 
@@ -1263,6 +1499,7 @@ impl<Msg: Clone + 'static> Table<Msg> {
                     reorder: None,
                     action: Vec::new(),
                     floor: None,
+                    wrap: false,
                 });
             }
             col = col.child(rr);
@@ -1359,6 +1596,10 @@ impl<Msg: Clone + 'static> Table<Msg> {
         let checks = self.on_check.is_some();
         let mut col = Flex::column().gap(ROW_GAP);
         let floors = self.column_floors();
+        // Labels wrap, unless something else sets the rows' heights: a virtualised list,
+        // whose rows are all one height, or the resizing handles, laid over a grid of rows
+        // of the least height.
+        let wrap = self.virtual_data.is_none() && !self.resizable();
 
         // The header row (when there are text labels, widget headers, or checkboxes).
         let widget_headers = !self.header_widgets.is_empty();
@@ -1412,6 +1653,7 @@ impl<Msg: Clone + 'static> Table<Msg> {
                         reorder,
                         action,
                         floor: self.floor(&floors, c),
+                        wrap,
                     });
                 }
             }
@@ -1429,7 +1671,8 @@ impl<Msg: Clone + 'static> Table<Msg> {
             let on_select = self.on_select.clone();
             let on_check = self.on_check.clone();
             let floors = floors.clone();
-            let list = ListView::new(count, ROW_H, move |i| {
+            let row_height = self.data_row_min_height.unwrap_or(ROW_H);
+            let list = ListView::new(count, row_height, move |i| {
                 let is_selected = selected.contains(&i);
                 let message = on_select.as_ref().map(|f| f(i));
                 let mut row = Flex::row().gap(ROW_GAP);
@@ -1462,6 +1705,8 @@ impl<Msg: Clone + 'static> Table<Msg> {
                                 reorder: None,
                                 action: Vec::new(),
                                 floor: floor_of(&floors, &widths, c),
+                                // A list's rows are all the same height.
+                                wrap: false,
                             });
                         }
                     }
@@ -1518,6 +1763,7 @@ impl<Msg: Clone + 'static> Table<Msg> {
                             reorder: None,
                             action: Vec::new(),
                             floor: self.floor(&floors, c),
+                            wrap,
                         });
                     }
                 }
@@ -1611,15 +1857,30 @@ impl<Msg: Clone> Widget<Msg> for Table<Msg> {
     /// inherited. `None` when it was told nothing, so a table that says nothing costs
     /// nothing and the theme's own answer stands.
     fn theme_override(&self, inherited: &Theme) -> Option<Box<Theme>> {
-        if self.heading_text_style.is_none() && self.data_text_style.is_none() {
+        if self.heading_text_style.is_none()
+            && self.data_text_style.is_none()
+            && self.data_row_min_height.is_none()
+            && self.data_row_max_height.is_none()
+            && self.heading_row_height.is_none()
+        {
             return None;
         }
         let mut theme = inherited.clone();
+        let table = &mut theme.widgets.table;
         if let Some(style) = self.heading_text_style {
-            theme.widgets.table.heading_text_style = Some(style);
+            table.heading_text_style = Some(style);
         }
         if let Some(style) = self.data_text_style {
-            theme.widgets.table.data_text_style = Some(style);
+            table.data_text_style = Some(style);
+        }
+        if let Some(height) = self.data_row_min_height {
+            table.data_row_min_height = Some(height);
+        }
+        if let Some(height) = self.data_row_max_height {
+            table.data_row_max_height = Some(height);
+        }
+        if let Some(height) = self.heading_row_height {
+            table.heading_row_height = Some(height);
         }
         Some(Box::new(theme))
     }
@@ -2519,13 +2780,15 @@ mod tests {
     }
 
     /// Asserts that, row by row, each label ends before the next column's label starts.
+    /// A label wrapped inside its column (milestone 851) is as wide as it wraps at.
     fn assert_apart(ui: &crate::Ui<()>, rows: &[(&str, &str, bool)]) {
         for (first, second, header) in rows {
-            let (a, b) = (label_x(ui, first).unwrap(), label_x(ui, second).unwrap());
+            let (a, _, wraps) = label_at(ui, first).unwrap();
+            let b = label_x(ui, second).unwrap();
+            let wide = wraps.map_or(painted(first, *header), |w| w.min(painted(first, *header)));
             assert!(
-                a + painted(first, *header) < b,
-                "{first:?} (at {a}, {} wide) runs into {second:?} (at {b})",
-                painted(first, *header)
+                a + wide < b,
+                "{first:?} (at {a}, {wide} wide) runs into {second:?} (at {b})"
             );
         }
     }
@@ -2606,10 +2869,10 @@ mod tests {
     }
 
     /// Where the table has a width to share, a column whose label needs more than its share
-    /// keeps the label's width and the others divide what is left — rather than drawing
-    /// the label across the next column.
+    /// wraps it inside the column (milestone 851; it took the label's width before) — rather
+    /// than drawing the label across the next column.
     #[test]
-    fn a_share_too_narrow_for_its_label_gives_way_to_the_label() {
+    fn a_share_too_narrow_for_its_label_wraps_it() {
         let table = Table::<()>::new(2)
             .width(260.0)
             .header(&["Description of the item", "N"])
@@ -2731,6 +2994,184 @@ mod tests {
         assert!(
             (heading - cell).abs() < 0.5,
             "the heading starts with its column: heading {heading}, cell {cell}"
+        );
+    }
+    /// Where a label is painted, and the width it wraps at (`None`: one line).
+    fn label_at(ui: &crate::Ui<()>, t: &str) -> Option<(f32, f32, Option<f32>)> {
+        fn walk(ps: &[Primitive], t: &str) -> Option<(f32, f32, Option<f32>)> {
+            ps.iter().find_map(|p| match p {
+                Primitive::Text {
+                    text,
+                    position,
+                    max_width,
+                    ..
+                } if text == t => Some((position.x, position.y, *max_width)),
+                Primitive::Layer { primitives, .. } => walk(primitives, t),
+                _ => None,
+            })
+        }
+        walk(ui.scene().primitives(), t)
+    }
+
+    fn laid_out(table: Table<()>, theme: &Theme) -> crate::Ui<()> {
+        let screen = crate::Flex::<()>::column().align(Align::Start).child(table);
+        build_ui(&screen, Size::new(400.0, 600.0), &Runtime::default(), theme)
+    }
+
+    const LONG: &str = "A label far too long for the column it is in";
+
+    /// **A label wider than its column wraps inside it, and its row grows to hold it**
+    /// (milestone 851). It was painted on one line, over the next column.
+    #[test]
+    fn a_label_wider_than_its_column_wraps_and_its_row_grows() {
+        let theme = Theme::default();
+        let table = |first: &str| {
+            Table::<()>::new(2)
+                .column_widths(&[120.0, 80.0])
+                .header(&["Name", "Note"])
+                .row(&[first, "x"])
+                .row(&["below", "y"])
+        };
+        let short = laid_out(table("Ada"), &theme);
+        let long = laid_out(table(LONG), &theme);
+        let (x, _, wraps_at) = label_at(&long, LONG).expect("the label is painted");
+        let room = wraps_at.expect("it wraps");
+        assert!(
+            x + room <= 120.0 + 0.5,
+            "inside its column: from {x}, {room} wide"
+        );
+        let wrapped = frus_text::measure_wrapped_resolved(
+            LONG,
+            &cell_text_style(false, Some(&theme)),
+            Some(room),
+        );
+        let line = cell_text_style(false, Some(&theme)).line_height();
+        assert!(wrapped.height > 2.0 * line, "several lines: {wrapped:?}");
+        let (_, below_short, _) = label_at(&short, "below").unwrap();
+        let (_, below_long, _) = label_at(&long, "below").unwrap();
+        assert!(
+            below_long - below_short >= wrapped.height - line - 1.0,
+            "the next row is pushed down by the lines added: {below_short} -> {below_long}"
+        );
+        let (_, x_y, wraps) = label_at(&long, "x").unwrap();
+        assert_eq!(wraps, None, "a label that fits stays one line");
+        let (_, x_y_short, _) = label_at(&short, "x").unwrap();
+        assert!(x_y > x_y_short, "and is centred in its taller row");
+    }
+
+    /// **A table narrower than its labels wraps them**, instead of running past its box: a
+    /// flexible column may shrink to its widest word (milestone 851).
+    #[test]
+    fn a_narrow_table_wraps_its_labels_inside_its_box() {
+        let table = Table::<()>::new(2)
+            .header(&["Description", "Status"])
+            .row(&[LONG, "Waiting for the review"]);
+        let boxed = crate::ConstrainedBox::new(table).max_width(240.0);
+        let screen = crate::Flex::<()>::column().align(Align::Start).child(boxed);
+        let ui = build_ui(
+            &screen,
+            Size::new(400.0, 600.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
+        let (x, _, wraps) = label_at(&ui, "Waiting for the review").unwrap();
+        let room = wraps.expect("the second column's label wraps");
+        assert!(x + room <= 240.0 + 0.5, "inside the box: {x} + {room}");
+        let (first, _, first_wraps) = label_at(&ui, LONG).unwrap();
+        assert!(first_wraps.is_some());
+        assert!(
+            first + first_wraps.unwrap() <= x,
+            "and the first stays out of the second's way"
+        );
+    }
+
+    /// **A row's height can be capped and floored**, by the table or by the theme, the way
+    /// a data table's rows are: past the cap a label is cut at the row's edge.
+    #[test]
+    fn rows_answer_to_their_least_and_most_heights() {
+        let row_top = |ui: &crate::Ui<()>| label_at(ui, "below").unwrap().1;
+        let table = || {
+            Table::<()>::new(1)
+                .column_widths(&[90.0])
+                .row(&[LONG])
+                .row(&["below"])
+        };
+        let theme = Theme::default();
+        let free = row_top(&laid_out(table(), &theme));
+        let capped = row_top(&laid_out(table().data_row_max_height(40.0), &theme));
+        assert!(capped < free, "capped: {capped} < {free}");
+        assert!(
+            capped <= 40.0 + ROW_GAP + 34.0,
+            "the first row is at most 40 tall: the next label at {capped}"
+        );
+
+        let mut tall = Theme::default();
+        tall.widgets.table.data_row_min_height = Some(80.0);
+        let one = || Table::<()>::new(1).row(&["a"]).row(&["below"]);
+        let (_, a, _) = label_at(&laid_out(one(), &tall), "a").unwrap();
+        let below = row_top(&laid_out(one(), &tall));
+        assert!(
+            (below - a - 80.0 - ROW_GAP).abs() < 1.0,
+            "the theme's floor: rows 80 apart, {a} -> {below}"
+        );
+        let (_, a, _) = label_at(&laid_out(one().data_row_min_height(50.0), &theme), "a").unwrap();
+        let below = row_top(&laid_out(one().data_row_min_height(50.0), &theme));
+        assert!(
+            (below - a - 50.0 - ROW_GAP).abs() < 1.0,
+            "the table's own word: rows 50 apart, {a} -> {below}"
+        );
+    }
+
+    /// **A data table hands its rows' heights to its table**, and its labels wrap too.
+    #[test]
+    fn a_data_table_wraps_and_takes_row_heights() {
+        let rows = vec![vec![LONG.to_string()], vec!["below".to_string()]];
+        let dt: crate::DataTable<()> = crate::DataTable::new(["Note"], rows)
+            .column_widths(&[100.0])
+            .data_row_min_height(60.0);
+        let screen = crate::Flex::<()>::column().align(Align::Start).child(dt);
+        let ui = build_ui(
+            &screen,
+            Size::new(400.0, 600.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
+        let (_, _, wraps) = label_at(&ui, LONG).unwrap();
+        assert!(wraps.is_some(), "the label wraps");
+        let (_, a, _) = label_at(&ui, "below").unwrap();
+        let (_, heading, _) = label_at(&ui, "Note").unwrap();
+        assert!(
+            a - heading > 60.0,
+            "a data row at least 60 tall: {heading} -> {a}"
+        );
+    }
+
+    /// **A virtualised table cuts a long label at its cell's edge**: its rows are all one
+    /// height, so the label stays one line, and no longer runs into the next column.
+    #[test]
+    fn a_virtual_table_cuts_a_long_label_at_its_cell() {
+        let table = Table::<()>::new(2)
+            .column_widths(&[90.0, 90.0])
+            .header(&["A", "B"])
+            .virtual_rows(3, 200.0, |_| vec![LONG.to_string(), "b".to_string()]);
+        let ui = laid_out(table, &Theme::default());
+        fn clip_of(ps: &[Primitive], t: &str) -> Option<(Rect, Option<f32>)> {
+            ps.iter().find_map(|p| match p {
+                Primitive::Text {
+                    text,
+                    clip,
+                    max_width,
+                    ..
+                } if text == t => Some((*clip, *max_width)),
+                Primitive::Layer { primitives, .. } => clip_of(primitives, t),
+                _ => None,
+            })
+        }
+        let (clip, wraps) = clip_of(ui.scene().primitives(), LONG).expect("painted");
+        assert_eq!(wraps, None, "one line");
+        assert!(
+            clip.x + clip.width <= 90.0 + 0.5,
+            "cut at its cell's edge: {clip:?}"
         );
     }
 }
