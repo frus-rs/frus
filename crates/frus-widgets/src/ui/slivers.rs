@@ -131,6 +131,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             host: self.scroll_host,
             keep_visible: None,
         });
+        // A reader is told where it rests and can scroll it (milestone 848).
+        self.semantics.note_scroll(
+            id,
+            viewport.intersect(clip),
+            frus_core::SemanticsScroll {
+                offset: if across { (offset, 0.0) } else { (0.0, offset) },
+                max: if across { (max, 0.0) } else { (0.0, max) },
+            },
+        );
 
         let stretch_mark = (self.scene.primitives().len(), self.xform_base());
         let outer = self.scroll_host.replace(id);

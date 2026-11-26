@@ -57,6 +57,12 @@ fn to_ak_role(role: Role) -> AkRole {
         Role::Splitter => AkRole::Splitter,
         Role::Tree => AkRole::Tree,
         Role::TreeItem => AkRole::TreeItem,
+        Role::List => AkRole::List,
+        Role::Group => AkRole::Group,
+        Role::TabList => AkRole::TabList,
+        Role::Toolbar => AkRole::Toolbar,
+        Role::Navigation => AkRole::Navigation,
+        Role::ScrollView => AkRole::ScrollView,
     }
 }
 
@@ -118,6 +124,39 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         // shell, which maps it to a synthetic click on the widget.
         node.add_action(Action::Click);
     }
+    // Its level, a heading's or a tree item's, and its place among its siblings, "3 of 5"
+    // (milestone 848).
+    if let Some(level) = sem.level {
+        node.set_level(level as usize);
+    }
+    if let Some((position, count)) = sem.position {
+        node.set_position_in_set(position);
+        node.set_size_of_set(count);
+    }
+    if let Some(scroll) = sem.scroll {
+        // Where a scrolling area rests, and the pages a reader can move it by.
+        node.set_scroll_x(scroll.offset.0 as f64);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(scroll.max.0 as f64);
+        node.set_scroll_y(scroll.offset.1 as f64);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(scroll.max.1 as f64);
+        let horizontal = scroll.horizontal();
+        if scroll.can_forward() {
+            node.add_action(if horizontal {
+                Action::ScrollRight
+            } else {
+                Action::ScrollDown
+            });
+        }
+        if scroll.can_backward() {
+            node.add_action(if horizontal {
+                Action::ScrollLeft
+            } else {
+                Action::ScrollUp
+            });
+        }
+    }
     if sem.role == Role::TextInput && !sem.disabled {
         // And a field can be **filled**: dictation, a reader's own editing commands, a tool
         // that types for the person (milestone 710). It goes through the message typing
@@ -159,11 +198,13 @@ pub(crate) fn build_tree_update(
     announce: &str,
     scale: f64,
 ) -> TreeUpdate {
-    build_tree_update_at(nodes, focus, title, announce, scale, (0.0, 0.0))
+    build_tree_update_at(nodes, &[], focus, title, announce, scale, (0.0, 0.0))
 }
 
-/// Builds a complete AccessKit tree update: a `Window` root whose children are the
-/// frame's semantic nodes, paint order being reading order. `focus` is the focused
+/// Builds a complete AccessKit tree update: a `Window` root holding the frame's semantic
+/// nodes, paint order being reading order, each under its parent in `parents` (by index in
+/// `nodes`; a node past its end, or with none, is the root's): a list holds its items, a
+/// dialog its content (milestone 848). `focus` is the focused
 /// widget, when it is in the tree. A non-empty `announce` adds a **live region** that
 /// is spoken aloud.
 ///
@@ -175,6 +216,7 @@ pub(crate) fn build_tree_update(
 /// device's screen inside its outline (milestone 726), which the root then moves the tree to.
 pub(crate) fn build_tree_update_at(
     nodes: &[(WidgetId, Rect, SemanticsProperties)],
+    parents: &[Option<usize>],
     focus: Option<WidgetId>,
     title: &str,
     announce: &str,
@@ -183,7 +225,15 @@ pub(crate) fn build_tree_update_at(
 ) -> TreeUpdate {
     let mut updates: Vec<(NodeId, Node)> = Vec::with_capacity(nodes.len() + 2);
 
-    let mut children: Vec<NodeId> = nodes.iter().map(|(id, _, _)| node_id(*id)).collect();
+    // Each node's children, in reading order; the root's are the nodes with no parent.
+    let mut children: Vec<NodeId> = Vec::new();
+    let mut held: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
+    for (index, (id, _, _)) in nodes.iter().enumerate() {
+        match parents.get(index).copied().flatten().filter(|p| *p < index) {
+            Some(parent) => held[parent].push(node_id(*id)),
+            None => children.push(node_id(*id)),
+        }
+    }
     if !announce.is_empty() {
         children.push(LIVE_ID);
     }
@@ -199,8 +249,12 @@ pub(crate) fn build_tree_update_at(
     }
     updates.push((ROOT_ID, root));
 
-    for (id, rect, sem) in nodes {
-        updates.push((node_id(*id), to_ak_node(*rect, sem)));
+    for ((id, rect, sem), held) in nodes.iter().zip(held) {
+        let mut node = to_ak_node(*rect, sem);
+        if !held.is_empty() {
+            node.set_children(held);
+        }
+        updates.push((node_id(*id), node));
     }
     if !announce.is_empty() {
         updates.push((LIVE_ID, live_node(announce)));
@@ -232,6 +286,8 @@ pub(crate) fn widget_for(node: NodeId) -> Option<WidgetId> {
 #[derive(Default)]
 struct Snapshot {
     nodes: Vec<(WidgetId, Rect, SemanticsProperties)>,
+    /// Each node's parent, by index (milestone 848).
+    parents: Vec<Option<usize>>,
     focus: Option<WidgetId>,
     title: String,
     /// The last announcement message, for the live region. It persists as is:
@@ -247,6 +303,7 @@ impl Snapshot {
     fn to_update(&self) -> TreeUpdate {
         build_tree_update_at(
             &self.nodes,
+            &self.parents,
             self.focus,
             &self.title,
             &self.announce,
@@ -268,6 +325,8 @@ pub(crate) enum A11yAction {
     SetValue(WidgetId, String),
     /// Perform the widget's named action at this index (milestone 810).
     Custom(WidgetId, usize),
+    /// Scroll the area a page, forward (down, or across) or back (milestone 848).
+    Scroll(WidgetId, bool),
 }
 
 type Shared = Arc<Mutex<Snapshot>>;
@@ -310,6 +369,8 @@ fn forwarded(request: ActionRequest) -> Option<A11yAction> {
         (Action::CustomAction, Some(ActionData::CustomAction(index))) if index >= 0 => {
             A11yAction::Custom(id, index as usize)
         }
+        (Action::ScrollDown | Action::ScrollRight, _) => A11yAction::Scroll(id, true),
+        (Action::ScrollUp | Action::ScrollLeft, _) => A11yAction::Scroll(id, false),
         _ => return None,
     })
 }
@@ -356,9 +417,11 @@ impl A11y {
     /// Publishes the frame's semantic tree, laid out at `scale` physical pixels to the
     /// logical one, its origin at `origin` physical pixels in the window; the adapter pushes it
     /// only when an AT is running.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn update(
         &mut self,
         nodes: &[(WidgetId, Rect, SemanticsProperties)],
+        parents: &[Option<usize>],
         focus: Option<WidgetId>,
         title: &str,
         announce: &str,
@@ -367,7 +430,10 @@ impl A11y {
     ) {
         {
             let mut s = self.snapshot.lock().unwrap();
-            s.nodes = nodes.to_vec();
+            s.nodes.clear();
+            s.nodes.extend_from_slice(nodes);
+            s.parents.clear();
+            s.parents.extend_from_slice(parents);
             s.focus = focus;
             s.title = title.to_string();
             s.announce = announce.to_string();
@@ -568,7 +634,15 @@ mod tests {
             Some(A11yAction::SetValue(id, "Ada".into()))
         );
         assert_eq!(forwarded(request(Action::SetValue, None)), None);
-        assert_eq!(forwarded(request(Action::ScrollDown, None)), None);
+        assert_eq!(
+            forwarded(request(Action::ScrollDown, None)),
+            Some(A11yAction::Scroll(id, true))
+        );
+        assert_eq!(
+            forwarded(request(Action::ScrollLeft, None)),
+            Some(A11yAction::Scroll(id, false))
+        );
+        assert_eq!(forwarded(request(Action::Blur, None)), None);
         let mut at_root = request(Action::Click, None);
         at_root.target_node = ROOT_ID;
         assert_eq!(forwarded(at_root), None);
@@ -628,7 +702,7 @@ mod tests {
             Rect::new(20.0, 40.0, 56.0, 56.0),
             sem(Role::Button).label("Done"),
         )];
-        let update = build_tree_update_at(&nodes, None, "frus", "", 2.0, (607.0, 148.0));
+        let update = build_tree_update_at(&nodes, &[], None, "frus", "", 2.0, (607.0, 148.0));
         let transform = *update.nodes[0]
             .1
             .transform()
@@ -639,7 +713,61 @@ mod tests {
             (647.0, 228.0, 759.0, 340.0)
         );
         // A move alone is still a transform.
-        let moved = build_tree_update_at(&nodes, None, "frus", "", 1.0, (10.0, 0.0));
+        let moved = build_tree_update_at(&nodes, &[], None, "frus", "", 1.0, (10.0, 0.0));
         assert!(moved.nodes[0].1.transform().is_some());
+    }
+
+    /// **The tree has a shape** (milestone 848): a list holds its items and an item its
+    /// checkbox, each item says its place, a heading its level, and a scrolling list where it
+    /// rests and which way it can move.
+    #[test]
+    fn a_list_holds_its_items_and_says_where_it_rests() {
+        let rect = Rect::new(0.0, 0.0, 200.0, 40.0);
+        let nodes = vec![
+            (wid(1), rect, sem(Role::Heading).label("Tasks").level(2)),
+            (
+                wid(2),
+                rect,
+                sem(Role::List).scroll(frus_widgets::SemanticsScroll {
+                    offset: (0.0, 40.0),
+                    max: (0.0, 400.0),
+                }),
+            ),
+            (wid(3), rect, sem(Role::ListItem).position(1, 12)),
+            (
+                wid(4),
+                rect,
+                sem(Role::CheckBox).label("Milk").toggled(true),
+            ),
+            (wid(5), rect, sem(Role::ListItem).position(2, 12)),
+            (wid(6), rect, sem(Role::Button).label("Add")),
+        ];
+        let parents = [None, None, Some(1), Some(2), Some(1), None];
+        let update = build_tree_update_at(&nodes, &parents, None, "frus", "", 1.0, (0.0, 0.0));
+        let node = |raw: u64| {
+            update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == node_id(wid(raw)))
+                .map(|(_, node)| node.clone())
+                .expect("present")
+        };
+        assert_eq!(
+            update.nodes[0].1.children(),
+            &[node_id(wid(1)), node_id(wid(2)), node_id(wid(6))],
+            "the root holds the heading, the list and the button"
+        );
+        assert_eq!(node(2).role(), AkRole::List);
+        assert_eq!(node(2).children(), &[node_id(wid(3)), node_id(wid(5))]);
+        assert_eq!(node(3).children(), &[node_id(wid(4))]);
+        assert_eq!(node(3).position_in_set(), Some(1));
+        assert_eq!(node(3).size_of_set(), Some(12));
+        assert_eq!(node(1).level(), Some(2));
+        assert_eq!(node(2).scroll_y(), Some(40.0));
+        assert_eq!(node(2).scroll_y_max(), Some(400.0));
+        assert!(node(2).supports_action(Action::ScrollDown));
+        assert!(node(2).supports_action(Action::ScrollUp));
+        assert!(!node(2).supports_action(Action::ScrollRight));
+        assert!(node(4).children().is_empty());
     }
 }

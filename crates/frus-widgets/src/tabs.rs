@@ -666,6 +666,13 @@ impl<Msg: Clone> Widget<Msg> for TabStrip<Msg> {
         );
     }
 
+    /// The row of tabs, holding them (milestone 848): a reader hears which of how many each is.
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(
+            frus_core::Role::TabList,
+        ))
+    }
+
     fn on_click(&self) -> Option<Msg> {
         None
     }

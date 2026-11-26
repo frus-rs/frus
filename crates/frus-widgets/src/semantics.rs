@@ -63,13 +63,14 @@ pub struct Description {
 /// a separate `MergeSemantics`; [`Semantics::merge`] is that second widget, spelled as the
 /// constructor it is.
 ///
-/// # What the flat tree costs
+/// # It holds what it describes
 ///
-/// This framework's accessibility tree is **flat**: every annotated widget is a child of
-/// the window. So merging really does discard, where the reference merges a subtree into
-/// its container node and keeps the shape. Two labels are joined into one string, one line
-/// each, which is what the reference does with a merged subtree too — but a nested
-/// structure a reader could descend into is not something ours can express yet.
+/// Since milestone 848 the accessibility tree has a shape. A wrapper that says what a whole
+/// subtree **is** — a role that holds others (a list, a group, a dialog), or no role and a
+/// name, a section — becomes the subtree's parent node, and a reader can step into it or
+/// over it as a unit. One that names a single control (a button, a heading) stands beside
+/// what it annotates, as it always did. Merging joins two labels into one string, one line
+/// each, which is what the reference does with a merged subtree too.
 pub struct Semantics<Msg = crate::callback::Callback> {
     props: SemanticsProperties,
     merging: bool,
@@ -145,6 +146,19 @@ impl<Msg> Semantics<Msg> {
     /// Announces it as disabled.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.props.disabled = disabled;
+        self
+    }
+
+    /// Sets the level: a heading's, `1` the topmost, or a tree item's depth (milestone 848).
+    pub fn level(mut self, level: u32) -> Self {
+        self.props = self.props.level(level);
+        self
+    }
+
+    /// Sets its place among its siblings: `position` counted from `1`, of `count`
+    /// (milestone 848). A list numbers the items that say nothing of theirs itself.
+    pub fn position(mut self, position: usize, count: usize) -> Self {
+        self.props = self.props.position(position, count);
         self
     }
 }
@@ -236,6 +250,184 @@ mod tests {
         assert_eq!(found.len(), 2, "two nodes, not one: {found:?}");
         assert!(found.contains(&(Role::Label, Some("Settings".to_string()))));
         assert!(found.iter().any(|(_, l)| l.as_deref() == Some("A section")));
+    }
+
+    /// The built tree as `(role, label, depth)`, depth counted from `0` at the top
+    /// (milestone 848).
+    fn shaped(root: &dyn Widget<()>) -> Vec<(Role, Option<String>, usize)> {
+        let ui = built(root);
+        let parents = ui.semantics_parents();
+        let depth = |mut at: usize| {
+            let mut depth = 0;
+            while let Some(parent) = parents[at] {
+                depth += 1;
+                at = parent;
+            }
+            depth
+        };
+        ui.semantics()
+            .iter()
+            .enumerate()
+            .map(|(i, (_, _, s))| (s.role, s.label.clone(), depth(i)))
+            .collect()
+    }
+
+    /// **A section holds what it names** (milestone 848): the wrapper that names a box is
+    /// the parent of the box's own nodes, which a reader steps into as a unit.
+    #[test]
+    fn a_named_section_holds_its_content() {
+        let root: Box<dyn Widget<()>> = Box::new(
+            Semantics::new(
+                SemanticsProperties::default(),
+                Flex::column()
+                    .child(Text::new("Wi-Fi"))
+                    .child(Button::new("Connect").on_press(())),
+            )
+            .label("Network"),
+        );
+        let found = shaped(root.as_ref());
+        assert_eq!(
+            found,
+            vec![
+                (Role::None, Some("Network".to_string()), 0),
+                (Role::Label, Some("Wi-Fi".to_string()), 1),
+                (Role::Button, Some("Connect".to_string()), 1),
+            ]
+        );
+    }
+
+    /// **A list holds its items, and each knows its place** among all of them, built or not
+    /// (milestone 848): a row of a checkbox and its caption is an item holding both.
+    #[test]
+    fn a_list_holds_numbered_items() {
+        let root: Box<dyn Widget<()>> = Box::new(
+            crate::ListView::new(50, 40.0, |i| {
+                Flex::row()
+                    .child(crate::Checkbox::new(i % 2 == 0).on_toggle(|_| ()))
+                    .child(Text::new(format!("Task {i}")))
+            })
+            .height(120.0),
+        );
+        let ui = built(root.as_ref());
+        let nodes = ui.semantics();
+        let parents = ui.semantics_parents();
+        let (_, _, list) = &nodes[0];
+        assert_eq!(list.role, Role::List);
+        let scroll = list.scroll.expect("a list says where it rests");
+        assert_eq!(scroll.offset, (0.0, 0.0));
+        assert!(scroll.max.1 > 1000.0, "fifty rows of 40 in 120: {scroll:?}");
+        let items: Vec<usize> = (0..nodes.len())
+            .filter(|&i| parents[i] == Some(0))
+            .collect();
+        assert!(items.len() >= 3, "the rows in view: {nodes:?}");
+        for (n, &item) in items.iter().enumerate() {
+            assert_eq!(nodes[item].2.role, Role::ListItem);
+            assert_eq!(nodes[item].2.position, Some((n + 1, 50)));
+        }
+        // The first item holds its checkbox and its caption.
+        let held: Vec<Role> = (0..nodes.len())
+            .filter(|&i| parents[i] == Some(items[0]))
+            .map(|i| nodes[i].2.role)
+            .collect();
+        assert_eq!(held, vec![Role::CheckBox, Role::Label]);
+
+        // Told it is not a list, it is only an area that scrolls.
+        let page: Box<dyn Widget<()>> = Box::new(
+            crate::ListView::new(50, 40.0, |i| Text::new(format!("Line {i}")))
+                .height(120.0)
+                .semantic_list(false),
+        );
+        let found = shaped(page.as_ref());
+        assert_eq!(found[0].0, Role::ScrollView);
+        assert!(found[1..]
+            .iter()
+            .all(|(role, _, depth)| *role == Role::Label && *depth == 1));
+    }
+
+    /// **A card is one unit** (milestone 848) holding its words and controls; told not to be,
+    /// it adds nothing; pressed as a whole, its words name the press.
+    #[test]
+    fn a_card_groups_what_it_holds() {
+        let card = || {
+            crate::Card::new().child(
+                Flex::column()
+                    .child(Text::new("Order 42"))
+                    .child(Button::new("Track").on_press(())),
+            )
+        };
+        let root: Box<dyn Widget<()>> = Box::new(card());
+        assert_eq!(
+            shaped(root.as_ref()),
+            vec![
+                (Role::Group, None, 0),
+                (Role::Label, Some("Order 42".to_string()), 1),
+                (Role::Button, Some("Track".to_string()), 1),
+            ]
+        );
+        let flat: Box<dyn Widget<()>> = Box::new(card().semantic_container(false));
+        assert!(shaped(flat.as_ref())
+            .iter()
+            .all(|(_, _, depth)| *depth == 0));
+        assert_eq!(shaped(flat.as_ref()).len(), 2);
+
+        let pressed: Box<dyn Widget<()>> = Box::new(
+            crate::GestureDetector::new(crate::Card::new().child(Text::new("Order 42"))).on_tap(()),
+        );
+        assert_eq!(
+            shaped(pressed.as_ref()),
+            vec![(Role::Button, Some("Order 42".to_string()), 0)],
+            "a pressed card reads as the button its words name, as before cards were groups"
+        );
+    }
+
+    /// **A heading says its level** (milestone 848), from a text or from a wrapper.
+    #[test]
+    fn a_heading_carries_its_level() {
+        let root: Box<dyn Widget<()>> = Box::new(
+            Flex::column()
+                .child(Text::new("Account").heading_level(1))
+                .child(Semantics::heading(Text::new("Security")).level(2)),
+        );
+        let levels: Vec<(Role, Option<u32>)> = built(root.as_ref())
+            .semantics()
+            .iter()
+            .map(|(_, _, s)| (s.role, s.level))
+            .collect();
+        assert_eq!(
+            levels,
+            vec![(Role::Heading, Some(1)), (Role::Heading, Some(2))]
+        );
+    }
+
+    /// **A scroll view says where it rests** (milestone 848) and holds what scrolls in it; one
+    /// whose content fits adds nothing.
+    #[test]
+    fn a_scroll_view_holds_its_content_when_it_scrolls() {
+        let tall = || {
+            let mut column = Flex::column();
+            for i in 0..20 {
+                column =
+                    column.child(crate::SizedBox::new(Text::new(format!("Row {i}"))).height(40.0));
+            }
+            column
+        };
+        let root: Box<dyn Widget<()>> = Box::new(
+            crate::SingleChildScrollView::new()
+                .height(100.0)
+                .child(tall()),
+        );
+        let found = shaped(root.as_ref());
+        assert_eq!(found[0].0, Role::ScrollView);
+        assert!(found[1..].iter().all(|(_, _, depth)| *depth == 1));
+        let fits: Box<dyn Widget<()>> = Box::new(
+            crate::SingleChildScrollView::new()
+                .height(100.0)
+                .child(Text::new("Short")),
+        );
+        assert_eq!(
+            shaped(fits.as_ref()),
+            vec![(Role::Label, Some("Short".to_string()), 0)]
+        );
     }
 
     /// **Two labels are joined, not chosen between.** A row of a control and its caption

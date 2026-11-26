@@ -30,7 +30,9 @@ use crate::runtime::Runtime;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
+mod semtree;
 mod slivers;
+use semtree::SemanticsBuf;
 
 /// Thickness of a scrollbar, in pixels (`scrollbar.dart:12`).
 const BAR_SIZE: f32 = 8.0;
@@ -510,7 +512,7 @@ struct BoundaryData<Msg> {
     text_stops: Vec<crate::TextStop>,
     /// The page's text (milestone 830).
     page_text: Vec<crate::PageText>,
-    semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
+    semantics: SemanticsBuf,
     system_ui: Vec<(Rect, crate::SystemUiOverlayStyle)>,
     /// The lifted primitives painted in the subtree and not put back yet, each with its place
     /// **relative to the subtree's first primitive**.
@@ -852,6 +854,8 @@ pub struct Ui<Msg = crate::callback::Callback> {
     /// The accessibility tree: semantic nodes (id, bounds, annotation), in paint order. The
     /// shell maps it onto AccessKit.
     semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
+    /// How many of the nodes after each one are its descendants (milestone 848).
+    semantics_spans: Vec<u32>,
     /// The regions saying what the system bars over them should look like (paint order).
     system_ui: Vec<(Rect, crate::SystemUiOverlayStyle)>,
     /// Boxes whose children ran outside them, with the edge and the amount.
@@ -895,6 +899,19 @@ impl<Msg: Clone> Ui<Msg> {
     /// pushes it to AccessKit.
     pub fn semantics(&self) -> &[(WidgetId, Rect, frus_core::SemanticsProperties)] {
         &self.semantics
+    }
+
+    /// The **shape** of the accessibility tree (milestone 848): for each node of
+    /// [`Ui::semantics`], how many of the nodes after it are its descendants. A list's items
+    /// follow the list and are counted in its span; a node with a span of `0` holds nothing.
+    pub fn semantics_spans(&self) -> &[u32] {
+        &self.semantics_spans
+    }
+
+    /// The parent of each node of [`Ui::semantics`], by its index there: `None` for a node
+    /// at the top of the tree (milestone 848). A parent always comes before its children.
+    pub fn semantics_parents(&self) -> Vec<Option<usize>> {
+        semtree::parents_of(&self.semantics_spans)
     }
 
     /// What the system bars should look like over this frame (#46): the regions under
@@ -2306,6 +2323,24 @@ fn owned_theme(theme: &Theme) -> std::rc::Rc<Theme> {
     std::rc::Rc::new(theme.clone())
 }
 
+/// A tappable area that describes itself as an **unnamed group** answers as a button.
+///
+/// A detector forwards its child's description, so a pressed card arrives at
+/// `apply_tap_area` as the card's unnamed group (milestone 848). Pressed as a whole, it is a
+/// button its words name, as it was before cards were groups. Kept out of line, like
+/// [`owned_theme`], so nothing it holds sits in the recursive walk's frame.
+#[inline(never)]
+fn press_a_silent_group(props: &mut frus_core::SemanticsProperties) {
+    if props.role == frus_core::Role::Group
+        && props.label.is_none()
+        && !props.clickable
+        && props.custom_actions.is_empty()
+    {
+        props.role = frus_core::Role::Button;
+        props.clickable = true;
+    }
+}
+
 /// The body of [`build_layout`], carrying whether baselines are still being collected.
 /// An [`crate::IgnoreBaseline`] turns them off for its subtree — the widgets inside still
 /// have baselines, and the point is that nothing above may see them.
@@ -3207,8 +3242,9 @@ struct Builder<'a, Msg> {
     dismissables: Vec<Dismissable>,
     /// The frame's sheets, in the order their subtrees finished walking.
     sheets: Vec<crate::sheet::SheetArea>,
-    /// Accessibility nodes collected during the walk (paint order).
-    semantics: Vec<(WidgetId, Rect, frus_core::SemanticsProperties)>,
+    /// Accessibility nodes collected during the walk (paint order), with their shape
+    /// (milestone 848).
+    semantics: SemanticsBuf,
     /// The parts of the screen saying what the system bars over them should look like,
     /// with their boxes, in paint order.
     system_ui: Vec<(Rect, crate::SystemUiOverlayStyle)>,
@@ -3463,7 +3499,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             hover_regions: self.hover_regions[snap.hover_regions..].to_vec(),
             text_stops: self.text_stops[snap.text_stops..].to_vec(),
             page_text: self.page_text[snap.page_text..].to_vec(),
-            semantics: self.semantics[snap.semantics..].to_vec(),
+            semantics: self.semantics.tail(snap.semantics),
             system_ui: self.system_ui[snap.system_ui..].to_vec(),
             lifted: self
                 .lifted
@@ -3500,7 +3536,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         self.hover_regions.extend(data.hover_regions);
         self.text_stops.extend(data.text_stops);
         self.page_text.extend(data.page_text);
-        self.semantics.extend(data.semantics);
+        self.semantics.append(data.semantics);
         self.system_ui.extend(data.system_ui);
     }
 
@@ -3660,10 +3696,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let mut operable = None;
         if described.merging {
             let mut clickable_count = 0;
-            for (child_id, _, child) in self.semantics.drain(base..).collect::<Vec<_>>() {
+            for (child_id, _, mut child) in self.semantics.split_off(base).nodes {
                 if child.clickable {
                     clickable_count += 1;
                     operable = Some(child_id);
+                }
+                // A list or a card inside lends its words and states, not its role: what
+                // speaks for the whole is what was operated or read inside it.
+                if child.role.is_container() {
+                    child.role = frus_core::Role::None;
                 }
                 props = props.over(&child);
             }
@@ -3673,7 +3714,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         }
         let id = operable.unwrap_or(id);
         if props.is_meaningful() && own.width > 0.0 && own.height > 0.0 {
-            self.semantics.insert(base, (id, own, props));
+            // A node that says what a whole subtree is — a section, a list, a group — holds
+            // it (milestone 848); one that names a single control stands beside what it
+            // annotates, as it always did.
+            let holds = !described.merging
+                && (props.role.is_container() || props.role == frus_core::Role::None);
+            self.semantics.insert(base, (id, own, props), 0);
+            if holds {
+                self.semantics.close(base);
+            }
         }
     }
 
@@ -3696,18 +3745,26 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
     /// An area with no entry of its own and no words, whose subtree holds exactly one
     /// clickable entry, gets nothing: that entry already answers for the press, and a second,
     /// unnamed "button" around it would only be noise.
+    // Called from the recursive walk: kept out of its frame, whose size is per tree level.
+    #[inline(never)]
     fn apply_tap_area(&mut self, base: usize, id: WidgetId, own: Rect) {
         let mut words: Option<String> = None;
-        let mut kept = Vec::new();
-        let mut clickables = 0;
-        let mut entries = self.semantics.drain(base..).collect::<Vec<_>>();
+        let mut tail = self.semantics.split_off(base);
+        tail.unwrap_silent_groups();
         // The widget's own entry, when it has one, is the first: registered before its
         // children are walked.
         let described =
-            (entries.first().is_some_and(|(first, _, _)| *first == id)).then(|| entries.remove(0));
-        for entry in entries {
-            let (_, _, ref sem) = entry;
-            let says_only = !sem.clickable
+            tail.nodes.first().is_some_and(|(first, _, _)| *first == id) && tail.spans[0] == 0;
+        let from = usize::from(described);
+        let mut kept = SemanticsBuf::default();
+        let mut clickables = 0;
+        // Only the nodes at the top of the area are read into its name: a list or a card
+        // inside it keeps what it holds (milestone 848).
+        for root in tail.roots_from(from) {
+            let end = tail.subtree_end(root);
+            let sem = &tail.nodes[root].2;
+            let says_only = end == root + 1
+                && !sem.clickable
                 && matches!(
                     sem.role,
                     frus_core::Role::Label
@@ -3723,17 +3780,22 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     });
                 }
                 _ => {
-                    clickables += usize::from(sem.clickable);
-                    kept.push(entry);
+                    clickables += tail.nodes[root..end]
+                        .iter()
+                        .filter(|(_, _, s)| s.clickable)
+                        .count();
+                    kept.append(tail.range(root, end));
                 }
             }
         }
-        if let Some((own_id, rect, mut props)) = described {
+        if described {
+            let (own_id, rect, mut props) = tail.nodes.swap_remove(0);
+            press_a_silent_group(&mut props);
             if props.label.is_none() {
                 props.label = words;
             }
             self.semantics.push((own_id, rect, props));
-            self.semantics.extend(kept);
+            self.semantics.append(kept);
             return;
         }
         let silent_wrapper = words.is_none() && clickables == 1;
@@ -3743,7 +3805,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             props.clickable = true;
             self.semantics.push((id, own, props));
         }
-        self.semantics.extend(kept);
+        self.semantics.append(kept);
     }
 
     fn apply_barrier(
@@ -3881,7 +3943,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             for (_, r) in &mut self.reorderables[base.reorderables..] {
                 *r = matrix.apply_rect(*r);
             }
-            for (_, r, _) in &mut self.semantics[base.semantics..] {
+            for r in self.semantics.rects_from(base.semantics) {
                 *r = matrix.apply_rect(*r);
             }
             for view in &mut self.platform_views[base.platform_views..] {
@@ -4450,12 +4512,21 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         // A **tappable area** that does not name itself — a `Container` or a detector with
         // `on_click`, a button holding a widget — is named by the words inside it once its
         // subtree is walked (milestone 700): see `apply_tap_area`.
-        let tap_area = (widget.on_click().is_some()
-            && widget.semantics().is_none_or(|own| own.label.is_none()))
-        .then_some(self.semantics.len());
+        let sem_base = self.semantics.len();
+        let tap_area =
+            widget.on_click().is_some() && widget.semantics().is_none_or(|own| own.label.is_none());
         self.walk_node_themed(widget, id, translation, clip, rects, index);
-        if let (Some(base), Some(whole)) = (tap_area, over) {
-            self.apply_tap_area(base, id, whole.intersect(clip));
+        if let (true, Some(whole)) = (tap_area, over) {
+            self.apply_tap_area(sem_base, id, whole.intersect(clip));
+        }
+        // A list, a dialog, a card holds what its subtree added (milestone 848).
+        if self
+            .semantics
+            .nodes
+            .get(sem_base)
+            .is_some_and(|(own, _, props)| *own == id && props.role.is_container())
+        {
+            self.semantics.close(sem_base);
         }
         if let Some(parent) = outer_hover {
             self.hover_parent = parent;
@@ -5133,6 +5204,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 host: self.scroll_host,
                 keep_visible: keep,
             });
+            // A reader is told where it rests and can scroll it (milestone 848).
+            self.semantics.note_scroll(
+                id,
+                viewport.intersect(clip),
+                frus_core::SemanticsScroll {
+                    offset: (offset_x, offset_y),
+                    max: (max_x, max_y),
+                },
+            );
             let mut content_index = 0;
             // Where the content starts, so that a stretch can take all of it (milestone 591).
             let stretch_mark = (self.scene.primitives().len(), self.xform_base());
@@ -5293,6 +5373,20 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 host: self.scroll_host,
                 keep_visible: None,
             });
+            // The list's own node, when it is one, holds its items, each numbered among all
+            // of them, built or not (milestone 848).
+            self.semantics.note_scroll(
+                id,
+                viewport.intersect(clip),
+                frus_core::SemanticsScroll {
+                    offset: if across { (offset, 0.0) } else { (0.0, offset) },
+                    max: if across { (max, 0.0) } else { (0.0, max) },
+                },
+            );
+            let list_node =
+                self.semantics.nodes.last().is_some_and(|(own, _, props)| {
+                    *own == id && props.role == frus_core::Role::List
+                });
             // A list that can say what its rows say, for the page's text (milestone 830).
             if let Some(words) = vlist.item_text.filter(|_| self.runtime.page_text) {
                 self.page_lists.push(crate::PageList {
@@ -5470,6 +5564,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     let row = child_id(id, i, item.as_ref());
                     let item = self.keep(item);
                     let mut item_index = 0;
+                    let item_base = self.semantics.len();
                     {
                         let _row = runtime.states.enter_row(row, false);
                         self.walk(
@@ -5479,6 +5574,19 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                             content_clip,
                             &item_rects,
                             &mut item_index,
+                        );
+                    }
+                    if list_node {
+                        let size = item_rects
+                            .first()
+                            .copied()
+                            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                        self.semantics.wrap_item(
+                            item_base,
+                            row.list_item(),
+                            Rect::new(x, y, size.width, size.height).intersect(content_clip),
+                            i + 1,
+                            vlist.count,
                         );
                     }
                     walked.push(crate::list::KeptRow { row, key, index: i });
@@ -5537,6 +5645,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
 
                     let item = self.keep(item);
                     let mut item_index = 0;
+                    let item_base = self.semantics.len();
                     self.walk(
                         item,
                         row,
@@ -5545,6 +5654,19 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                         &item_rects,
                         &mut item_index,
                     );
+                    if list_node {
+                        let size = item_rects
+                            .first()
+                            .copied()
+                            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                        self.semantics.wrap_item(
+                            item_base,
+                            row.list_item(),
+                            Rect::new(x, y, size.width, size.height).intersect(content_clip),
+                            i + 1,
+                            vlist.count,
+                        );
+                    }
                     walked.push(crate::list::KeptRow { row, key, index: i });
                 }
             }
@@ -5640,6 +5762,22 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 host: self.scroll_host,
                 keep_visible: None,
             });
+            self.semantics.note_scroll(
+                id,
+                viewport.intersect(clip),
+                frus_core::SemanticsScroll {
+                    offset: if snap.horizontal {
+                        (along, 0.0)
+                    } else {
+                        (0.0, along)
+                    },
+                    max: if snap.horizontal {
+                        (max, 0.0)
+                    } else {
+                        (0.0, max)
+                    },
+                },
+            );
 
             // Where the content starts, so that a stretch can take all of it (milestone 591).
             let stretch_mark = (self.scene.primitives().len(), self.xform_base());
@@ -7741,7 +7879,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         refreshes: Vec::new(),
         dismissables: Vec::new(),
         sheets: Vec::new(),
-        semantics: Vec::new(),
+        semantics: SemanticsBuf::default(),
         system_ui: Vec::new(),
         focus_excluded: false,
         page_heading: false,
@@ -7836,7 +7974,8 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         hover_watches: builder.hover_watches,
         wants_animation: builder.wants_animation,
         wants_decoration: builder.wants_decoration,
-        semantics: builder.semantics,
+        semantics: builder.semantics.nodes,
+        semantics_spans: builder.semantics.spans,
         system_ui: builder.system_ui,
         overflows: builder.overflows.into_inner(),
         scopes: builder.scopes,

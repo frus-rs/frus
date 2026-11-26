@@ -134,6 +134,10 @@ pub(crate) struct AndroidNode {
     /// The node's named actions beyond a press (milestone 810), in order: each offered as a
     /// custom action whose id is [`action::CUSTOM_BASE`] plus its index.
     pub custom_actions: Vec<String>,
+    /// `[rows, index]` (milestone 848): how many items a list holds, and an item's place in
+    /// its list counted from `0`; `-1` where it is not one. TalkBack says "in list, 12 items"
+    /// on entering and "3 of 12" on an item.
+    pub collection: [i32; 2],
 }
 
 impl AndroidNode {
@@ -243,8 +247,16 @@ impl VirtualIds {
 /// `EditText` "edit box", an `ActionBar$Tab` "tab".
 fn class_name(role: Role) -> &'static str {
     match role {
-        Role::None | Role::ListItem | Role::Dialog | Role::TreeItem => "android.view.View",
-        Role::Tree => "android.widget.ListView",
+        Role::None
+        | Role::ListItem
+        | Role::Dialog
+        | Role::TreeItem
+        | Role::Group
+        | Role::Toolbar
+        | Role::Navigation => "android.view.View",
+        Role::Tree | Role::List => "android.widget.ListView",
+        Role::TabList => "android.widget.TabWidget",
+        Role::ScrollView => "android.widget.ScrollView",
         Role::Label | Role::Heading => "android.widget.TextView",
         Role::Button | Role::Link => "android.widget.Button",
         Role::CheckBox => "android.widget.CheckBox",
@@ -348,6 +360,7 @@ fn to_row(
             scroll: None,
             embed: NO_EMBED,
             custom_actions: Vec::new(),
+            collection: NO_COLLECTION,
         };
     }
     match (sem.role, sem.toggled) {
@@ -373,26 +386,57 @@ fn to_row(
             None => {}
         }
     }
+    // A list, or an area that scrolls, scrolls a page at a time and says where it rests
+    // (milestone 848).
+    let mut scroll = None;
+    let mut class = class_name(sem.role);
+    if let Some(state) = sem.scroll.filter(|s| s.max.0 > 0.5 || s.max.1 > 0.5) {
+        flags |= flag::SCROLLABLE;
+        if state.can_forward() {
+            actions |= action::SCROLL_FORWARD;
+        }
+        if state.can_backward() {
+            actions |= action::SCROLL_BACKWARD;
+        }
+        let px = |v: f32| (v * scale).round() as i32;
+        scroll = Some([
+            px(state.offset.0),
+            px(state.offset.1),
+            px(state.max.0),
+            px(state.max.1),
+        ]);
+        if sem.role == Role::ScrollView && state.horizontal() {
+            class = "android.widget.HorizontalScrollView";
+        }
+    }
+    let item = match (sem.role, sem.position) {
+        (Role::ListItem, Some((position, _))) => position as i32 - 1,
+        _ => -1,
+    };
     AndroidNode {
         id,
         parent,
         bounds: to_pixels(rect, scale),
-        class_name: class_name(sem.role),
+        class_name: class,
         text,
         description,
         hint,
         flags: finish(flags, focused),
         actions: finish_actions(actions, flags, focused),
         range: None,
-        scroll: None,
+        scroll,
         embed: NO_EMBED,
         custom_actions: if enabled {
             sem.custom_actions.clone()
         } else {
             Vec::new()
         },
+        collection: [-1, item],
     }
 }
+
+/// [`AndroidNode::collection`] of a node that is neither a list nor one of its items.
+pub(crate) const NO_COLLECTION: [i32; 2] = [-1, -1];
 
 fn finish(flags: i32, focused: bool) -> i32 {
     if focused {
@@ -456,6 +500,7 @@ fn area_row(id: i32, parent: i32, area: &ScrollArea, scale: f32) -> AndroidNode 
         ]),
         embed: NO_EMBED,
         custom_actions: Vec::new(),
+        collection: NO_COLLECTION,
     }
 }
 
@@ -464,13 +509,16 @@ fn area_row(id: i32, parent: i32, area: &ScrollArea, scale: f32) -> AndroidNode 
 /// `nodes` are the frame's semantic nodes in reading order; `areas` its scrollable areas;
 /// `focus` the widget with the input focus; `scale` the layout's pixels to the window's.
 ///
-/// A node sits under the innermost area that scrolls and whose viewport holds its centre,
-/// and an area under the innermost larger one holding its own, so that TalkBack finds the
-/// area to scroll when its reading reaches the last row that shows. An area comes in
+/// A node sits under its parent in `parents` (by index in `nodes`, milestone 848): a list
+/// holds its items, a dialog its content. Between the two, or under the host for a node with
+/// no parent, it sits under the innermost area that scrolls and whose viewport holds its
+/// centre, and an area under the innermost larger one holding its own, so that TalkBack finds
+/// the area to scroll when its reading reaches the last row that shows. An area comes in
 /// where its first node is read. An area that is also a node (a multi-line field scrolls
-/// its own text) is left out: the field answers for itself.
+/// its own text, a list says where it rests) is left out: the node answers for itself.
 pub(crate) fn build(
     nodes: &[(WidgetId, Rect, SemanticsProperties)],
+    parents: &[Option<usize>],
     areas: &[ScrollArea],
     focus: Option<WidgetId>,
     scale: f32,
@@ -494,10 +542,27 @@ pub(crate) fn build(
     };
     let center = |rect: Rect| Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
 
+    // How many items each list holds: the count its items state, or the items it has.
+    let mut rows = vec![-1i32; nodes.len()];
+    for (index, (_, _, sem)) in nodes.iter().enumerate() {
+        let Some(list) = parents.get(index).copied().flatten().filter(|p| *p < index) else {
+            continue;
+        };
+        if nodes[list].2.role == Role::List && sem.role == Role::ListItem {
+            rows[list] = match sem.position {
+                Some((_, count)) => count as i32,
+                None => rows[list].max(0) + 1,
+            };
+        }
+    }
+
     let mut tree = AndroidTree::default();
     let mut emitted: HashSet<WidgetId> = HashSet::new();
     let mut live: HashSet<WidgetId> = HashSet::new();
-    for (widget, rect, sem) in nodes {
+    // Each node's virtual id, once it has a row, and the areas around it, outermost last.
+    let mut rows_of: Vec<Option<i32>> = vec![None; nodes.len()];
+    let mut chains: Vec<Vec<WidgetId>> = vec![Vec::new(); nodes.len()];
+    for (index, (widget, rect, sem)) in nodes.iter().enumerate() {
         // The chain of areas around the node, innermost first.
         let mut chain = Vec::new();
         let mut at = innermost(center(*rect), None, 0.0);
@@ -508,8 +573,22 @@ pub(crate) fn build(
             chain.push(area);
             at = innermost(center(area.viewport), Some(area.id), area.area());
         }
-        // Outermost first: each area under the one before it.
+        chains[index] = chain.iter().map(|area| area.id).collect();
+        // Its parent's row, when it has one: the areas around the parent too are above it.
+        let held_by = parents
+            .get(index)
+            .copied()
+            .flatten()
+            .filter(|p| *p < index)
+            .and_then(|p| rows_of[p].map(|row| (p, row)));
         let mut parent = HOST;
+        if let Some((p, row)) = held_by {
+            parent = row;
+            let above = std::mem::take(&mut chains[p]);
+            chain.retain(|area| !above.contains(&area.id));
+            chains[p] = above;
+        }
+        // Outermost first: each area under the one before it.
         for area in chain.iter().rev() {
             let id = ids.id(area.id);
             if emitted.insert(area.id) {
@@ -523,14 +602,10 @@ pub(crate) fn build(
         }
         live.insert(*widget);
         let id = ids.id(*widget);
-        tree.nodes.push(to_row(
-            id,
-            parent,
-            *rect,
-            sem,
-            focus == Some(*widget),
-            scale,
-        ));
+        rows_of[index] = Some(id);
+        let mut row = to_row(id, parent, *rect, sem, focus == Some(*widget), scale);
+        row.collection[0] = rows[index];
+        tree.nodes.push(row);
     }
     ids.retain(&live);
     tree
@@ -739,26 +814,12 @@ pub(crate) fn to_action(
 }
 
 /// Where a page's scroll takes an area resting at `offset`: one viewport further, forward or
-/// back, along the axis it scrolls, never past its ends.
-pub(crate) fn page_target(
-    viewport: Rect,
-    max: (f32, f32),
-    offset: (f32, f32),
-    forward: bool,
-) -> (f32, f32) {
-    let sign = if forward { 1.0 } else { -1.0 };
-    let horizontal = max.1 <= 0.5 && max.0 > 0.5;
-    if horizontal {
-        (
-            (offset.0 + sign * viewport.width).clamp(0.0, max.0.max(0.0)),
-            offset.1,
-        )
-    } else {
-        (
-            offset.0,
-            (offset.1 + sign * viewport.height).clamp(0.0, max.1.max(0.0)),
-        )
-    }
+/// back, along the axis it scrolls, never past its ends. The shell asks
+/// [`SemanticsScroll::paged`](frus_widgets::SemanticsScroll::paged), which the desktop's reader shares
+/// since milestone 848; this is its test's way in.
+#[cfg(test)]
+fn page_target(viewport: Rect, max: (f32, f32), offset: (f32, f32), forward: bool) -> (f32, f32) {
+    frus_widgets::SemanticsScroll { offset, max }.paged((viewport.width, viewport.height), forward)
 }
 
 #[cfg(test)]
@@ -790,7 +851,7 @@ mod tests {
                 SemanticsProperties::new(Role::Label).label("Below"),
             ),
         ];
-        let mut tree = build(&nodes, &[], None, 1.0, &mut ids);
+        let mut tree = build(&nodes, &[], &[], None, 1.0, &mut ids);
         let before = tree.clone();
         embed_views(&mut tree, &ids, |w| (w == view).then_some(5));
         assert_eq!(tree.nodes[0].embed, 5);
@@ -805,6 +866,7 @@ mod tests {
         let mut ids = VirtualIds::default();
         let tree = build(
             &[(wid(1), Rect::new(10.0, 20.0, 100.0, 40.0), sem)],
+            &[],
             &[],
             None,
             1.0,
@@ -890,7 +952,7 @@ mod tests {
             Rect::new(0.0, 0.0, 50.0, 50.0),
             sem(Role::Button).label("More").clickable().expanded(false),
         )];
-        let tree = build(&nodes, &[], None, 1.0, &mut ids);
+        let tree = build(&nodes, &[], &[], None, 1.0, &mut ids);
         let request = Request {
             id: ids.by_widget[&wid(1)],
             action: action::EXPAND,
@@ -990,6 +1052,7 @@ mod tests {
                 sem(Role::Button),
             )],
             &[],
+            &[],
             None,
             2.75,
             &mut ids,
@@ -999,6 +1062,7 @@ mod tests {
         // A node clipped out of sight is in the tree, not visible.
         let hidden = build(
             &[(wid(2), Rect::new(10.0, 20.0, 0.0, 0.0), sem(Role::Button))],
+            &[],
             &[],
             None,
             1.0,
@@ -1023,7 +1087,7 @@ mod tests {
                 sem(Role::TextInput),
             ),
         ];
-        let tree = build(&nodes, &[], Some(wid(2)), 1.0, &mut ids);
+        let tree = build(&nodes, &[], &[], Some(wid(2)), 1.0, &mut ids);
         assert_eq!(tree.nodes[0].flags & flag::FOCUSED, 0);
         assert_ne!(tree.nodes[1].flags & flag::FOCUSED, 0);
         assert_ne!(tree.nodes[1].actions & action::CLEAR_FOCUS, 0);
@@ -1040,7 +1104,7 @@ mod tests {
                 .iter()
                 .map(|&raw| (wid(raw), Rect::new(0.0, 0.0, 5.0, 5.0), sem(Role::Button)))
                 .collect();
-            build(&nodes, &[], None, 1.0, ids)
+            build(&nodes, &[], &[], None, 1.0, ids)
         };
         let first = frame(&mut ids, &[7, 8]);
         let second = frame(&mut ids, &[8, 9]);
@@ -1117,7 +1181,7 @@ mod tests {
             // Nothing to scroll: no node of its own.
             area(12, Rect::new(0.0, 0.0, 300.0, 40.0), (0.0, 0.0), (0.0, 0.0)),
         ];
-        let tree = build(&nodes, &areas, None, 1.0, &mut ids);
+        let tree = build(&nodes, &[], &areas, None, 1.0, &mut ids);
         let id = |raw| ids.by_widget[&wid(raw)];
         let order: Vec<i32> = tree.nodes.iter().map(|n| n.id).collect();
         assert_eq!(order, vec![id(1), id(10), id(2), id(11), id(3), id(4)]);
@@ -1148,6 +1212,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 200.0, 80.0);
         let tree = build(
             &[(wid(5), rect, sem(Role::TextInput))],
+            &[],
             &[area(5, rect, (0.0, 300.0), (0.0, 0.0))],
             None,
             1.0,
@@ -1170,14 +1235,14 @@ mod tests {
             Rect::new(0.0, 0.0, 10.0, 10.0),
             sem(Role::Label).label("A"),
         )];
-        let a = build(&nodes, &[], None, 1.0, &mut ids);
+        let a = build(&nodes, &[], &[], None, 1.0, &mut ids);
         assert!(diff(&a, &a.clone()).is_empty());
         let moved = [(
             wid(1),
             Rect::new(0.0, 5.0, 10.0, 10.0),
             sem(Role::Label).label("A"),
         )];
-        let b = build(&moved, &[], None, 1.0, &mut ids);
+        let b = build(&moved, &[], &[], None, 1.0, &mut ids);
         assert_eq!(kinds(&diff(&a, &b)), vec![event::CONTENT_CHANGED]);
         // The first tree published is a change from nothing.
         assert_eq!(
@@ -1212,7 +1277,7 @@ mod tests {
                 (0.0, 500.0),
                 (0.0, offset),
             )];
-            build(&nodes, &areas, focus, 1.0, ids)
+            build(&nodes, &[], &areas, focus, 1.0, ids)
         };
         let before = frame(&mut ids, false, 2.0, "Ad", 0.0, None);
         let after = frame(&mut ids, true, 3.0, "Ada", 40.0, Some(wid(3)));
@@ -1277,7 +1342,7 @@ mod tests {
             (0.0, 500.0),
             (0.0, 0.0),
         )];
-        let tree = build(&nodes, &areas, None, 1.0, &mut ids);
+        let tree = build(&nodes, &[], &areas, None, 1.0, &mut ids);
         let id = |raw| ids.by_widget[&wid(raw)];
         let ask = |raw, action, text: Option<&str>, value| {
             to_action(
@@ -1355,5 +1420,60 @@ mod tests {
             page_target(viewport, (900.0, 0.0), (0.0, 0.0), true),
             (300.0, 0.0)
         );
+    }
+
+    /// **A list holds its items** (milestone 848): each row's parent is its semantic parent's,
+    /// a scrolling area around the list stays above the list rather than between the list and
+    /// its items, the list scrolls itself and says how many items it holds, and an item says
+    /// its place.
+    #[test]
+    fn a_list_holds_its_numbered_items() {
+        let mut ids = VirtualIds::default();
+        let row = |y: f32| Rect::new(0.0, y, 300.0, 40.0);
+        let nodes = vec![
+            (
+                wid(1),
+                Rect::new(0.0, 0.0, 300.0, 120.0),
+                sem(Role::List).scroll(frus_widgets::SemanticsScroll {
+                    offset: (0.0, 0.0),
+                    max: (0.0, 400.0),
+                }),
+            ),
+            (wid(2), row(0.0), sem(Role::ListItem).position(1, 12)),
+            (
+                wid(3),
+                row(0.0),
+                sem(Role::CheckBox).toggled(true).clickable(),
+            ),
+            (wid(4), row(40.0), sem(Role::ListItem).position(2, 12)),
+            (wid(5), row(200.0), sem(Role::Button).clickable()),
+        ];
+        let parents = [None, Some(0), Some(1), Some(0), None];
+        // A page scrolling around everything.
+        let areas = [area(
+            9,
+            Rect::new(0.0, 0.0, 300.0, 600.0),
+            (0.0, 900.0),
+            (0.0, 0.0),
+        )];
+        let tree = build(&nodes, &parents, &areas, None, 1.0, &mut ids);
+        let id = |raw| ids.by_widget[&wid(raw)];
+        let parent = |raw| tree.node(id(raw)).unwrap().parent;
+        assert_eq!(parent(9), HOST);
+        assert_eq!(parent(1), id(9));
+        assert_eq!(parent(2), id(1), "an item is the list's, not the page's");
+        assert_eq!(parent(3), id(2));
+        assert_eq!(parent(4), id(1));
+        assert_eq!(parent(5), id(9));
+        let list = tree.node(id(1)).unwrap();
+        assert_eq!(list.class_name, "android.widget.ListView");
+        assert_eq!(list.collection, [12, -1]);
+        assert_ne!(list.flags & flag::SCROLLABLE, 0);
+        assert_ne!(list.actions & action::SCROLL_FORWARD, 0);
+        assert_eq!(list.actions & action::SCROLL_BACKWARD, 0);
+        assert_eq!(list.scroll, Some([0, 0, 0, 400]));
+        assert_eq!(tree.node(id(2)).unwrap().collection, [-1, 0]);
+        assert_eq!(tree.node(id(4)).unwrap().collection, [-1, 1]);
+        assert_eq!(tree.node(id(3)).unwrap().collection, NO_COLLECTION);
     }
 }

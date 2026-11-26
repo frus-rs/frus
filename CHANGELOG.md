@@ -32,6 +32,22 @@ any release may break.
   lone CR no longer panics the layout. A single-line field leaves the line breaks of a paste
   out.
 
+- **The accessibility tree has a shape** (J848, L-040). A list holds its items and each item
+  says its place among all of them, built or not ("3 of 12"); a card is a group a reader steps
+  into or over; a dialog holds its content; an app bar is a toolbar holding its title and
+  actions; a tab bar is a tab list; a navigation rail, bar or drawer is a navigation landmark; a
+  scroll view that scrolls holds its content and says where it rests; a file tree's rows have
+  their level and place; a heading can have a level (`Text::heading_level`,
+  `Semantics::level`). New roles (`List`, `Group`, `TabList`, `Toolbar`, `Navigation`,
+  `ScrollView`), new `SemanticsProperties` fields (`level`, `position`, `scroll`), and
+  `Ui::semantics_spans` / `Ui::semantics_parents` for the shape; `Ui::semantics` is unchanged.
+  AccessKit gets each node's children, its level and place, the scroll position and the
+  scroll-a-page actions; Android gets the hierarchy as the virtual views' parents, scrolling
+  rows for lists, and `CollectionInfo` / `CollectionItemInfo` (the input dex is rebuilt); the web
+  layer nests its elements (`list` > `listitem` > `checkbox`, a modal `dialog` holding its
+  content) with `aria-level`, `aria-posinset` and `aria-setsize`, still written only where
+  something changed. `ListView::semantic_list(false)` and `Card::semantic_container(false)` opt
+  out. Android was compiled and unit-tested, not run on a device.
 - **A page follows the system its browser runs on, from the first theme** (J847). A web
   application is made before the shell starts it, and a theme made then (the default one, a
   seeded one) was given Android's conventions in every browser: on a Windows, Linux or Mac

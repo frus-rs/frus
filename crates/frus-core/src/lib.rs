@@ -85,7 +85,7 @@ pub use scene::{
     BlurStyle, ClipShape, GradientRamp, LayerTransform, PathGradient, Primitive, RampShape, Scene,
     TextBlock,
 };
-pub use semantics::{Role, SemanticsProperties, Toggled};
+pub use semantics::{Role, SemanticsProperties, SemanticsScroll, Toggled};
 pub use shader::{
     ExternalPass, Shader, ShaderError, ShaderPaint, UniformError, UniformInfo, UniformKind,
     UniformValue, MAX_SHADER_IMAGES,

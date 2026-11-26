@@ -636,14 +636,19 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** a11y
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** Every annotated widget is a child of the root. A screen reader cannot descend
-  into a card as a unit, and a tree view's level and position ("3 of 5") are not exposed.
-- **Workaround:** Merge a card's words into one node with `Semantics` where it reads better as
-  one.
-- **Evidence:** [docs/milestone-700.md](docs/milestone-700.md),
+- **Status:** partial
+- **What you hit:** Since milestone 848 the tree has a shape on every platform: lists hold
+  numbered items, cards are groups, dialogs hold their content, app bars, tab bars, navigation
+  and scroll views are containers, headings and tree rows carry their level. What is left: a
+  bottom navigation bar, sheets, expansion panels, a data table (rows and cells) and a grid
+  (columns) still say nothing of their shape; Android reads a place only for a list's items, not
+  for tabs; and the Android side was not run on a device.
+- **Workaround:** Give a container its role with `Semantics::new(SemanticsProperties::new(Role::List), ..)`
+  and its items `Role::ListItem`; the list numbers them.
+- **Evidence:** [docs/milestone-848.md](docs/milestone-848.md),
+  [docs/milestone-700.md](docs/milestone-700.md),
   [docs/milestone-811.md](docs/milestone-811.md),
-  [crates/frus-widgets/src/semantics.rs](crates/frus-widgets/src/semantics.rs)
+  [crates/frus-widgets/src/ui/semtree.rs](crates/frus-widgets/src/ui/semtree.rs)
 
 ### L-041 Web accessibility has not been heard through a screen reader
 
@@ -653,14 +658,15 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **What you hit:** The semantics tree reaches the browser as a layer of elements placed over
   the canvas, checked against Chromium's computed accessibility tree: roles, names, states,
   values, boxes, focus, actions and the live region; Firefox was driven at the DOM level. It
-  has not been listened to with a screen reader, Safari was not driven, and no phone was used. The tree is flat
-  ([L-040](#l-040-the-semantics-tree-is-flat)), so a list's items are not in a list and a
-  dialog's content is not inside the dialog. A custom action (a row's Archive) has no web
-  equivalent and is not offered.
+  has not been listened to with a screen reader, Safari was not driven, and no phone was used.
+  Since milestone 848 the elements nest (a list's items in the list, a dialog's content in the
+  dialog: [L-040](#l-040-the-semantics-tree-is-flat)). A custom action (a row's Archive) has no
+  web equivalent and is not offered.
 - **Workaround:** None.
 - **Evidence:** [#18](https://github.com/frus-rs/frus/issues/18),
   [docs/milestone-564.md](docs/milestone-564.md),
   [docs/milestone-845.md](docs/milestone-845.md),
+  [docs/milestone-848.md](docs/milestone-848.md),
   [docs/milestone-711.md](docs/milestone-711.md)
 
 ## Widgets and application structure

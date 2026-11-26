@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the demo's accessibility bridge in a real browser (milestones 564 and 845, #18).
+"""Checks the demo's accessibility bridge in a real browser (milestones 564, 845 and 848, #18).
 
 What no unit test can say: that the DOM the shell projects (`a11y_web.rs`) is what
 Chromium's own accessibility engine actually computes, and that the loop closes both
@@ -173,9 +173,20 @@ def named(tree, role, name):
 
 
 def index_of(tree, node):
+    """The node's place in **reading order**: a depth-first walk of the computed tree.
+
+    `getFullAXTree` does not list nodes in that order once elements nest (milestone 848): a
+    shallow button after a list comes before the list's items in it."""
     if not node:
         return -1
-    return next((i for i, n in enumerate(tree) if n["nodeId"] == node["nodeId"]), -1)
+    by_id = {n["nodeId"]: n for n in tree}
+    roots = [n for n in tree if not n.get("parentId") or n["parentId"] not in by_id]
+    order, stack = [], list(reversed(roots))
+    while stack:
+        at = stack.pop()
+        order.append(at["nodeId"])
+        stack.extend(by_id[c] for c in reversed(at.get("childIds", [])) if c in by_id)
+    return order.index(node["nodeId"]) if node["nodeId"] in order else -1
 
 
 def box(p, node):
@@ -195,6 +206,45 @@ def on_node(p, node, body):
     obj = p.call("DOM.resolveNode", backendNodeId=node["backendDOMNodeId"])["object"]["objectId"]
     return p.call("Runtime.callFunctionOn", objectId=obj, functionDeclaration="function () { " + body + " }",
                   returnByValue=True)["result"].get("value")
+
+
+def ancestors(tree, node):
+    """The roles above `node` in the computed tree, nearest first, ignored nodes left out: the
+    shape a reader descends through (milestone 848)."""
+    by_id = {n["nodeId"]: n for n in tree}
+    roles, at = [], node
+    while at and at.get("parentId"):
+        at = by_id.get(at["parentId"])
+        if at and not at.get("ignored"):
+            roles.append(at.get("role", {}).get("value"))
+    return roles
+
+
+def inside(tree, node, *roles):
+    """Whether `roles` are above `node` in that order, nearest first, others between them."""
+    above = ancestors(tree, node) if node else []
+    at = 0
+    for role in roles:
+        try:
+            at = above.index(role, at) + 1
+        except ValueError:
+            return False
+    return True
+
+
+def nearest(tree, node, role):
+    """The nearest node of `role` above `node`."""
+    by_id = {n["nodeId"]: n for n in tree}
+    at = node
+    while at and at.get("parentId"):
+        at = by_id.get(at["parentId"])
+        if at and not at.get("ignored") and at.get("role", {}).get("value") == role:
+            return at
+    return None
+
+
+def attr(p, node, name):
+    return on_node(p, node, f"return this.getAttribute('{name}')") if node else None
 
 
 def value(node):
@@ -295,6 +345,24 @@ def main(base):
         clear = p.find(tree, role="button", name_contains="Clear completed")
         expect_true("...read where the list has it, before 'Clear completed', not appended last",
                     0 <= index_of(tree, check) < index_of(tree, clear))
+        print(f"    above the checkbox: {ancestors(tree, check)}")
+        expect_true("...inside a list item, inside a list (milestone 848)",
+                    inside(tree, check, "listitem", "list"))
+        item = nearest(tree, check, "listitem")
+        rows = p.find(tree, role="list")
+        expect_true("...whose item says its place in the list: aria-posinset of aria-setsize",
+                    bool(item and attr(p, item, "aria-posinset")
+                         and attr(p, item, "aria-setsize")))
+        print(f"    item: {attr(p, item, 'aria-posinset')} of {attr(p, item, 'aria-setsize')}")
+        delete = p.find(tree, role="button", name_contains="Delete task")
+        expect_true("...and the row's delete button is in the same item",
+                    bool(item and delete and nearest(tree, delete, "listitem")
+                         and nearest(tree, delete, "listitem")["nodeId"] == item["nodeId"]))
+        expect_true("the list is not inside a button (a button's content is not read)",
+                    bool(rows) and "button" not in ancestors(tree, rows))
+        tasks = named(tree, "tab", "Tasks")
+        expect_true("the 'Tasks' destination is inside the navigation landmark",
+                    inside(tree, tasks, "navigation"))
         live = p.find(tree, name_contains="Wash the dog added")
         status = p.find(tree, role="status")
         show("live region", status, p)
@@ -321,7 +389,7 @@ def main(base):
         before = p.js(label)
         p.press("Tab", "Tab", 9); p.wait(0.6)
         in_layer = p.js("!!(document.activeElement && document.activeElement.parentElement"
-                        " && document.activeElement.parentElement.id === 'frus-semantics')")
+                        " && document.activeElement.parentElement.closest('#frus-semantics'))")
         after = p.js(label)
         print(f"    focus: {before!r} -> Tab -> {after!r}")
         expect_true("Tab, pressed on a node, moved the focus to another node of the layer",
@@ -354,6 +422,7 @@ def main(base):
         expect_true("'Settings' is a heading", named(tree, "heading", "Settings") is not None)
         controls = named(tree, "tab", "Controls")
         expect("the 'Controls' tab is selected", s.prop(controls, "selected") if controls else None, True)
+        expect_true("...and is one of a tablist (milestone 848)", inside(tree, controls, "tablist"))
         switch = s.find(tree, role="switch")
         show("switch", switch, s)
         if switch:
@@ -403,6 +472,45 @@ def main(base):
             expect("an increment, on a slider without the focus, moved it to 1", value(quantity), 1)
             expect("...and 'Less' is no longer disabled", s.prop(less, "disabled") if less else None, None)
         show("dropdown", named(s.ax_tree(), "button", "Option A"))
+
+        print("a long list's items know their place among all of them (milestone 848)")
+        j = open_at(base.split("#")[0] + "#/journal")
+        j.wait(7)
+        tree = j.ax_tree()
+        row = named(tree, "StaticText", "Row 1")
+        print(f"    above 'Row 1': {ancestors(tree, row)}")
+        expect_true("'Row 1' is inside a list item, inside a list", inside(tree, row, "listitem", "list"))
+        item = nearest(tree, row, "listitem")
+        expect("...the first of five thousand",
+               (attr(j, item, "aria-posinset"), attr(j, item, "aria-setsize")), ("1", "5000"))
+
+        print("headings say their level, and a dialog holds what it shows (milestone 848)")
+        c = open_at(base.split("#")[0] + "#/cupertino")
+        c.wait(7)
+        tree = c.ax_tree()
+        alert = c.find(tree, role="button", name_contains="Show alert")
+        if alert is None:
+            # The screen's scrolling body is laid out with no height on the web (the canvas
+            # paints none of it either), so there is nothing for these checks to read. Said
+            # out loud rather than passed or failed: it is the layout's bug, not the bridge's.
+            print("  SKIP the screen's body is not on the page (laid out with no height); "
+                  "the heading-level and dialog checks did not run")
+        else:
+            section = named(tree, "heading", "BUTTONS")
+            show("section heading", section)
+            # Chromium gives a heading with no level a 2 of its own: the attribute is the evidence.
+            expect("the 'BUTTONS' section heading says level 2",
+                   attr(c, section, "aria-level") if section else None, "2")
+            on_node(c, alert, "this.click()")
+            c.wait(1.5)
+            tree = c.ax_tree()
+            dialog = c.find(tree, role="dialog") or c.find(tree, role="alertdialog")
+            show("dialog", dialog)
+            expect("a dialog is open, and modal", c.prop(dialog, "modal") if dialog else None, True)
+            inner = [n for n in tree if not n.get("ignored") and n.get("role", {}).get("value") == "button"
+                     and dialog and nearest(tree, n, dialog["role"]["value"])]
+            print(f"    buttons inside the dialog: {[n.get('name', {}).get('value') for n in inner]}")
+            expect_true("...holding its buttons", len(inner) >= 1)
     finally:
         close_browser()
         if os.name == "nt":

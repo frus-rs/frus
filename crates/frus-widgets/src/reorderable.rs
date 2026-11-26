@@ -218,6 +218,13 @@ impl<Msg: Clone + 'static> Widget<Msg> for ReorderRow<Msg> {
 
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {}
 
+    /// One item of the list, holding what the row shows (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(
+            frus_core::Role::ListItem,
+        ))
+    }
+
     fn on_click(&self) -> Option<Msg> {
         None
     }
@@ -649,6 +656,11 @@ impl<Msg: Clone + 'static> Widget<Msg> for ReorderableList<Msg> {
     }
 
     fn paint(&self, _bounds: Rect, _status: Status, _theme: &Theme, _scene: &mut Scene) {}
+
+    /// A list holding its rows, each numbered among them (milestone 848).
+    fn semantics(&self) -> Option<frus_core::SemanticsProperties> {
+        Some(frus_core::SemanticsProperties::new(frus_core::Role::List))
+    }
 
     fn on_click(&self) -> Option<Msg> {
         None
