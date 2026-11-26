@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 KalybosPro <kalyboskokou1@gmail.com>
 
-//! **Mipmaps** for image textures (milestone 743).
+//! **Mipmaps** for image textures (milestone 743) and for the textures of transformed layers
+//! shown smaller than they were drawn (milestone 850, see `raster.rs`).
 //!
 //! An image drawn much smaller than its pixels covers many of them per screen pixel, and a
 //! bilinear sample reads only four: thin lines vanish and fine patterns shimmer. A mip
@@ -73,10 +74,30 @@ pub(crate) fn minifies(rect: Rect, uv: Rect, width: u32, height: u32) -> bool {
 pub(crate) struct MipGenerator {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    /// The format of the textures it renders into.
+    format: wgpu::TextureFormat,
 }
 
 impl MipGenerator {
+    /// The generator for images: straight alpha, in [`FORMAT`].
     pub(crate) fn new(device: &wgpu::Device) -> Self {
+        Self::with(device, FORMAT, false)
+    }
+
+    /// The generator for a transformed layer's texture (milestone 850): `format`, the
+    /// surface's, and **premultiplied** colours, since a layer is painted over a transparent
+    /// target. A premultiplied colour is averaged as it is: weighting it by alpha again would
+    /// darken every edge.
+    pub(crate) fn for_layers(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with(device, format, true)
+    }
+
+    /// The format of the textures it renders into.
+    pub(crate) fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    fn with(device: &wgpu::Device, format: wgpu::TextureFormat, premultiplied: bool) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("frus.mipmap.shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mipmap.wgsl").into()),
@@ -110,9 +131,13 @@ impl MipGenerator {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(if premultiplied {
+                    "fs_premultiplied"
+                } else {
+                    "fs_main"
+                }),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
+                    format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -127,7 +152,11 @@ impl MipGenerator {
             multiview_mask: None,
             cache: None,
         });
-        Self { pipeline, layout }
+        Self {
+            pipeline,
+            layout,
+            format,
+        }
     }
 
     /// Renders levels `1..levels` of `texture`, each from the one above, and submits

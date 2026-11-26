@@ -40,8 +40,9 @@ fn axis_taps(span: i32, x: i32) -> Taps {
     return Taps(2 * x, vec3<f32>((d - xf) / n, d / n, (xf + 1.0) / n));
 }
 
-@fragment
-fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+// The box average of the texels of the level above that texel `pos` covers, premultiplied
+// by alpha: as stored when `premultiplied`, weighted by alpha first otherwise.
+fn average(pos: vec4<f32>, premultiplied: bool) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(src));
     let p = vec2<i32>(floor(pos.xy));
     let tx = axis_taps(size.x, p.x);
@@ -53,12 +54,30 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             if w > 0.0 {
                 let at = min(vec2<i32>(tx.first + i, ty.first + j), size - vec2<i32>(1));
                 let c = textureLoad(src, at, 0);
-                sum += w * vec4<f32>(c.rgb * c.a, c.a);
+                if premultiplied {
+                    sum += w * c;
+                } else {
+                    sum += w * vec4<f32>(c.rgb * c.a, c.a);
+                }
             }
         }
     }
+    return sum;
+}
+
+// An image: straight alpha, back to straight once averaged.
+@fragment
+fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let sum = average(pos, false);
     if sum.a <= 0.0 {
         return vec4<f32>(0.0);
     }
     return vec4<f32>(sum.rgb / sum.a, sum.a);
+}
+
+// A transformed layer's texture (milestone 850): painted over a transparent target, so
+// already premultiplied, and kept so.
+@fragment
+fn fs_premultiplied(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    return average(pos, true);
 }

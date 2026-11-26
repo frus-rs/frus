@@ -445,18 +445,27 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Workaround:** Use an emulator image with Vulkan or OpenGL ES 3.
 - **Evidence:** [docs/milestone-769.md](docs/milestone-769.md)
 
-### L-026 A transformed layer has no mipmaps, and scaled-up text blurs
+### L-026 A blurred or nested scaled layer is drawn at its own size
 
 - **Area:** rendering
 - **Platforms:** All
 - **Status:** partial
-- **What you hit:** Images have mipmaps, but a layer scaled below one half by a `Transform` still
-  skips texels, so small text in it looks uneven. A layer scaled up is enlarged as a texture,
-  so its text is not laid out again at the final size and blurs. There is no bicubic filter:
-  `FilterQuality::High` enlarges as `Low` does.
-- **Workaround:** Animate a font size rather than scaling text with a transform.
+- **What you hit:** Since milestone 850 a scaled layer at rest is drawn at the scale it is
+  shown at, so its edges and text stay sharp; one whose scale moves below its own size is
+  read through a mip chain, about a pixel softer than at rest. What is left: a layer
+  with an image filter (a blur) gets neither, and is drawn at its own size; a layer that holds
+  another transformed layer, or is clipped to a path, over a backdrop or coloured by a shader,
+  is drawn at its own size, shrunk or enlarged (the inner layer is drawn at its own scale); while a scale grows, the texture is drawn up to a quarter ahead of it
+  and shown that much smaller, and it is drawn at the exact scale only on a frame drawn after
+  the scale has come to rest. A transformed layer holds only what of its content is laid out
+  on the screen, flat: content laid out past the screen's edge and shrunk into view by the
+  transform is not drawn. There is no bicubic filter: `FilterQuality::High` enlarges an image
+  as `Low` does.
+- **Workaround:** Put the blur outside the scaled layer; for text that grows and must be
+  exact at every frame, animate its font size.
 - **Evidence:** [docs/milestone-732.md](docs/milestone-732.md),
-  [docs/milestone-743.md](docs/milestone-743.md)
+  [docs/milestone-743.md](docs/milestone-743.md),
+  [docs/milestone-850.md](docs/milestone-850.md)
 
 ### L-027 Custom shaders and GPU passes have a fixed shape
 

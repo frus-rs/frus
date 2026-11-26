@@ -32,6 +32,9 @@ mod gpu_timer;
 #[cfg(all(target_os = "android", feature = "hardware-buffers"))]
 mod hardware;
 mod image;
+// What transformed layers cost, measured on the machine's GPU (milestone 850).
+#[cfg(test)]
+mod layer_bench;
 mod mesh;
 mod mipmap;
 // Why no GPU could be reached (milestone 769): said on Android, tested everywhere.
@@ -41,6 +44,8 @@ mod offscreen;
 mod painter;
 mod path;
 mod pipeline_cache;
+// At what scale a transformed layer is drawn, and when it gets a mip chain (milestone 850).
+mod raster;
 mod renderer;
 mod text;
 // The web: which GPU interface a page draws through (milestone 745). Tested on every host.
@@ -63,7 +68,7 @@ pub use custom::{
     GpuCallback, GpuPassContext, PassState, PassTargets, GPU_PASS_DEPTH_FORMAT, GPU_PASS_FORMAT,
 };
 pub use frus_core::{Color, Rect, Scene};
-pub use offscreen::{render_offscreen, OffscreenFrame};
+pub use offscreen::{render_offscreen, render_offscreen_frames, OffscreenFrame};
 pub use pipeline_cache::set_pipeline_cache_dir;
 pub use renderer::{backdrop, RenderOutcome, RenderTimings, Renderer, StartupTimes, WindowSurface};
 

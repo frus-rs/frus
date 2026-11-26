@@ -56,6 +56,18 @@ pub fn render_scene(scene: &Scene, width: u32, height: u32, clear: Color) -> Opt
     })
 }
 
+/// Renders `scenes` one after the other through the same renderer, as a window draws its
+/// frames, and returns the last: what the renderer keeps from a frame to the next shows in
+/// it (a layer whose scale moves, one at rest). `None` with no GPU.
+pub fn render_scenes(scenes: &[Scene], width: u32, height: u32, clear: Color) -> Option<Snapshot> {
+    let frame = frus_gpu::render_offscreen_frames(scenes, width, height, clear)?;
+    Some(Snapshot {
+        width: frame.width,
+        height: frame.height,
+        rgba: frame.rgba,
+    })
+}
+
 /// Builds and renders a **widget tree** the way the shell would: layout through
 /// taffy, then painting with the given theme, on a `theme.background` background, in
 /// a virtual `width`×`height` window. The retained state is neutral: no hover, no

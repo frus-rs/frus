@@ -36,6 +36,22 @@ pub fn render_offscreen(
     height: u32,
     clear: Color,
 ) -> Option<OffscreenFrame> {
+    render_offscreen_frames(std::slice::from_ref(scene), width, height, clear)
+}
+
+/// Renders `scenes` one after the other through the same renderer, as a window draws its
+/// frames, and reads back the last. What the renderer keeps from a frame to the next shows:
+/// a transformed layer whose scale moves is read through its mip chain, and one at rest is
+/// drawn at its exact scale (milestone 850). `None` with no GPU adapter, or no scene.
+pub fn render_offscreen_frames(
+    scenes: &[Scene],
+    width: u32,
+    height: u32,
+    clear: Color,
+) -> Option<OffscreenFrame> {
+    if scenes.is_empty() {
+        return None;
+    }
     let (device, queue, sample_count) = headless_device()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
 
@@ -59,21 +75,23 @@ pub fn render_offscreen(
     // included. The clear colour is authored in sRGB, and an sRGB target wants linear.
     let clear_linear = clear.to_linear();
     let mut painters = Painters::new(&device, &queue, format, sample_count, None);
-    painters.render(
-        &device,
-        &queue,
-        format,
-        &view,
-        width,
-        height,
-        scene,
-        Some(wgpu::Color {
-            r: clear_linear.r as f64,
-            g: clear_linear.g as f64,
-            b: clear_linear.b as f64,
-            a: clear.a as f64,
-        }),
-    );
+    for scene in scenes {
+        painters.render(
+            &device,
+            &queue,
+            format,
+            &view,
+            width,
+            height,
+            scene,
+            Some(wgpu::Color {
+                r: clear_linear.r as f64,
+                g: clear_linear.g as f64,
+                b: clear_linear.b as f64,
+                a: clear.a as f64,
+            }),
+        );
+    }
 
     // Readback: wgpu requires rows aligned to 256 bytes, so we pad and then strip
     // the padding on the CPU side.
