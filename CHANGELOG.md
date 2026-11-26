@@ -8,11 +8,23 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 850 so far, each documenting the objective, the alternatives
+> record — one per step, 853 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A change lays out the path to it, not the whole tree** (J853, L-042, part of #224). A
+  layout keeps, node by node, what each box measured, and the next layout of the same root
+  starts from it: a box that is the same as one of the last frame (same style, same content,
+  same children, all the way down) answers without being laid out, and a change lays out
+  the boxes between it and its root. The rectangles are those of a layout from scratch. A
+  viewport, a constraints box or a stack that measures a tree of its own builds it once per
+  layout instead of once per question, and keeps it for the next frame too. A counter
+  ticking above forty rows costs 1.6 to 1.8 ms of layout instead of 3.5 to 3.8 (the flexbox
+  computation 0.5 ms instead of 3), and a thousand rows 28 ms of computation instead of
+  100. `frus_layout::Layout` gains `reuse`, `into_memo`, `set_identity`,
+  `measured_leaf_keyed`, `style_snapshot` and `restore_style`. `Text::measure_key` now
+  includes the letter spacing.
 - **A scaled layer is drawn for the scale it is shown at** (J850, L-026, part of #221 and
   #224). A layer shown smaller by its transform and at rest (a `FittedBox` shrinking its
   child, a `Transform::scale` below one) has its content drawn at that scale, as sharp as

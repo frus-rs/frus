@@ -1016,6 +1016,10 @@ impl<Msg: Clone + 'static> Widget<Msg> for Text {
         // to the same box, and the second kept the first's geometry.
         r.style.height.map(f32::to_bits).hash(&mut hasher);
         r.style.family.hash(&mut hasher);
+        // And the room after each character, which the measurement adds and the key had left
+        // out: with layouts kept node by node across frames (milestone 853), a spacing that
+        // changed alone kept the old width.
+        r.style.letter_spacing.to_bits().hash(&mut hasher);
         r.max_lines.hash(&mut hasher);
         r.wrap.hash(&mut hasher);
         Some(hasher.finish())
