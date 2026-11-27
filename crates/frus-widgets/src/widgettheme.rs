@@ -1397,6 +1397,15 @@ pub struct TableTheme {
     pub heading_text_style: Option<TextStyle>,
     /// The cells' type.
     pub data_text_style: Option<TextStyle>,
+    /// The least a data row is tall. Unset, 34. A row whose labels wrap onto more lines
+    /// grows past it.
+    pub data_row_min_height: Option<f32>,
+    /// The most a data row grows to when its labels wrap; past it a label is cut at the
+    /// row's edge. Unset, no limit: the row is as tall as its tallest label. Set it to the
+    /// minimum for rows of one height whatever they hold.
+    pub data_row_max_height: Option<f32>,
+    /// The least the heading row is tall. Unset, 34. A heading that wraps grows past it.
+    pub heading_row_height: Option<f32>,
 }
 
 /// Defaults for [`DatePicker`](crate::DatePicker).

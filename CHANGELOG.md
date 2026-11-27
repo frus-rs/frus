@@ -8,11 +8,27 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 850 so far, each documenting the objective, the alternatives
+> record — one per step, 851 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A page gets the whole screen** (J851, #516). A navigator hands each page its whole box,
+  as a route hands its page the screen: a page whose root is a plain container or column is as
+  big as the screen, not as its content. The demo's Apple-style screen, a coloured box around
+  a navigation bar, a scrolling body and a tab bar, showed its two bars and a body with no
+  height, on every platform.
+- **A router shell inside another shell's branch** (J851, L-045). `GoRoute::shell` may sit in a
+  branch of another shell: tabs inside a tab, each level keeping its branches' stacks while the
+  others are shown, the inner frame drawn in the outer one's body, a push inside the inner tab
+  moving only that tab, and Back going from the inside out. It panicked when the router was
+  made. `GoRouter::go_branch` switches the innermost shell's tabs.
+- **A table cell's label wraps** (J851, L-047). A label wider than its column wraps inside it
+  and its row grows; a flexible column may shrink to its widest word, so a table narrower than
+  its labels stays inside its box. `Table` and `DataTable` gain `data_row_min_height`,
+  `data_row_max_height` and `heading_row_height`, and `TableTheme` (now exported) the same
+  three. A virtualised table, frozen columns and a resizable grid keep a label on one line and
+  clip it to its cell instead of drawing it over the next one.
 - **A scaled layer is drawn for the scale it is shown at** (J850, L-026, part of #221 and
   #224). A layer shown smaller by its transform and at rest (a `FittedBox` shrinking its
   child, a `Transform::scale` below one) has its content drawn at that scale, as sharp as

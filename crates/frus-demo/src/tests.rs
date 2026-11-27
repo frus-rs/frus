@@ -2646,3 +2646,36 @@ fn home_frame_cost() {
         bench.runtime.layout_cache.borrow().last_frame_stats()
     );
 }
+
+/// **The Apple-style screen's body takes the room between its bars** (milestone 851, #516).
+/// Its page is a coloured box around a column — a navigation bar, a scrolling body told to
+/// take the rest, a tab bar — and the box was laid out at its content's size, so the body
+/// had no rest to take: on every platform it came out with no height, and the screen showed
+/// its two bars and nothing between them.
+#[test]
+fn the_apple_style_screen_s_body_takes_the_room() {
+    for platform in [
+        frus_widgets::TargetPlatform::Android,
+        frus_widgets::TargetPlatform::Ios,
+        frus_widgets::TargetPlatform::Windows,
+    ] {
+        for (width, height) in [(400.0, 800.0), (1280.0, 720.0)] {
+            let mut bench = Bench::new(width, height);
+            bench.platform = platform;
+            bench.go("/cupertino");
+            let (_, ui) = bench.frame();
+            let regions = ui.scroll_regions();
+            assert_eq!(regions.len(), 1, "{platform:?}: one scrolling body");
+            let body = regions[0].viewport;
+            // Less the navigation bar above it and the tab bar below.
+            assert!(
+                body.height > height * 0.6,
+                "{platform:?} {width}x{height}: the body is {body:?}"
+            );
+            assert!(
+                body.y + body.height <= height,
+                "{platform:?}: inside the window"
+            );
+        }
+    }
+}

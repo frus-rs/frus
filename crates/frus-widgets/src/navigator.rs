@@ -809,4 +809,33 @@ mod retained_tests {
             assert_eq!(leaving, 0.0, "the page leaving is gone by 30 %");
         }
     }
+
+    /// **A page is handed the whole navigator** (milestone 851, #516). A page whose root
+    /// was a column — a bar, a scrolling body told to take the rest,
+    /// a bar — was laid out at its content's size, so the column had no rest to give and
+    /// the body came out with no height: the screen showed its two bars and nothing
+    /// between them.
+    #[test]
+    fn a_page_is_handed_the_whole_navigator() {
+        let tall = crate::SizedBox::<()>::empty().height(2000.0);
+        let page = crate::Flex::<()>::column()
+            .child(crate::SizedBox::<()>::empty().height(44.0))
+            .child(crate::SingleChildScrollView::new().flex(1.0).child(tall))
+            .child(crate::SizedBox::<()>::empty().height(50.0));
+        let navigator = Navigator::new("page", page).expand();
+        let ui = build_ui(
+            &navigator,
+            Size::new(400.0, 800.0),
+            &Runtime::default(),
+            &slide_theme(),
+        );
+        let regions = ui.scroll_regions();
+        assert_eq!(regions.len(), 1);
+        let viewport = regions[0].viewport;
+        assert_eq!(
+            (viewport.y, viewport.height),
+            (44.0, 800.0 - 44.0 - 50.0),
+            "the body takes the room between the bars: {viewport:?}"
+        );
+    }
 }
