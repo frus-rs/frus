@@ -424,7 +424,15 @@ impl<Msg: Clone> Widget<Msg> for Cell<Msg> {
             } else {
                 frus_text::measure_wrapped_resolved(&self.label, &style, Some(room)).height
             };
-            frus_core::Size::new(width, frus_core::fits(text + 2.0 * PAD_Y))
+            // One line is the row's own business: its least height already holds it, and
+            // padding a single line here would make every row of every table taller.
+            let one_line = frus_text::measure_resolved(&self.label, &style).height;
+            let height = if text <= one_line.max(style.line_height()) + 0.5 {
+                0.0
+            } else {
+                frus_core::fits(text + 2.0 * PAD_Y)
+            };
+            frus_core::Size::new(width, height)
         }))
     }
 

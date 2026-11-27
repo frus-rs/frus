@@ -119,6 +119,17 @@ was changed for it: a machine whose default toolchain is older sees reports CI d
   on; a virtualised table clips a long label at its cell. The existing column tests (shares,
   unbounded rows, horizontal scroll, sort arrow room, headings with actions) pass unchanged.
 
+## Goldens
+
+The first push failed CI's golden step: eighteen table goldens (`data_table_*`, `table_*`)
+differed by 400 to 20,000 pixels. Every data row had grown from 34 to 37 px. A cell measured a
+label that fits on one line as that line plus 8 px above and below, and so asked for more than
+the row's least height. **That was a bug, not a change to accept:** a label on one line is now
+left to the row's least height, and only a label that wraps adds the padding. With that fixed,
+every golden of `frus-test` passes unchanged under WSL (lavapipe, mesa 25.2.8,
+`CARGO_INCREMENTAL=0`): 106 goldens and the other test files, none regenerated. No navigator
+golden changed: the goldens lay their widgets out directly, not as pages of a navigator.
+
 ## Not done
 
 - **No release build of the web demo was made.** The browser check ran on a `web-release`
@@ -134,5 +145,3 @@ was changed for it: a machine whose default toolchain is older sees reports CI d
 - **Virtualised tables, frozen columns and resizable grids do not wrap** their labels; they
   clip them to the cell (L-047 stays partial).
 - **Android**: compiled and linted only; no phone or emulator was used.
-- **Goldens were not run**: the table cells and the navigator's page sizing changed, and no
-  golden scene was regenerated or compared.
