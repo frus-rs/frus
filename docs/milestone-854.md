@@ -178,6 +178,13 @@ second request is not answered in twenty seconds.
 The unit tests of `mcp.rs` (the handshake, every tool handled, an attached run driven through
 its DevTools, the events of a run) pass as before.
 
+## Checks
+
+`cargo clippy --workspace --all-targets -D warnings`; the tests of frus-widgets, frus-shell
+(689) and frus-cli (257 unit tests, the 2 stdio tests); the guide's examples
+(`GuideManagingState`); the goldens under WSL (`cargo test -p frus-test --tests`), all
+unchanged.
+
 ## Not done
 
 - **Resources and prompts** are still not offered (the lists answer empty). They were optional
