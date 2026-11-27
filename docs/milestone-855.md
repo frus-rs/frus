@@ -38,7 +38,8 @@ desktop tree view, multiple selection, and the semantics a screen reader expects
   list's identity keyed by the row's key (`child_id`), so the shell sets the focus to it at
   once; `Ui::reveal_list_item` works out where item `index` is from the list's shape (the
   measured extents for a list of any extent) and returns the scrolls that bring it into view —
-  the least movement, through the enclosing scroll areas, as `reveal` does for a built stop.
+  the least movement, through the enclosing scroll areas, as `reveal` does for a built stop;
+  the shell moves them at once rather than gliding, as a tree view does.
   The next frame builds the row where the focus already is. A held Enter or Space activates once.
 - **`Widget::on_modified_click`** returns a closure the frame keeps on the hit target; the shell
   calls it on a click with the modifiers held, `ClickModifiers { shift, primary, alt }`
@@ -118,7 +119,10 @@ FRAME_TABLE
   sibling folder: not done. Enter activates.
 - **Android's semantics** do not say the tree is multiselectable (its `ListView` mapping has no
   flag for it); each row's selected state is said.
-- A row in another virtualised list (a `ListView` of buttons) still cannot be activated with
-  Enter, as before: it has no `on_row_key`. The hooks are public; the existing list widgets were
-  not moved onto them here.
+- Other widgets' rows in a virtualised list are as they were: the shell's Enter, Left/Right
+  (`on_key`) and Home/End paths look the focused widget up in the retained tree, which does not
+  hold a list's rows (read from the code, not reproduced by a test here). The hooks are public;
+  the existing list widgets were not moved onto them.
+- A tree row scrolled out of view with the wheel while it has the focus is not built, so its
+  keys are not answered until it is back in view; a desktop tree view would scroll back to it.
 - Not run on a device or in a browser: the tests drive the walk, the runtime and the shell.

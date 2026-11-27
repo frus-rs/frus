@@ -10670,9 +10670,12 @@ impl<A: Application> App<A> {
                 if let Some(next) = outcome.focus {
                     self.win.runtime.input.focused = Some(next);
                     self.win.runtime.region = None;
+                    // At once, as a tree view's keys move it: a glide down ten thousand rows
+                    // to End would hold the focus on a row not built for its whole length.
                     for (area, offset) in outcome.scrolls {
                         self.win.runtime.scroll_ballistic.remove(&area);
                         self.win.runtime.scroll_velocity.remove(&area);
+                        self.win.runtime.scroll.insert(area, offset);
                         self.win.runtime.scroll_target.insert(area, offset);
                     }
                 }

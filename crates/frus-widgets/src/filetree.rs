@@ -1173,11 +1173,17 @@ mod tests {
             .label("Project")
     }
 
-    fn ui_of(t: &FileTree<Msg>, runtime: &Runtime) -> Ui<Msg> {
-        build_ui(t, Size::new(300.0, 400.0), runtime, &Theme::light())
+    /// The tree in a box of 300 × 400, under `theme`.
+    fn ui_under(t: FileTree<Msg>, runtime: &Runtime, theme: &Theme) -> Ui<Msg> {
+        let page = crate::Container::new().width(300.0).height(400.0).child(t);
+        build_ui(&page, Size::new(300.0, 400.0), runtime, theme)
     }
 
-    fn rows(t: &FileTree<Msg>) -> Vec<(String, bool)> {
+    fn ui_of(t: FileTree<Msg>, runtime: &Runtime) -> Ui<Msg> {
+        ui_under(t, runtime, &Theme::light())
+    }
+
+    fn rows(t: FileTree<Msg>) -> Vec<(String, bool)> {
         let ui = ui_of(t, &Runtime::default());
         ui.semantics()
             .iter()
@@ -1240,10 +1246,10 @@ mod tests {
 
     #[test]
     fn only_the_open_part_is_shown() {
-        let closed = rows(&tree(&[]));
+        let closed = rows(tree(&[]));
         let names: Vec<&str> = closed.iter().map(|r| r.0.as_str()).collect();
         assert_eq!(names, ["src", "assets", "Cargo.toml"]);
-        let open = rows(&tree(&[1, 3]));
+        let open = rows(tree(&[1, 3]));
         let names: Vec<&str> = open.iter().map(|r| r.0.as_str()).collect();
         assert_eq!(
             names,
@@ -1287,7 +1293,7 @@ mod tests {
 
     #[test]
     fn a_lazy_folder_opened_shows_a_loading_row() {
-        let ui = ui_of(&tree(&[5]), &Runtime::default());
+        let ui = ui_of(tree(&[5]), &Runtime::default());
         let words: Vec<String> = ui
             .scene()
             .primitives()
@@ -1302,7 +1308,7 @@ mod tests {
 
     #[test]
     fn the_tree_and_its_items_have_their_roles() {
-        let ui = ui_of(&tree(&[1]).selected(Some(2)), &Runtime::default());
+        let ui = ui_of(tree(&[1]).selected(Some(2)), &Runtime::default());
         let root = ui
             .semantics()
             .iter()
@@ -1349,7 +1355,7 @@ mod tests {
     /// A click on the chevron opens; on the rest of the row, selects.
     #[test]
     fn the_chevron_toggles_and_the_body_selects() {
-        let ui = ui_of(&tree(&[]), &Runtime::default());
+        let ui = ui_of(tree(&[]), &Runtime::default());
         let src = ui
             .semantics()
             .iter()
@@ -1371,7 +1377,7 @@ mod tests {
     #[test]
     fn the_arrows_move_in_and_out_and_along() {
         let runtime = Runtime::default();
-        let ui = ui_of(&tree(&[1, 5]), &runtime);
+        let ui = ui_of(tree(&[1, 5]), &runtime);
         let k = |on: &str, key: ShortcutKey| press(&ui, &runtime, on, stroke(key)).expect("taken");
         // Right on a closed folder opens it, and the focus stays.
         let open = k("widgets", ShortcutKey::Right);
@@ -1434,7 +1440,7 @@ mod tests {
             direction: TextDirection::Rtl,
             ..Theme::light()
         };
-        let ui = build_ui(&tree(&[1]), Size::new(300.0, 400.0), &runtime, &theme);
+        let ui = ui_under(tree(&[1]), &runtime, &theme);
         let k = |on: &str, key: ShortcutKey| press(&ui, &runtime, on, stroke(key)).expect("taken");
         assert_eq!(
             k("widgets", ShortcutKey::Left).messages,
@@ -1450,7 +1456,7 @@ mod tests {
     #[test]
     fn enter_activates() {
         let runtime = Runtime::default();
-        let ui = ui_of(&tree(&[1]).on_activate(Msg::Open), &runtime);
+        let ui = ui_of(tree(&[1]).on_activate(Msg::Open), &runtime);
         let out = press(&ui, &runtime, "main.rs", stroke(ShortcutKey::Enter)).expect("taken");
         assert_eq!(out.messages, [Msg::Open(2)]);
     }
@@ -1467,7 +1473,7 @@ mod tests {
             FileNode::file(4, "brief"),
             FileNode::file(5, "charlie"),
         ]);
-        let ui = ui_of(&t, &runtime);
+        let ui = ui_of(t, &runtime);
         let typed = |on: &str, c: char, at: f32| {
             let out = press_at(&ui, &runtime, on, stroke(ShortcutKey::Char(c)), at)
                 .expect("a letter is taken");
@@ -1505,7 +1511,7 @@ mod tests {
     #[test]
     fn clicks_with_modifiers_build_a_selection() {
         let runtime = Runtime::default();
-        let ui = ui_of(&multi(&[2]), &runtime);
+        let ui = ui_of(multi(&[2]), &runtime);
         let toggle = ClickModifiers {
             primary: true,
             ..Default::default()
@@ -1544,7 +1550,7 @@ mod tests {
     #[test]
     fn keys_build_a_selection() {
         let runtime = Runtime::default();
-        let ui = ui_of(&multi(&[3]), &runtime);
+        let ui = ui_of(multi(&[3]), &runtime);
         let k = |on: &str, key: KeyStroke| press(&ui, &runtime, on, key).expect("taken");
         // With no anchor yet, the range starts at the selected row.
         let down = k("file 3", stroke(ShortcutKey::Down).shift());
@@ -1586,7 +1592,7 @@ mod tests {
     #[test]
     fn the_selection_can_follow_the_focus() {
         let runtime = Runtime::default();
-        let ui = ui_of(&tree(&[1]).selection_follows_focus(true), &runtime);
+        let ui = ui_of(tree(&[1]).selection_follows_focus(true), &runtime);
         let out = press(&ui, &runtime, "src", stroke(ShortcutKey::Down)).expect("taken");
         assert_eq!(out.messages, [Msg::Select(2)]);
         // The platform's modifier moves the focus alone.
@@ -1613,8 +1619,7 @@ mod tests {
             })
         };
         let runtime = Runtime::default();
-        let t = make(&built);
-        let ui = ui_of(&t, &runtime);
+        let ui = ui_of(make(&built), &runtime);
         let first = built.get();
         // 400 / 28: fifteen rows, give or take one part shown.
         assert!(
@@ -1634,8 +1639,7 @@ mod tests {
         let mut runtime = runtime;
         runtime.scroll.insert(list, offset);
         built.set(0);
-        let t = make(&built);
-        let ui = ui_of(&t, &runtime);
+        let ui = ui_of(make(&built), &runtime);
         assert!(
             built.get() <= 16,
             "{} rows built at the bottom",
@@ -1649,12 +1653,16 @@ mod tests {
     #[test]
     fn the_tree_is_a_window_onto_its_rows() {
         let height = |t: FileTree<Msg>| {
-            let ui = ui_of(&t, &Runtime::default());
-            ui.semantics()
+            let ui = ui_of(t, &Runtime::default());
+            let tree = ui
+                .semantics()
                 .iter()
                 .find(|(_, _, s)| s.role == Role::Tree)
                 .map(|(_, r, _)| r.height)
-                .expect("a tree")
+                .expect("a tree");
+            // The list inside is the same window.
+            assert_eq!(ui.scroll_regions()[0].viewport.height, tree);
+            tree
         };
         assert_eq!(height(tree(&[])), 400.0);
         assert_eq!(height(tree(&[]).height(120.0)), 120.0);
@@ -1669,7 +1677,7 @@ mod tests {
         let mut theme = Theme::light();
         theme.widgets.file_tree.row_height = Some(40.0);
         let t = FileTree::<Msg>::new(sample()).icon(|node, _| Text::new(format!("[{}]", node.id)));
-        let ui = build_ui(&t, Size::new(300.0, 400.0), &Runtime::default(), &theme);
+        let ui = ui_under(t, &Runtime::default(), &theme);
         let words: Vec<String> = ui
             .scene()
             .primitives()
