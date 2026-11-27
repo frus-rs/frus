@@ -75,8 +75,9 @@ not built again; one in a dialog's panel is built there, once.
 opens one overlay kind on a page that puts its own cart in scope (0 items), under an
 application that puts another cart in scope at the root (100 items). The overlay must show the
 page's cart; a change to that cart (from outside the tree) must build each reader inside the
-overlay once; and, where the overlay holds a button, a press inside it must change the page's
-cart, seen by the page.
+overlay once (a list's row is built on every frame the list paints, so only what it shows is
+checked); and, where the overlay holds a button, a press inside it must change the page's cart,
+seen by the page.
 
 | Overlay | How it is opened | Readers inside | Press inside |
 |---|---|---|---|
@@ -87,13 +88,21 @@ cart, seen by the page.
 | `BottomSheet` | `sheet` | content, row | yes |
 | `Drawer` | `panel` | content, row | yes |
 | `MenuAnchor` (popover) | `content` | content, row | yes |
-| `HoverCard` | the pointer rests on its anchor | content, row | |
+| `HoverCard` | held open (`open(true)`) | content, row | yes |
 | `PopupMenuButton` | `item_widget` | a row's widget | |
 | `ContextMenu` | `MenuItem::widget`, open at a point | a row's widget | |
 | `MenuBar` | a menu open, `MenuItem::widget` | a row's widget | |
 | `DropdownButton` | `DropdownOption::widget`, open | an option's widget | |
 | `SearchAnchor` (search view) | `suggestion` | content, row | yes |
 | `OpenContainer` | open | content, row | yes |
+
+A dialog whose panel holds a component that reads nothing shows it (the second fault, alone).
+
+Before the change: the probe of the portal's placements panicked at every one ("no
+Model<Cart> above this component"); with the scope captured but before the deferred builds were
+run over the content, the dialogs, the sheet and the drawer panicked on "a component's children
+were read before it was built" (so did the router test, whose pushed page holds a dialog); the
+menus, the dropdown and the search view saw the page's cart. Every test passes with both.
 
 And a router: a page pushed from a page with its own cart sees the cart put around the router
 (`FrusApp::builder`), not the pushing page's; a dialog on the pushed page sees that page's.
@@ -149,6 +158,9 @@ was read only once the request it named had been answered.
 
 `crates/frus-cli/tests/mcp_stdio.rs` starts the `frus` program built by cargo, writes JSON-RPC to
 its standard input and reads its standard output, a message a line:
+
+Both fail on the server before the change (`mcp.rs` of master, the same test file): the
+second request is not answered in twenty seconds.
 
 - **A call that waits holds nothing up.** A fake application's DevTools (a TCP server in the
   test) answers `status` and `hello` at once and holds `tree` unanswered. After `attach_app`,

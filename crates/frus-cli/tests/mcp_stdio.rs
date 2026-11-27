@@ -116,7 +116,17 @@ impl Mcp {
 }
 
 impl Drop for Mcp {
+    /// A test that failed half way still lets the server stop the runs it launched: its input
+    /// is closed first, and it is killed only if it does not end.
     fn drop(&mut self) {
+        drop(self.input.take());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let _ = self.child.kill();
     }
 }
