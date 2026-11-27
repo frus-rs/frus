@@ -350,6 +350,12 @@ pub trait Widget<Msg = crate::callback::Callback> {
 
     /// Paints the widget's own decoration, according to its status (hover / focus /
     /// cursor / selection) and the current theme.
+    ///
+    /// What it paints must follow from the widget itself and from these arguments. A
+    /// component that was not built again gives back what its subtree painted the frame
+    /// before, without asking it again (milestone 856): a widget whose picture also follows
+    /// something else — a value shared with a controller, a clock — says so with
+    /// [`paint_source`](Self::paint_source) or [`continuous`](Self::continuous).
     fn paint(&self, bounds: Rect, status: Status, theme: &Theme, scene: &mut Scene);
 
     /// Message to emit on click (`None` = not clickable).
@@ -1061,6 +1067,18 @@ pub trait Widget<Msg = crate::callback::Callback> {
     /// See [`crate::Container::repaint_boundary`] and `paintcache.rs`.
     fn repaint_boundary(&self) -> bool {
         false
+    }
+
+    /// For a **component**: where it keeps a number that changes whenever anything in its
+    /// subtree is built — the component itself, or a component under it (milestone 856). The
+    /// walk that builds components writes it; the walk that paints reads it. While it stays
+    /// the same, the subtree is the same objects with the same configuration as when it last
+    /// changed, so what it painted and registered can be given back as it was, unless what
+    /// the paint reads beside the configuration moved (see `paintcache.rs`). `None`, the
+    /// default, for everything that is not a component; transparent wrappers forward it.
+    #[doc(hidden)]
+    fn built_mark(&self) -> Option<&std::cell::Cell<u64>> {
+        None
     }
 
     /// If the widget is a scrollable container, returns its content.
@@ -2294,6 +2312,9 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
     }
     fn repaint_boundary(&self) -> bool {
         (**self).repaint_boundary()
+    }
+    fn built_mark(&self) -> Option<&std::cell::Cell<u64>> {
+        (**self).built_mark()
     }
     fn debug_name(&self) -> &'static str {
         (**self).debug_name()

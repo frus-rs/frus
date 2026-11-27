@@ -492,6 +492,10 @@ macro_rules! forward_transparent {
                 self.inner.repaint_boundary()
             }
 
+            fn built_mark(&self) -> Option<&std::cell::Cell<u64>> {
+                self.inner.built_mark()
+            }
+
             fn draggable(&self) -> bool {
                 self.inner.draggable()
             }

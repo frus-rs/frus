@@ -284,23 +284,45 @@ pub(crate) const ELLIPSIS: &str = "…";
 /// let a genuinely collapsed box draw its whole label, over whatever was beside it, which
 /// is the one thing ellipsising exists to prevent.
 ///
-/// A grapheme cluster at a time from the end (milestone 849): a flag, an emoji sequence, a
-/// letter with its marks or an Indic syllable is kept whole or dropped whole, never cut into
-/// a part of itself before the ellipsis. The strings this is used on are a line, not a
-/// document, and a binary search over the boundaries would buy nothing at that length.
+/// A grapheme cluster at a time (milestone 849): a flag, an emoji sequence, a letter with its
+/// marks or an Indic syllable is kept whole or dropped whole, never cut into a part of itself
+/// before the ellipsis.
+///
+/// The cut is found by halving the boundaries, not by walking them back one by one
+/// (milestone 856): every candidate is a measurement, a measurement the cache does not hold is
+/// a shaping, and a list of a thousand rows each walking back thirty boundaries every frame
+/// kept the cache too full to hold any of them — the walk that paints went from 0.02 ms a row
+/// at forty rows to a quarter of a millisecond at a thousand. A candidate is never narrower
+/// than a shorter one, so the ones that fit come first and halving finds the same cut.
 pub(crate) fn truncate(content: &str, style: &ResolvedTextStyle, max_width: f32) -> String {
     let measure = |text: &str| frus_text::measure_resolved(text, style).width;
     if measure(content) <= max_width {
         return content.to_string();
     }
     let ends = cluster_ends(content);
-    for &end in ends.iter().rev().skip(1) {
-        let candidate = format!("{}{ELLIPSIS}", content[..end].trim_end());
-        if measure(&candidate) <= max_width {
-            return candidate;
+    let candidate = |end: usize| format!("{}{ELLIPSIS}", content[..end].trim_end());
+    // Every boundary but the last: the whole text is known not to fit.
+    let shorter = &ends[..ends.len().saturating_sub(1)];
+    match longest_fitting(shorter, |end| measure(&candidate(end)) <= max_width) {
+        Some(end) => candidate(end),
+        None => ELLIPSIS.to_string(),
+    }
+}
+
+/// The last of `ends` for which `fits` holds, given that it holds for a prefix of them and
+/// for nothing after: found by halving, with as many questions as the boundaries have bits.
+fn longest_fitting(ends: &[usize], fits: impl Fn(usize) -> bool) -> Option<usize> {
+    // Everything before `lo` fits; nothing from `hi` on does.
+    let (mut lo, mut hi) = (0, ends.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if fits(ends[mid]) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
-    ELLIPSIS.to_string()
+    lo.checked_sub(1).map(|at| ends[at])
 }
 
 /// The byte offsets in `text` at which a grapheme cluster ends — `0` first, `text.len()`
@@ -324,17 +346,22 @@ pub(crate) fn cluster_ends(text: &str) -> Vec<usize> {
 /// fits; this asks how to end a line that is being cut because the *next* one was
 /// dropped, and there the line usually does fit and still has to say so.
 ///
-/// Like `truncate`, it drops a whole grapheme cluster at a time (milestone 849).
+/// Like `truncate`, it drops a whole grapheme cluster at a time (milestone 849), and finds
+/// the cut by halving (milestone 856).
 pub(crate) fn ellipsise(line: &str, style: &ResolvedTextStyle, max_width: f32) -> String {
     let measure = |text: &str| frus_text::measure_resolved(text, style).width;
     let line = line.trim_end();
-    for &end in cluster_ends(line).iter().rev() {
-        let candidate = format!("{}{ELLIPSIS}", line[..end].trim_end());
-        if end == 0 || max_width <= 0.0 || measure(&candidate) <= max_width {
-            return candidate;
-        }
+    let candidate = |end: usize| format!("{}{ELLIPSIS}", line[..end].trim_end());
+    if max_width <= 0.0 {
+        return candidate(line.len());
     }
-    ELLIPSIS.to_string()
+    // An ellipsis alone always stands: nothing shorter could take its place.
+    match longest_fitting(&cluster_ends(line), |end| {
+        end == 0 || measure(&candidate(end)) <= max_width
+    }) {
+        Some(end) => candidate(end),
+        None => ELLIPSIS.to_string(),
+    }
 }
 
 /// What a text came to after being fitted to its box: what to draw, and which way it ran
@@ -1464,6 +1491,57 @@ mod tests {
                 below.y >= paragraph.0.y + painted.height - 0.01,
                 "{label:?}: the label underneath overlaps the paragraph ({below:?} vs {painted:?})"
             );
+        }
+    }
+
+    /// Halving the boundaries (milestone 856) cuts where walking them back one by one did,
+    /// at every width, for Latin, marks, emoji sequences and trailing spaces.
+    #[test]
+    fn halving_cuts_where_walking_back_did() {
+        let style = Text::new("x").size(14.0).resolved(None).style;
+        let measure = |text: &str| frus_text::measure_resolved(text, &style).width;
+        let walked_truncate = |content: &str, max: f32| {
+            if measure(content) <= max {
+                return content.to_string();
+            }
+            let ends = cluster_ends(content);
+            for &end in ends.iter().rev().skip(1) {
+                let candidate = format!("{}{ELLIPSIS}", content[..end].trim_end());
+                if measure(&candidate) <= max {
+                    return candidate;
+                }
+            }
+            ELLIPSIS.to_string()
+        };
+        let walked_ellipsise = |line: &str, max: f32| {
+            let line = line.trim_end();
+            for &end in cluster_ends(line).iter().rev() {
+                let candidate = format!("{}{ELLIPSIS}", line[..end].trim_end());
+                if end == 0 || max <= 0.0 || measure(&candidate) <= max {
+                    return candidate;
+                }
+            }
+            ELLIPSIS.to_string()
+        };
+        for words in [
+            "The last message of conversation 500, cut short",
+            "Ame\u{301}lie et Zoe\u{308} ont e\u{301}crit",
+            "Flags \u{1F1EB}\u{1F1F7}\u{1F1EF}\u{1F1F5} and a family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+            "spaces   between   words   ",
+            "",
+        ] {
+            for width in (0..=60).map(|step| step as f32 * 6.5) {
+                assert_eq!(
+                    truncate(words, &style, width),
+                    walked_truncate(words, width),
+                    "truncate {words:?} at {width}"
+                );
+                assert_eq!(
+                    ellipsise(words, &style, width),
+                    walked_ellipsise(words, width),
+                    "ellipsise {words:?} at {width}"
+                );
+            }
         }
     }
 

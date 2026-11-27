@@ -402,6 +402,10 @@ impl<Msg> Widget<Msg> for Responsive<Msg> {
         self.inner.as_ref().and_then(|w| w.paint_source())
     }
 
+    fn built_mark(&self) -> Option<&std::cell::Cell<u64>> {
+        self.inner.as_ref().and_then(|w| w.built_mark())
+    }
+
     fn decorative(&self) -> bool {
         self.inner.as_ref().is_some_and(|w| w.decorative())
     }

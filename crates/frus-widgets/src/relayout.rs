@@ -146,6 +146,38 @@ pub struct LayoutCache {
     reused_nodes: u32,
     last_laid_out: u32,
     last_reused_nodes: u32,
+    /// Diagnostic: the time the frame's layouts took, all of it and the fingerprints alone,
+    /// in seconds (milestone 856). Not kept on the web, which has no clock to read here.
+    spent: (f64, f64),
+    last_spent: (f64, f64),
+}
+
+/// A clock for the diagnostics, where there is one.
+#[cfg(not(target_arch = "wasm32"))]
+type Clock = std::time::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clock() -> Option<Clock> {
+    Some(std::time::Instant::now())
+}
+
+#[cfg(target_arch = "wasm32")]
+type Clock = ();
+
+#[cfg(target_arch = "wasm32")]
+fn clock() -> Option<Clock> {
+    None
+}
+
+/// The seconds since `start`, or nought without a clock.
+#[cfg(not(target_arch = "wasm32"))]
+fn since(start: Option<Clock>) -> f64 {
+    start.map_or(0.0, |at| at.elapsed().as_secs_f64())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn since(_start: Option<Clock>) -> f64 {
+    0.0
 }
 
 impl LayoutCache {
@@ -160,8 +192,24 @@ impl LayoutCache {
         theme: &crate::theme::Theme,
         c: Constraints,
     ) -> (Vec<Rect>, Vec<Overflowing>) {
+        let start = clock();
+        let laid = self.rects_timed(key, root, runtime, theme, c);
+        self.spent.0 += since(start);
+        laid
+    }
+
+    fn rects_timed<Msg>(
+        &mut self,
+        key: WidgetId,
+        root: &dyn Widget<Msg>,
+        runtime: &Runtime,
+        theme: &crate::theme::Theme,
+        c: Constraints,
+    ) -> (Vec<Rect>, Vec<Overflowing>) {
         self.touched.insert(key);
+        let start = clock();
         let (signature, volatile) = signature_of(root, key, runtime, theme);
+        self.spent.1 += since(start);
         if !volatile {
             let found = self.entries.get(&key).and_then(|slots| {
                 slots
@@ -218,6 +266,16 @@ impl LayoutCache {
         self.misses = 0;
         self.last_laid_out = std::mem::take(&mut self.laid_out);
         self.last_reused_nodes = std::mem::take(&mut self.reused_nodes);
+        self.last_spent = std::mem::take(&mut self.spent);
+    }
+
+    /// What the last completed frame's layouts took, in milliseconds: all of it, and the
+    /// fingerprints alone (diagnostic, milestone 856). Noughts on the web.
+    pub fn last_frame_time(&self) -> (f32, f32) {
+        (
+            (self.last_spent.0 * 1000.0) as f32,
+            (self.last_spent.1 * 1000.0) as f32,
+        )
     }
 
     /// Reuses and recomputations of the last completed frame (diagnostic).
