@@ -632,16 +632,74 @@ impl Session {
 }
 
 /// Ends a process and the ones it started.
+///
+/// On Windows, `taskkill /T`. Elsewhere killing the child alone leaves what it started running:
+/// cargo, the compilers and build scripts of a run still building, the engine of a hot-reload
+/// run, `frus test`'s tests (milestone 854). The tree is frozen from the top down (`SIGSTOP`,
+/// so that nothing in it starts anything more while it is walked), then every process in it is
+/// killed, and the child's process group with them (it leads one, see [`own_group`]): a
+/// process whose parent is already gone is found there.
 fn kill_tree(child: &mut Child, pid: u32) {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         let _ = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
     }
+    #[cfg(unix)]
+    {
+        let mut tree = Vec::new();
+        freeze_tree(pid, &mut tree);
+        let mut targets: Vec<String> = tree.iter().map(u32::to_string).collect();
+        targets.push(format!("-{pid}"));
+        // `--` before the group: procps-ng reads `-1234` as an option otherwise, and signals
+        // nothing (milestone 843).
+        let _ = Command::new("kill")
+            .args(["-s", "KILL", "--"])
+            .args(&targets)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Stops `pid` and, below it, every process it started, recording each one in `tree`.
+#[cfg(unix)]
+fn freeze_tree(pid: u32, tree: &mut Vec<u32>) {
+    if tree.contains(&pid) {
+        return;
+    }
+    let _ = Command::new("kill")
+        .args(["-s", "STOP", "--", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    tree.push(pid);
+    let children = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default();
+    for child in children.lines().filter_map(|l| l.trim().parse().ok()) {
+        freeze_tree(child, tree);
+    }
+}
+
+/// Makes the process `command` starts lead a process group of its own, so that what it starts
+/// can be ended with it ([`kill_tree`]), and a Ctrl+C meant for the agent's client does not
+/// reach it. Nothing to do on Windows, where the tree is followed by `taskkill`.
+fn own_group(command: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command
 }
 
 /// Starts `frus run --machine` in `root`, its output read into a session.
@@ -669,7 +727,7 @@ fn launch(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
+    let mut child = own_group(&mut command)
         .spawn()
         .map_err(|e| format!("could not start frus run: {e}"))?;
     let has = |flag: &str| flags.iter().any(|f| f == flag);
@@ -1120,12 +1178,14 @@ fn unbase64(text: &str) -> Result<Vec<u8>, String> {
 /// A frus command run in the application's directory, its output captured.
 fn frus_command(root: &Path, args: &[&str]) -> ToolResult {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = own_group(&mut command)
         .spawn()
         .map_err(|e| format!("could not run frus {}: {e}", args.join(" ")))?;
     // Both streams read to their end on threads of their own, so that a full pipe never

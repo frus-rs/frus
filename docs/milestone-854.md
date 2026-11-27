@@ -151,6 +151,17 @@ was read only once the request it named had been answered.
 - **A run still building is ended at once** when stopped (by `stop_app`, a cancelled launch, or
   the client leaving): `frus run` reads no command until its application is up, so asking it to
   stop meant twenty seconds of waiting before it was killed anyway.
+- **Ending a run ends what it started, on Linux and macOS too.** Stopping a run (or a cancelled
+  `analyze` / `run_tests`) killed only the `frus` process outside Windows: cargo, its build
+  scripts and compilers, or the hot-reload engine and its application, went on running. CI's
+  Linux run of the launch test caught it (the build script outlived the cancelled launch), and
+  it was reproduced under WSL before the fix. `frus run` and the commands are now started as
+  the leaders of process groups of their own, and ending one freezes its tree from the top
+  (`SIGSTOP`, so nothing in it starts anything more while it is walked with `pgrep -P`), then
+  kills every process found and the group. The tree is followed and not only the group,
+  because the hot-reload engine leads a group of its own. A run that is up is still asked to
+  stop first (`app.stop`), which `frus run` answers by stopping its engine and application
+  itself.
 - When the client closes standard input, the requests still in flight are cancelled and waited
   for, then every run launched is stopped, as before.
 
@@ -196,5 +207,5 @@ unchanged.
   window; the change has no platform code.
 - **The selection bar with the application's own items** records its scope like every overlay,
   but no test opens one with a reader inside.
-- **macOS and Linux**: the stdio tests were run on Windows only; the launch test's check that
-  the build script ended uses `kill -0` elsewhere, untested.
+- **macOS**: the stdio tests ran on Windows, under WSL (Linux) and on CI's Linux; macOS only
+  on CI. Ending a tree relies on `pgrep`, present on both.
