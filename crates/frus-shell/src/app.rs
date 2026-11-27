@@ -10973,6 +10973,10 @@ impl<A: Application> App<A> {
                     Some(Key::Enter)
                 }
             }
+            // A letter pressed with the platform's modifier — Cmd on an Apple keyboard,
+            // Ctrl elsewhere — is a shortcut, never text, even when nothing is bound to
+            // it: Cmd+Y types no "y". Ctrl+Alt still types, as it is AltGr on Windows.
+            _ if self.primary() && !self.alt => None,
             _ => event.text.as_ref().map(|text| Key::Text(text.to_string())),
         };
 
