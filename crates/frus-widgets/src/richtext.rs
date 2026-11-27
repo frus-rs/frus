@@ -289,6 +289,8 @@ impl RichText {
                 decoration_color: style.decoration_color.map(|c| c.fade(opacity)),
                 letter_spacing: style.letter_spacing,
                 shaping: style.shaping,
+                family: style.family,
+                family_fallback: style.family_fallback,
             })
             .collect()
     }
@@ -485,6 +487,9 @@ impl<Msg: Clone + 'static> Widget<Msg> for RichText {
         base.size.to_bits().hash(&mut hasher);
         base.weight.to_u16().hash(&mut hasher);
         base.italic.hash(&mut hasher);
+        // The paragraph's own face, which its spans inherit (milestone 852).
+        base.family.hash(&mut hasher);
+        base.family_fallback.hash(&mut hasher);
         self.max_lines.hash(&mut hasher);
         Some(hasher.finish())
     }

@@ -603,6 +603,7 @@ pub(crate) fn key_stroke(name: &str) -> Option<frus_widgets::KeyStroke> {
         shift: false,
         alt: false,
         meta: false,
+        primary: false,
     };
     let mut parts: Vec<&str> = name.split('+').collect();
     let key = parts.pop()?.trim();
@@ -612,6 +613,7 @@ pub(crate) fn key_stroke(name: &str) -> Option<frus_widgets::KeyStroke> {
             "shift" => stroke.shift = true,
             "alt" | "option" => stroke.alt = true,
             "meta" | "cmd" | "command" | "super" => stroke.meta = true,
+            "primary" | "mod" => stroke.primary = true,
             _ => return None,
         }
     }

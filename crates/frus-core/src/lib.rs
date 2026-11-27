@@ -77,8 +77,8 @@ pub use image::{
 pub use path::{FillRule, Path, PathVerb, Stroke, StrokeCap};
 pub use platform::{
     __set_detected_target_platform, debug_default_target_platform_override,
-    default_target_platform, set_debug_default_target_platform_override, Platform, TargetPlatform,
-    IS_WEB,
+    default_target_platform, keyboard_platform, set_debug_default_target_platform_override,
+    Platform, TargetPlatform, IS_WEB,
 };
 pub use responsive::{Orientation, SizeClass};
 pub use scene::{

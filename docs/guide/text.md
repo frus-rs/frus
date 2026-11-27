@@ -54,6 +54,28 @@ let receipt = RichText::new(
 # let _ = receipt;
 ```
 
+A span can name its own family, and the families its missing characters are drawn in:
+
+```rust
+use frus::{FontFamily, RichText, TextSpan};
+
+let line = RichText::new(
+    TextSpan::new("Run ")
+        .child(TextSpan::new("cargo test").family(FontFamily::Monospace))
+        .child(
+            TextSpan::new(" 完了")
+                .family(FontFamily::Named("Inter"))
+                .family_fallback(&[FontFamily::Named("Noto Sans JP")]),
+        ),
+);
+# let _ = line;
+```
+
+`family_fallback` is a list, tried in order for each character the family has no glyph for,
+then the default family, then the system's fonts. `TextStyle` and `Text` take it too. A family
+that is not loaded is skipped: when the family itself is missing, the first loaded one of the
+list takes its place, so a misspelt name never leaves the text blank.
+
 OpenType features, a variable font's axes and the language of a span are in
 [the style page](style.md#opentype-features-variable-fonts-and-the-language).
 

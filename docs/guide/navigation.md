@@ -403,7 +403,9 @@ message that hands back the new value.
 - **`CommandPalette`** wraps the screen and finds a command by typing: a fuzzy match, the
   matched letters marked, groups, the keys shown on the right, Up, Down, Enter and Escape. It
   opens on the key you give `open_on`. An application fetching results itself turns off
-  `filter` and says `loading` while they come.
+  `filter` and says `loading` while they come. `KeyStroke::new(ShortcutKey::Char('k')).primary()`
+  is Cmd+K on a Mac and Ctrl+K elsewhere, in a browser too, and `stroke.label_on(platform)`
+  writes a key as that keyboard does (`⌘K`, `Ctrl+K`).
 - **`ContextMenu`** wraps part of the screen and opens its menu where a right-click or a long
   press landed: `MenuItem`s (ticks, `MenuItem::radio` choices, keys, rules, unavailable rows) and
   `SubmenuButton`s, with the menu bar's keyboard.
@@ -470,7 +472,7 @@ impl State for EditorState {
                 &self.palette,
                 cx.handler(|s: &mut Self, palette: CommandPaletteState| s.palette = palette),
             )
-            .open_on(KeyStroke::new(ShortcutKey::Char('k')).ctrl())
+            .open_on(KeyStroke::new(ShortcutKey::Char('k')).primary())
             .command(PaletteCommand::new("Save", save).group("File").shortcut("Ctrl+S")),
         )
     }

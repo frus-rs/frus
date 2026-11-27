@@ -194,6 +194,7 @@ impl<Msg> Widget<Msg> for Alert {
             style.italic.hash(&mut hasher);
             style.height.map(f32::to_bits).hash(&mut hasher);
             style.family.hash(&mut hasher);
+            style.family_fallback.hash(&mut hasher);
         }
         Some(hasher.finish())
     }

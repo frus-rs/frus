@@ -243,6 +243,7 @@ impl<A: Application> App<A> {
                         shift: false,
                         alt: false,
                         meta: false,
+                        primary: false,
                     });
                 }
                 self.request_redraw();

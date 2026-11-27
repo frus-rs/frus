@@ -241,6 +241,7 @@ impl TextPainter {
                         // this one is a ratio of the font size.
                         height: line_ratio,
                         family,
+                        family_fallback,
                         letter_spacing,
                         shaping,
                         clip,
@@ -268,14 +269,19 @@ impl TextPainter {
                         buffer.set_size(*max_width, Some(height_below(height, position.y)));
                         // Weight and italic: cosmic-text picks the matching face of the
                         // family, falling back to the closest one when it is missing.
-                        let attrs = glyphon::Attrs::new()
-                            // Family by script (Arabic → Noto): Android has no
-                            // cross-family fallback, so we choose at the source.
-                            .family(frus_text::family_for_style(text, *family))
-                            .weight(glyphon::Weight(frus_text::available_weight(*weight)))
-                            // Upright when no oblique face is loaded: an application
-                            // that dropped `bundled-italic` gets straight text, not none.
-                            .style(frus_text::available_style(*italic));
+                        // Family by script (Arabic → Noto): Android has no cross-family
+                        // fallback, so we choose at the source — with the style's own
+                        // fallback families after it (milestone 852).
+                        let attrs = frus_text::with_families(
+                            glyphon::Attrs::new(),
+                            text,
+                            *family,
+                            family_fallback,
+                        )
+                        .weight(glyphon::Weight(frus_text::available_weight(*weight)))
+                        // Upright when no oblique face is loaded: an application
+                        // that dropped `bundled-italic` gets straight text, not none.
+                        .style(frus_text::available_style(*italic));
                         // Spaced as the measurement spaced it (milestone 623).
                         let attrs = frus_text::spaced(attrs, *letter_spacing, *size);
                         // Features, axes and language, as the measurement shaped them
@@ -354,20 +360,24 @@ impl TextPainter {
                                 run.text.as_str(),
                                 frus_text::shaped(
                                     frus_text::spaced(
-                                        glyphon::Attrs::new()
-                                            .family(frus_text::family_for(&run.text))
-                                            .weight(glyphon::Weight(frus_text::available_weight(
-                                                run.weight,
-                                            )))
-                                            .style(frus_text::available_style(run.italic))
-                                            .metrics(glyphon::Metrics::new(
-                                                run.size,
-                                                run.size * LINE_HEIGHT_FACTOR,
-                                            ))
-                                            .color(to_glyphon(&run.color))
-                                            // Ties each glyph to its source run, for the
-                                            // per-span decorations.
-                                            .metadata(index),
+                                        frus_text::with_families(
+                                            glyphon::Attrs::new(),
+                                            &run.text,
+                                            run.family,
+                                            run.family_fallback,
+                                        )
+                                        .weight(glyphon::Weight(frus_text::available_weight(
+                                            run.weight,
+                                        )))
+                                        .style(frus_text::available_style(run.italic))
+                                        .metrics(glyphon::Metrics::new(
+                                            run.size,
+                                            run.size * LINE_HEIGHT_FACTOR,
+                                        ))
+                                        .color(to_glyphon(&run.color))
+                                        // Ties each glyph to its source run, for the
+                                        // per-span decorations.
+                                        .metadata(index),
                                         run.letter_spacing,
                                         run.size,
                                     ),
@@ -657,6 +667,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.0,
             shaping: frus_core::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         let mut scene = Scene::new();
         scene.rich_text(
@@ -726,6 +738,8 @@ mod tests {
             decoration_color: None,
             letter_spacing: 0.0,
             shaping: frus_core::TextShaping::NONE,
+            family: None,
+            family_fallback: &[],
         };
         let plain = {
             let mut scene = Scene::new();

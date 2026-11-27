@@ -207,6 +207,19 @@ pub fn default_target_platform() -> TargetPlatform {
         .unwrap_or(TargetPlatform::of_build())
 }
 
+/// The platform whose **keyboard** the application is typed on: the one a shortcut's
+/// primary modifier follows, Cmd on an Apple keyboard and Ctrl on every other
+/// (milestone 852).
+///
+/// It is the machine's, read the way [`default_target_platform`] reads it (the browser's
+/// operating system on the web, the build's elsewhere), but the **debug override does not
+/// change it**: a window standing in for an iPhone on a Windows machine is still typed on a
+/// Windows keyboard, and Ctrl+C must keep copying there. An application that wants another
+/// keyboard's conventions names that platform where it resolves a stroke.
+pub fn keyboard_platform() -> TargetPlatform {
+    detected_target_platform().unwrap_or(TargetPlatform::of_build())
+}
+
 /// The browser's operating system on the web, read from the navigator the first time it is
 /// asked for and kept; `None` on every other platform, where the build says it all.
 ///

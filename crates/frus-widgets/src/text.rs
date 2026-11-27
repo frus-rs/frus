@@ -716,6 +716,14 @@ impl Text {
         self
     }
 
+    /// Names the families tried, in order, for the characters the
+    /// [family](Self::family) has no glyph for (milestone 852) — see
+    /// [`frus_core::TextStyle::family_fallback`].
+    pub fn family_fallback(mut self, families: &'static [frus_core::FontFamily]) -> Self {
+        self.style.family_fallback = Some(families);
+        self
+    }
+
     /// Sets the line height as a **multiple of the font size** — the reference's
     /// [`TextStyle::height`](frus_core::TextStyle::height).
     ///
@@ -1016,6 +1024,7 @@ impl<Msg: Clone + 'static> Widget<Msg> for Text {
         // to the same box, and the second kept the first's geometry.
         r.style.height.map(f32::to_bits).hash(&mut hasher);
         r.style.family.hash(&mut hasher);
+        r.style.family_fallback.hash(&mut hasher);
         // And the room after each character, which the measurement adds and the key had left
         // out: with layouts kept node by node across frames (milestone 853), a spacing that
         // changed alone kept the old width.
@@ -2021,6 +2030,7 @@ mod tests {
                 decoration_color: None,
                 height: None,
                 family: None,
+                family_fallback: &[],
                 clip: Rect::UNBOUNDED,
                 // Painted directly rather than through the widget walk, so no box was
                 // declared: unknown, which the renderer reads as "covers everything".

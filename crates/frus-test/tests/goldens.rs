@@ -3465,6 +3465,45 @@ fn rich_text_alignment_and_limit_match_their_golden() {
     snapshot.assert_golden(golden("rich_text_block"));
 }
 
+/// **A span of rich text in its own family** (milestone 852, L-031): one paragraph in the
+/// default family with a span of code in the monospaced one — narrow letters drawn wide —
+/// then the same words in a family nobody loaded, with the monospaced family as its fallback,
+/// drawn in that fallback rather than blank or in the default.
+#[test]
+fn rich_text_span_family_matches_its_golden() {
+    use frus_core::FontFamily;
+    let theme = Theme::dark().with_platform(frus_core::TargetPlatform::Linux);
+    let body = TextStyle::new(14.0);
+    let line = |code: TextSpan| {
+        RichText::new(
+            TextSpan::new("run ")
+                .child(code)
+                .child(TextSpan::new(" ill")),
+        )
+        .base_style(body)
+    };
+    let root: Container<()> = Container::new()
+        .width(200.0)
+        .height(64.0)
+        .padding(8.0)
+        .child(
+            Flex::column()
+                .width(184.0)
+                .gap(6.0)
+                .child(line(TextSpan::new("lilies").family(FontFamily::Monospace)))
+                .child(line(
+                    TextSpan::new("lilies")
+                        .family(FontFamily::Named("No Such Family 852"))
+                        .family_fallback(&[FontFamily::Monospace]),
+                )),
+        );
+    let Some(snapshot) = render_widget(&root, 200, 64, &theme) else {
+        eprintln!("no GPU adapter available: test skipped");
+        return;
+    };
+    snapshot.assert_golden(golden("rich_text_span_family"));
+}
+
 /// The three constraint boxes that can be photographed, each showing the one thing it
 /// does that the box above it cannot.
 ///

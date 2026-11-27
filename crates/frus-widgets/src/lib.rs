@@ -674,8 +674,8 @@ pub use sheet::{
     SheetState, SheetTo, SnapSimulation, SHEET_SNAP_MIN_SPEED,
 };
 pub use shortcuts::{
-    ActionListener, Actions, CallbackShortcuts, FocusableActionDetector, Intent, KeyStroke,
-    KeyboardListener, ShortcutKey, Shortcuts,
+    default_editing_shortcuts, ActionListener, Actions, CallbackShortcuts, FocusableActionDetector,
+    Intent, KeyStroke, KeyboardListener, ShortcutKey, Shortcuts,
 };
 pub use sidebar::{
     Sidebar, SidebarItem, SidebarTheme, SIDEBAR_BREAKPOINT, SIDEBAR_COLLAPSED_WIDTH,
@@ -811,7 +811,7 @@ pub use frus_core::{
     MIN_ANIMATION_SPEED,
 };
 pub use frus_core::{
-    debug_default_target_platform_override, default_target_platform,
+    debug_default_target_platform_override, default_target_platform, keyboard_platform,
     set_debug_default_target_platform_override, Platform, TargetPlatform, IS_WEB,
 };
 /// Installing the reader's font size for a whole frame — see

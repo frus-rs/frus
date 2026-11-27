@@ -315,6 +315,15 @@ pub struct TextStyle {
     /// *nothing at all*. Text in an unexpected face is a smaller failure than no text, and
     /// naming the Arabic family itself still works.
     pub family: Option<FontFamily>,
+    /// The families tried, in order, for the characters [`family`](Self::family) has no
+    /// glyph for (milestone 852): a Latin face with a Japanese one after it, an icon font
+    /// with the text's face after it. Unset, none; after the list come the application's
+    /// default family and then the platform's own fallback.
+    ///
+    /// A family in the list that is not loaded is skipped, and when the family itself is
+    /// not loaded the first loaded one of the list takes its place — text is drawn in
+    /// another face rather than not at all.
+    pub family_fallback: Option<&'static [FontFamily]>,
     /// The room added after every character, in **logical pixels** — the reference's
     /// `letterSpacing`; negative draws them closer (milestone 623). Unset, none.
     ///
@@ -354,6 +363,9 @@ pub struct ResolvedTextStyle {
     /// The font family; `None` means the application's default. See
     /// [`TextStyle::family`] for why it does not always win.
     pub family: Option<FontFamily>,
+    /// The families tried for the characters `family` lacks, in order; empty for none.
+    /// See [`TextStyle::family_fallback`].
+    pub family_fallback: &'static [FontFamily],
     /// The room added after every character, in logical pixels; `0` for none.
     pub letter_spacing: f32,
     /// OpenType features, variable font axes and the language. An unset language is the
@@ -393,6 +405,7 @@ impl ResolvedTextStyle {
             decoration_color: None,
             height: None,
             family: None,
+            family_fallback: &[],
             letter_spacing: 0.0,
             shaping: TextShaping::NONE,
         }
@@ -410,6 +423,7 @@ impl TextStyle {
         decoration_color: None,
         height: None,
         family: None,
+        family_fallback: None,
         letter_spacing: None,
         shaping: TextShaping::NONE,
     };
@@ -490,6 +504,22 @@ impl TextStyle {
     /// named family does not get the last word.
     pub const fn family(mut self, family: FontFamily) -> Self {
         self.family = Some(family);
+        self
+    }
+
+    /// Names the families tried, in order, for the characters the
+    /// [family](Self::family) has no glyph for (milestone 852). See the
+    /// [field](Self::family_fallback).
+    ///
+    /// ```
+    /// # use frus_core::{FontFamily, TextStyle};
+    /// let style = TextStyle::new(16.0)
+    ///     .family(FontFamily::Named("Inter"))
+    ///     .family_fallback(&[FontFamily::Named("Noto Sans JP"), FontFamily::Serif]);
+    /// assert_eq!(style.family_fallback.map(<[_]>::len), Some(2));
+    /// ```
+    pub const fn family_fallback(mut self, families: &'static [FontFamily]) -> Self {
+        self.family_fallback = Some(families);
         self
     }
 
@@ -574,6 +604,7 @@ impl TextStyle {
             decoration_color: over.decoration_color.or(self.decoration_color),
             height: over.height.or(self.height),
             family: over.family.or(self.family),
+            family_fallback: over.family_fallback.or(self.family_fallback),
             letter_spacing: over.letter_spacing.or(self.letter_spacing),
             shaping: self.shaping.merge(over.shaping),
         }
@@ -644,6 +675,7 @@ impl TextStyle {
             decoration_color: color(self.decoration_color, other.decoration_color, t),
             height: number(self.height, other.height, t),
             family: swap(self.family, other.family, t),
+            family_fallback: swap(self.family_fallback, other.family_fallback, t),
             letter_spacing: number(self.letter_spacing, other.letter_spacing, t),
             shaping: self.shaping.lerp(other.shaping, t),
         }
@@ -701,6 +733,7 @@ impl TextStyle {
             decoration_color: self.decoration_color,
             height: self.height,
             family: self.family,
+            family_fallback: self.family_fallback.unwrap_or(&[]),
             letter_spacing: self.letter_spacing.unwrap_or(0.0),
             shaping: self.shaping,
         }
@@ -887,6 +920,31 @@ impl TextSpan {
         self
     }
 
+    /// Draws this subtree in `family` (milestone 852): a span of code in the monospaced
+    /// family inside a paragraph of prose, a brand name in its own face. See
+    /// [`TextStyle::family`].
+    ///
+    /// ```
+    /// # use frus_core::{FontFamily, TextSpan, TextStyle};
+    /// let line = TextSpan::new("Run ")
+    ///     .child(TextSpan::new("cargo test").family(FontFamily::Monospace))
+    ///     .child(TextSpan::new(" first."));
+    /// let runs = line.flatten(TextStyle::new(14.0));
+    /// assert_eq!(runs[1].1.family, Some(FontFamily::Monospace));
+    /// assert_eq!(runs[2].1.family, None, "the prose around it keeps the default");
+    /// ```
+    pub fn family(mut self, family: FontFamily) -> Self {
+        self.overrides.family = Some(family);
+        self
+    }
+
+    /// The families tried, in order, for the characters this subtree's family has no glyph
+    /// for (milestone 852). See [`TextStyle::family_fallback`].
+    pub fn family_fallback(mut self, families: &'static [FontFamily]) -> Self {
+        self.overrides.family_fallback = Some(families);
+        self
+    }
+
     /// Says this subtree is written in the language `tag`. See [`TextStyle::locale`].
     ///
     /// ```
@@ -925,7 +983,7 @@ impl TextSpan {
     }
 
     /// Mixes into `hasher` everything that affects the tree's **measurement**:
-    /// text, sizes, weights and italics. Colours and **decorations** are excluded,
+    /// text, sizes, weights, italics, families, spacing and shaping. Colours and **decorations** are excluded,
     /// having no effect on geometry. This serves as the measurement fingerprint
     /// (`measure_key`) without having to flatten the tree.
     pub fn measure_hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
@@ -936,6 +994,9 @@ impl TextSpan {
         self.overrides.italic.hash(hasher);
         self.overrides.shaping.hash(hasher);
         self.overrides.letter_spacing.map(f32::to_bits).hash(hasher);
+        // A span in another face is another width (milestone 852).
+        self.overrides.family.hash(hasher);
+        self.overrides.family_fallback.hash(hasher);
         self.children.len().hash(hasher);
         for child in &self.children {
             child.measure_hash(hasher);
@@ -978,6 +1039,12 @@ pub struct TextRun {
     pub letter_spacing: f32,
     /// OpenType features, variable font axes and the language (milestone 784).
     pub shaping: TextShaping,
+    /// The run's font family; `None` for the application's default (milestone 852). See
+    /// [`TextStyle::family`].
+    pub family: Option<FontFamily>,
+    /// The families tried for the characters `family` lacks, in order; empty for none. See
+    /// [`TextStyle::family_fallback`].
+    pub family_fallback: &'static [FontFamily],
 }
 
 #[cfg(test)]

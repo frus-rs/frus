@@ -363,6 +363,10 @@ pub struct Attrs<'a> {
     /// the font's localized glyph forms when shaping and the script fallback fonts. `None`
     /// is the font system's locale.
     pub language: Option<SmolStr>,
+    /// Families tried, in order, for the characters `family` has no glyph for, before the
+    /// font system's own fallback lists (frus). Static, so that an owned copy of the
+    /// attributes can keep them as they are.
+    pub fallback_families: &'static [Family<'static>],
 }
 
 impl<'a> Attrs<'a> {
@@ -384,6 +388,7 @@ impl<'a> Attrs<'a> {
             text_decoration: TextDecoration::new(),
             font_variations: FontVariations::new(),
             language: None,
+            fallback_families: &[],
         }
     }
 
@@ -453,6 +458,12 @@ impl<'a> Attrs<'a> {
         self
     }
 
+    /// Set the families tried for the characters [`Self::family`] lacks, in order (frus)
+    pub const fn fallback_families(mut self, families: &'static [Family<'static>]) -> Self {
+        self.fallback_families = families;
+        self
+    }
+
     /// Set the language, a BCP 47 tag (frus)
     pub fn language(mut self, language: Option<&str>) -> Self {
         self.language = language.map(SmolStr::new);
@@ -500,6 +511,8 @@ impl<'a> Attrs<'a> {
             && self.font_features == other.font_features
             && self.font_variations == other.font_variations
             && self.language == other.language
+            // frus: a run falls back through one list of families.
+            && self.fallback_families == other.fallback_families
     }
 }
 
@@ -541,6 +554,8 @@ pub struct AttrsOwned {
     pub text_decoration: TextDecoration,
     pub font_variations: FontVariations,
     pub language: Option<SmolStr>,
+    /// See [`Attrs::fallback_families`] (frus).
+    pub fallback_families: &'static [Family<'static>],
 }
 
 impl AttrsOwned {
@@ -559,6 +574,7 @@ impl AttrsOwned {
             text_decoration: attrs.text_decoration,
             font_variations: attrs.font_variations.clone(),
             language: attrs.language.clone(),
+            fallback_families: attrs.fallback_families,
         }
     }
 
@@ -577,6 +593,7 @@ impl AttrsOwned {
             text_decoration: self.text_decoration,
             font_variations: self.font_variations.clone(),
             language: self.language.clone(),
+            fallback_families: self.fallback_families,
         }
     }
 }

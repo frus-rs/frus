@@ -25,6 +25,20 @@ any release may break.
   100. `frus_layout::Layout` gains `reuse`, `into_memo`, `set_identity`,
   `measured_leaf_keyed`, `style_snapshot` and `restore_style`. `Text::measure_key` now
   includes the letter spacing.
+- **One shortcut for Cmd on a Mac and Ctrl elsewhere, and a font family per span of rich
+  text** (J852, L-037, L-031). `KeyStroke::primary()` is the platform's own modifier: Cmd on an
+  Apple keyboard, a browser on a Mac included, and Ctrl everywhere else, so one binding answers
+  both; `keyboard_platform()` says which keyboard that is, `KeyStroke::matches_on` and
+  `Ui::resolve_keystroke` take another, and `KeyStroke::label_on` writes a stroke as that
+  keyboard has it (`⌘K`, `Ctrl+K`). The framework's editing keys are now a table,
+  `default_editing_shortcuts(platform)`, of primary strokes to `Intent::COPY`, `CUT`, `PASTE`,
+  `SELECT_ALL`, `UNDO` and `REDO`: an application's `Shortcuts` can bind another key to one of
+  them, or switch one off with `Intent::DO_NOTHING`. The default keys are matched exactly, so
+  Ctrl+Shift+C no longer copies. `TextSpan::family` names a span's family, and
+  `family_fallback` (on `TextSpan`, `TextStyle` and `Text`) the families tried, character by
+  character, for what it lacks; both are measured and drawn on every target, and a family that
+  is not loaded is skipped rather than drawn as nothing. `TextRun`, `ResolvedTextStyle` and the
+  text primitive carry the new fields; frus-cosmic-text gained `Attrs::fallback_families`.
 - **A page gets the whole screen** (J851, #516). A navigator hands each page its whole box,
   as a route hands its page the screen: a page whose root is a plain container or column is as
   big as the screen, not as its content. The demo's Apple-style screen, a coloured box around

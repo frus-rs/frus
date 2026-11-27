@@ -108,9 +108,13 @@ pub struct KeyStroke {
     /// Alt / Option.
     pub alt: bool,
     /// The platform's "logo" key: Windows' key, a Mac's Command. A shortcut meant for the
-    /// key a Mac's hands reach for — Cmd+S where everyone else has Ctrl+S — is bound under
-    /// both strokes.
+    /// key a Mac's hands reach for — Cmd+S where everyone else has Ctrl+S — is bound with
+    /// [`primary`](Self::primary) instead.
     pub meta: bool,
+    /// The **platform's own modifier**: Cmd on an Apple keyboard, Ctrl on every other
+    /// (milestone 852). Only a bound stroke says it; a pressed one names the keys that were
+    /// held, and [`resolve`](Self::resolve) turns one into the other.
+    pub primary: bool,
 }
 
 impl KeyStroke {
@@ -122,6 +126,104 @@ impl KeyStroke {
             shift: false,
             alt: false,
             meta: false,
+            primary: false,
+        }
+    }
+
+    /// With the **platform's own modifier** held: Cmd on an Apple keyboard, Ctrl on every
+    /// other — the key of Copy, Save and Find. One binding answers both:
+    ///
+    /// ```
+    /// # use frus_widgets::{KeyStroke, ShortcutKey, TargetPlatform};
+    /// let save = KeyStroke::new(ShortcutKey::Char('s')).primary();
+    /// let cmd_s = KeyStroke::new(ShortcutKey::Char('s')).meta();
+    /// let ctrl_s = KeyStroke::new(ShortcutKey::Char('s')).ctrl();
+    /// assert!(cmd_s.matches_on(&save, TargetPlatform::MacOs));
+    /// assert!(ctrl_s.matches_on(&save, TargetPlatform::Windows));
+    /// assert!(!ctrl_s.matches_on(&save, TargetPlatform::MacOs));
+    /// ```
+    ///
+    /// Which keyboard that is comes from [`keyboard_platform`](crate::keyboard_platform):
+    /// the browser's operating system on the web, so a page read on a Mac answers Cmd.
+    pub const fn primary(mut self) -> Self {
+        self.primary = true;
+        self
+    }
+
+    /// The stroke with its primary modifier spelled out for `keyboard`'s platform: `meta`
+    /// on an Apple keyboard, `ctrl` on any other. A stroke without one is returned as it is.
+    pub const fn resolve(mut self, keyboard: crate::TargetPlatform) -> Self {
+        if self.primary {
+            self.primary = false;
+            if keyboard.is_apple() {
+                self.meta = true;
+            } else {
+                self.ctrl = true;
+            }
+        }
+        self
+    }
+
+    /// How the stroke is **written for people** on a keyboard of `keyboard`'s platform, as a
+    /// menu or a command palette shows it: `⌘⇧Z` on an Apple keyboard, `Ctrl+Shift+Z` on any
+    /// other — the primary modifier spelled as that keyboard has it.
+    ///
+    /// ```
+    /// # use frus_widgets::{KeyStroke, ShortcutKey, TargetPlatform};
+    /// let redo = KeyStroke::new(ShortcutKey::Char('z')).primary().shift();
+    /// assert_eq!(redo.label_on(TargetPlatform::MacOs), "⇧⌘Z");
+    /// assert_eq!(redo.label_on(TargetPlatform::Linux), "Ctrl+Shift+Z");
+    /// ```
+    pub fn label_on(&self, keyboard: crate::TargetPlatform) -> String {
+        let stroke = self.resolve(keyboard);
+        let apple = keyboard.is_apple();
+        let key = match stroke.key {
+            ShortcutKey::Char(c) => c.to_uppercase().collect(),
+            ShortcutKey::Enter => (if apple { "↩" } else { "Enter" }).to_string(),
+            // The bundled sans has no glyph for U+238B; the bundled monospace face draws it.
+            ShortcutKey::Escape => (if apple { "⎋" } else { "Esc" }).to_string(),
+            ShortcutKey::Tab => (if apple { "⇥" } else { "Tab" }).to_string(),
+            ShortcutKey::Space => "Space".to_string(),
+            ShortcutKey::Backspace => (if apple { "⌫" } else { "Backspace" }).to_string(),
+            ShortcutKey::Delete => (if apple { "⌦" } else { "Delete" }).to_string(),
+            ShortcutKey::Up => "↑".to_string(),
+            ShortcutKey::Down => "↓".to_string(),
+            ShortcutKey::Left => "←".to_string(),
+            ShortcutKey::Right => "→".to_string(),
+            ShortcutKey::Home => "Home".to_string(),
+            ShortcutKey::End => "End".to_string(),
+            ShortcutKey::PageUp => "PgUp".to_string(),
+            ShortcutKey::PageDown => "PgDn".to_string(),
+            ShortcutKey::F(n) => format!("F{n}"),
+        };
+        if apple {
+            // Apple's order: Control, Option, Shift, Command, and no separator.
+            let mut out = String::new();
+            for (held, glyph) in [
+                (stroke.ctrl, '⌃'),
+                (stroke.alt, '⌥'),
+                (stroke.shift, '⇧'),
+                (stroke.meta, '⌘'),
+            ] {
+                if held {
+                    out.push(glyph);
+                }
+            }
+            out + &key
+        } else {
+            let mut parts: Vec<&str> = Vec::new();
+            for (held, name) in [
+                (stroke.ctrl, "Ctrl"),
+                (stroke.alt, "Alt"),
+                (stroke.shift, "Shift"),
+                (stroke.meta, "Meta"),
+            ] {
+                if held {
+                    parts.push(name);
+                }
+            }
+            parts.push(&key);
+            parts.join("+")
         }
     }
 
@@ -152,13 +254,27 @@ impl KeyStroke {
     /// Does this stroke carry a modifier that makes it a **command** rather than typing?
     /// Shift alone does not: `Shift+A` is a capital A.
     pub const fn is_command(&self) -> bool {
-        self.ctrl || self.alt || self.meta
+        self.ctrl || self.alt || self.meta || self.primary
     }
 
     /// Do a pressed stroke and a bound one match? Letters are compared without case, so a
     /// binding written `Char('s')` answers a Shift-less `S` from a keyboard with Caps Lock
-    /// on.
+    /// on. A [`primary`](Self::primary) modifier on either is read for the machine's
+    /// keyboard, [`keyboard_platform`](crate::keyboard_platform); see
+    /// [`matches_on`](Self::matches_on) to name another.
     pub fn matches(&self, bound: &KeyStroke) -> bool {
+        self.matches_on(bound, crate::keyboard_platform())
+    }
+
+    /// [`matches`](Self::matches), with the primary modifier read for `keyboard`'s
+    /// platform: Cmd on macOS and iOS, Ctrl elsewhere.
+    pub fn matches_on(&self, bound: &KeyStroke, keyboard: crate::TargetPlatform) -> bool {
+        let (pressed, bound) = (self.resolve(keyboard), bound.resolve(keyboard));
+        pressed.same(&bound)
+    }
+
+    /// The comparison itself, of two strokes with no primary modifier left in them.
+    fn same(&self, bound: &KeyStroke) -> bool {
         let same_key = match (self.key, bound.key) {
             (ShortcutKey::Char(a), ShortcutKey::Char(b)) => {
                 a.eq_ignore_ascii_case(&b) || a.to_lowercase().eq(b.to_lowercase())
@@ -180,6 +296,68 @@ impl KeyStroke {
 /// dump, which a type id does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Intent(pub &'static str);
+
+impl Intent {
+    /// Copies the selection — of the focused text field, or of a selection area.
+    pub const COPY: Intent = Intent("frus.copy");
+    /// Cuts the focused text field's selection.
+    pub const CUT: Intent = Intent("frus.cut");
+    /// Pastes into the focused text field.
+    pub const PASTE: Intent = Intent("frus.paste");
+    /// Selects the whole of the focused text field, or of a selection area.
+    pub const SELECT_ALL: Intent = Intent("frus.select-all");
+    /// Undoes the focused text field's last edit.
+    pub const UNDO: Intent = Intent("frus.undo");
+    /// Redoes the focused text field's last undone edit.
+    pub const REDO: Intent = Intent("frus.redo");
+    /// **Takes the key and does nothing**: bound in a [`Shortcuts`], it switches off whatever
+    /// the framework would have done with that key — a default editing shortcut, say —
+    /// inside the subtree.
+    pub const DO_NOTHING: Intent = Intent("frus.do-nothing");
+
+    /// The framework's own editing intents, which a text field and a selection area answer
+    /// without an [`Actions`]: Copy, Cut, Paste, Select all, Undo and Redo.
+    pub const EDITING: [Intent; 6] = [
+        Intent::COPY,
+        Intent::CUT,
+        Intent::PASTE,
+        Intent::SELECT_ALL,
+        Intent::UNDO,
+        Intent::REDO,
+    ];
+
+    /// Whether this is one of the framework's [editing intents](Self::EDITING).
+    pub fn is_editing(self) -> bool {
+        Intent::EDITING.contains(&self)
+    }
+}
+
+/// The framework's **default editing shortcuts** for a keyboard of `keyboard`'s platform —
+/// what a text field and a selection area answer when no [`Shortcuts`] around them binds
+/// the key first (milestone 852).
+///
+/// Written with the [primary modifier](KeyStroke::primary), so one table serves every
+/// keyboard: Cmd+C on a Mac, Ctrl+C elsewhere. Redo is primary+Shift+Z everywhere, and also
+/// Ctrl+Y off Apple keyboards — a browser on a Mac opens its history on Cmd+Y.
+///
+/// **Overriding it** is binding the key in a [`Shortcuts`] above the field: to another
+/// meaning of the application's, to [`Intent::DO_NOTHING`] to switch it off, or another key
+/// to one of these intents — `Ctrl+Insert` to [`Intent::COPY`], say.
+pub fn default_editing_shortcuts(keyboard: crate::TargetPlatform) -> Vec<(KeyStroke, Intent)> {
+    let key = |c| KeyStroke::new(ShortcutKey::Char(c)).primary();
+    let mut table = vec![
+        (key('c'), Intent::COPY),
+        (key('x'), Intent::CUT),
+        (key('v'), Intent::PASTE),
+        (key('a'), Intent::SELECT_ALL),
+        (key('z'), Intent::UNDO),
+        (key('z').shift(), Intent::REDO),
+    ];
+    if !keyboard.is_apple() {
+        table.push((key('y'), Intent::REDO));
+    }
+    table
+}
 
 /// The shared body: one child, its box, and one of the three tables.
 struct Wrapper<Msg> {
@@ -603,6 +781,148 @@ mod tests {
         let off: FocusableActionDetector<Msg> =
             FocusableActionDetector::new(crate::Container::new()).enabled(false);
         assert!(!Widget::<Msg>::focusable(&off));
+    }
+
+    /// **The primary modifier is Cmd on Apple's platforms and Ctrl on every other**
+    /// (milestone 852, L-037), and a stroke without one is left as it was.
+    #[test]
+    fn the_primary_modifier_is_cmd_on_apple_platforms_and_ctrl_elsewhere() {
+        use crate::TargetPlatform;
+        let save = KeyStroke::new(ShortcutKey::Char('s')).primary();
+        for platform in TargetPlatform::ALL {
+            let resolved = save.resolve(platform);
+            assert!(!resolved.primary, "{platform}");
+            let apple = matches!(platform, TargetPlatform::MacOs | TargetPlatform::Ios);
+            assert_eq!(resolved.meta, apple, "{platform}: Cmd");
+            assert_eq!(resolved.ctrl, !apple, "{platform}: Ctrl");
+
+            let cmd_s = KeyStroke::new(ShortcutKey::Char('S')).meta();
+            let ctrl_s = KeyStroke::new(ShortcutKey::Char('s')).ctrl();
+            assert_eq!(cmd_s.matches_on(&save, platform), apple, "{platform}");
+            assert_eq!(ctrl_s.matches_on(&save, platform), !apple, "{platform}");
+            assert!(
+                !KeyStroke::new(ShortcutKey::Char('s')).matches_on(&save, platform),
+                "{platform}: a bare S is typing"
+            );
+            assert!(
+                !ctrl_s.meta().matches_on(&save, platform),
+                "{platform}: an extra modifier is another stroke"
+            );
+        }
+        let plain = KeyStroke::new(ShortcutKey::F(5)).alt();
+        assert_eq!(plain.resolve(TargetPlatform::MacOs), plain);
+        assert!(save.is_command(), "a primary stroke is a command");
+    }
+
+    /// **The default editing table**, per platform: the same six intents on primary, and
+    /// Ctrl+Y as a second Redo only off Apple keyboards.
+    #[test]
+    fn the_default_editing_shortcuts_follow_the_keyboard() {
+        use crate::TargetPlatform;
+        let find = |platform, stroke: KeyStroke| {
+            default_editing_shortcuts(platform)
+                .into_iter()
+                .find(|(bound, _)| stroke.matches_on(bound, platform))
+                .map(|(_, intent)| intent)
+        };
+        let key = |c| KeyStroke::new(ShortcutKey::Char(c));
+        for platform in TargetPlatform::ALL {
+            let apple = platform.is_apple();
+            let held = |stroke: KeyStroke| if apple { stroke.meta() } else { stroke.ctrl() };
+            let other = |stroke: KeyStroke| if apple { stroke.ctrl() } else { stroke.meta() };
+            for (c, intent) in [
+                ('c', Intent::COPY),
+                ('X', Intent::CUT),
+                ('v', Intent::PASTE),
+                ('a', Intent::SELECT_ALL),
+                ('z', Intent::UNDO),
+            ] {
+                assert_eq!(find(platform, held(key(c))), Some(intent), "{platform} {c}");
+                assert_eq!(find(platform, other(key(c))), None, "{platform} {c}");
+                assert_eq!(find(platform, key(c)), None, "{platform}: typing {c}");
+            }
+            assert_eq!(
+                find(platform, held(key('z')).shift()),
+                Some(Intent::REDO),
+                "{platform}"
+            );
+            assert_eq!(
+                find(platform, held(key('y'))),
+                (!apple).then_some(Intent::REDO),
+                "{platform}: Ctrl+Y, but not Cmd+Y"
+            );
+        }
+        assert!(Intent::EDITING.iter().all(|i| i.is_editing()));
+        assert!(!Intent("save").is_editing());
+        assert!(!Intent::DO_NOTHING.is_editing());
+    }
+
+    /// **One binding written with the primary modifier answers Cmd on a Mac and Ctrl
+    /// elsewhere**, through the resolution a frame's interface does — and the resolution
+    /// names the intent it found, answered or not.
+    #[test]
+    fn a_primary_binding_resolves_for_the_keyboard_it_is_typed_on() {
+        use crate::runtime::Runtime;
+        use crate::ui::build_ui;
+        use crate::TargetPlatform;
+        use frus_core::Size;
+
+        let tree = Actions::new(
+            Shortcuts::new(crate::Container::new().width(10.0))
+                .bind(
+                    KeyStroke::new(ShortcutKey::Char('s')).primary(),
+                    Intent("save"),
+                )
+                .bind(
+                    KeyStroke::new(ShortcutKey::Char('c')).primary(),
+                    Intent::COPY,
+                ),
+        )
+        .action(Intent("save"), Msg::SavePage);
+        let ui = build_ui(
+            &tree,
+            Size::new(100.0, 100.0),
+            &Runtime::default(),
+            &Theme::default(),
+        );
+        let cmd_s = KeyStroke::new(ShortcutKey::Char('s')).meta();
+        let ctrl_s = KeyStroke::new(ShortcutKey::Char('s')).ctrl();
+        let mac = TargetPlatform::MacOs;
+        let windows = TargetPlatform::Windows;
+        assert_eq!(
+            ui.resolve_keystroke(cmd_s, None, mac),
+            (vec![Msg::SavePage], Some(Intent("save")))
+        );
+        assert_eq!(ui.resolve_keystroke(ctrl_s, None, mac), (vec![], None));
+        assert_eq!(
+            ui.resolve_keystroke(ctrl_s, None, windows),
+            (vec![Msg::SavePage], Some(Intent("save")))
+        );
+        assert_eq!(ui.resolve_keystroke(cmd_s, None, windows), (vec![], None));
+        // Nobody here answers Copy: the shell does, for the field or the area.
+        assert_eq!(
+            ui.resolve_keystroke(KeyStroke::new(ShortcutKey::Char('c')).ctrl(), None, windows),
+            (vec![], Some(Intent::COPY))
+        );
+    }
+
+    /// **A stroke is written for people as its keyboard has it.**
+    #[test]
+    fn a_stroke_is_labelled_as_its_keyboard_writes_it() {
+        use crate::TargetPlatform;
+        let palette = KeyStroke::new(ShortcutKey::Char('k')).primary();
+        assert_eq!(palette.label_on(TargetPlatform::MacOs), "⌘K");
+        assert_eq!(palette.label_on(TargetPlatform::Windows), "Ctrl+K");
+        let all = KeyStroke::new(ShortcutKey::Enter)
+            .ctrl()
+            .alt()
+            .shift()
+            .meta();
+        assert_eq!(all.label_on(TargetPlatform::Ios), "⌃⌥⇧⌘↩");
+        assert_eq!(
+            all.label_on(TargetPlatform::Linux),
+            "Ctrl+Alt+Shift+Meta+Enter"
+        );
     }
 
     /// A later binding for the same stroke replaces the earlier one, so a caller can
