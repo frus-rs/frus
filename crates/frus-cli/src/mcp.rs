@@ -2501,10 +2501,10 @@ mod tests {
             .call("status", object([]))
             .unwrap_err()
             .contains("refused"));
-        let mut s = server();
+        let s = server();
         let session = attached(hub.clone(), None).unwrap();
         assert!(session.id.starts_with("counter@127.0.0.1:"));
-        s.sessions.push(session);
+        s.add(Arc::new(session));
         let found = s
             .call_tool("find_widgets", &object([("text", "Add".into())]))
             .unwrap();
