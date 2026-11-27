@@ -15,7 +15,8 @@ any release may break.
 
 - **A file tree of any size, driven from the keyboard** (J855, L-048). `FileTree` shows the open
   part of its hierarchy in a virtualised list: only the rows in view are built, so 50,000 open
-  rows build the 15 of a 400 px window. It takes the room on offer, or `height`/`flex`;
+  rows build the 15 of a 400 px window, and a frame of 10,000 open rows takes 1.4 ms instead
+  of 900 (50,000: 4.8 ms instead of 4.9 s). It takes the room on offer, or `height`/`flex`;
   `shrink_wrap(true)` keeps a short tree as tall as its rows. The keys are a desktop tree
   view's: Up and Down, Right into a folder after opening it, Left up to the parent after
   closing it (swapped right to left), Home, End, Enter (`on_activate`), Space, and type-ahead

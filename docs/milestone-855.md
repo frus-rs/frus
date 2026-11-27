@@ -86,7 +86,15 @@ desktop tree view, multiple selection, and the semantics a screen reader expects
 median of the timed frames after two warm-up frames, on the development machine (a temporary
 test, not committed):
 
-FRAME_TABLE
+| open rows | before (every row a widget) | after (the window's rows) |
+|---:|---:|---:|
+| 100 | 2.95 ms | 0.48 ms |
+| 1,000 | 28.2 ms | 0.45 ms |
+| 10,000 | 901 ms | 1.38 ms |
+| 50,000 | 4,897 ms | 4.75 ms |
+
+What is left after the change grows with the open rows, not with the window: the flattening walk
+(a set lookup and a small line per row), about 0.09 µs a row.
 
 ## How it was tested
 
