@@ -154,14 +154,14 @@ The build of milestone 822 is unchanged: no row and no screen is built on a tick
   to the leaf (at least 200 nodes kept, at most 30 laid out, the new count shown), next to
   the tests of milestone 822 that the rows and the screen are not built. `Driver` gained
   `layout_nodes`. The measurement gained a thousand-row variant.
-- The whole suites of `frus-layout`, `frus-widgets` and `frus-shell`, and the goldens, which
-  compare every pixel of the layouts this changes.
+- The whole library suites of `frus-layout`, `frus-widgets` and `frus-shell` (17, 2612 and
+  669 tests). The goldens, which compare every pixel of the layouts this changes, were not
+  run for this milestone: see *Not done*.
 
 ## Checks
 
-- clippy `-D warnings` on the host (`--all-targets`), and with `--no-deps` for
-  `wasm32-unknown-unknown` and `aarch64-linux-android`, on `frus-layout`, `frus-widgets` and
-  `frus-shell`.
+- clippy `-D warnings` on the host (`--all-targets`) on `frus-layout`, `frus-widgets` and
+  `frus-shell`. The wasm and Android clippy runs are left to CI.
 - `cargo fmt --all`.
 
 ## Not done
@@ -177,3 +177,4 @@ The build of milestone 822 is unchanged: no row and no screen is built on a tick
 - **Measured leaves without a key** (a `LayoutBuilder`'s child, a widget that measures itself
   and says nothing) are measured every time, and so is every box above them.
 - The numbers are from the laptop; the phone was not used.
+- The goldens were not run (the machine's disk and build lock were shared with other builds).
