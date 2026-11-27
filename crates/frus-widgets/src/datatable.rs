@@ -156,6 +156,9 @@ pub struct DataTable<Msg = crate::callback::Callback> {
     /// is visible (empty data, or a filter with no result). Overridable through
     /// [`empty_text`](DataTable::empty_text).
     empty_text: String,
+    /// The rows' least and most heights and the heading row's (milestone 851): what the
+    /// table hands its [`Table`], over the theme's.
+    row_heights: (Option<f32>, Option<f32>, Option<f32>),
     /// The rendering: the `Table` (sorted and paginated rows), optionally capped by a footer
     /// (the slice label + `Pagination` + the size selector) beneath it.
     ///
@@ -196,6 +199,7 @@ impl<Msg: Clone + 'static> DataTable<Msg> {
             on_query: None,
             bulk_actions: None,
             empty_text: crate::localizations::of().no_results_label().to_string(),
+            row_heights: (None, None, None),
             inner: std::cell::OnceCell::new(),
         };
         me.rebuild();
@@ -384,6 +388,29 @@ impl<Msg: Clone + 'static> DataTable<Msg> {
         self
     }
 
+    /// The least a data row is tall: see [`Table::data_row_min_height`]. A row whose labels
+    /// wrap — a column narrower than what it holds — grows past it.
+    pub fn data_row_min_height(mut self, height: f32) -> Self {
+        self.row_heights.0 = Some(height);
+        self.rebuild();
+        self
+    }
+
+    /// The most a data row grows to when its labels wrap: see
+    /// [`Table::data_row_max_height`]. Set it to the minimum for rows of one height.
+    pub fn data_row_max_height(mut self, height: f32) -> Self {
+        self.row_heights.1 = Some(height);
+        self.rebuild();
+        self
+    }
+
+    /// The least the heading row is tall: see [`Table::heading_row_height`].
+    pub fn heading_row_height(mut self, height: f32) -> Self {
+        self.row_heights.2 = Some(height);
+        self.rebuild();
+        self
+    }
+
     /// Gives column `col` a **custom comparator**: `cmp(a, b)` orders two of its (text) cells.
     /// It replaces the default sort ([`compare_cells`]) for that column — useful when the
     /// values sort badly as they stand: formatted dates ("Mar 2024"), amounts ("$1.2M"),
@@ -486,6 +513,16 @@ impl<Msg: Clone + 'static> DataTable<Msg> {
         }
         if self.widths.iter().any(|w| *w > 0.0) {
             t = t.column_widths(&self.widths);
+        }
+        let (least, most, heading) = self.row_heights;
+        if let Some(height) = least {
+            t = t.data_row_min_height(height);
+        }
+        if let Some(height) = most {
+            t = t.data_row_max_height(height);
+        }
+        if let Some(height) = heading {
+            t = t.heading_row_height(height);
         }
         if let Some(f) = &self.on_sort {
             let f = f.clone();
@@ -634,6 +671,12 @@ impl<Msg: Clone + 'static> Widget<Msg> for DataTable<Msg> {
     /// (milestone 758).
     fn fill_axes(&self, theme: &Theme) -> crate::widget::FillAxes {
         self.built().fill_axes(theme)
+    }
+
+    /// Forwarded like the structure: when the block is the bare table, the table's own
+    /// word on its rows' heights (milestone 851) has to reach its cells through this node.
+    fn theme_override(&self, inherited: &Theme) -> Option<Box<Theme>> {
+        self.built().theme_override(inherited)
     }
 }
 

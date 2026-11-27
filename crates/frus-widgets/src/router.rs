@@ -276,6 +276,8 @@ type RouteBuilder = Rc<dyn Fn(&BuildContext, &GoRouterState) -> Box<dyn Widget>>
 type Accept = Rc<dyn Fn(&HashMap<String, String>) -> bool>;
 type Redirect = Rc<dyn Fn(&GoRouterState) -> Option<String>>;
 type ShellBuilder = Rc<dyn Fn(&BuildContext, &NavigationShell, Box<dyn Widget>) -> Box<dyn Widget>>;
+/// The shells a route or a page is in, each with the branch, the outermost first.
+type ShellPath = Rc<[(u64, usize)]>;
 
 /// One place the router can go: a pattern of path, and the page it builds.
 ///
@@ -396,6 +398,12 @@ impl GoRoute {
     ///
     /// The system's Back pops the branch's own pages first; on a branch's first page it
     /// follows [`shell_back`](Self::shell_back).
+    ///
+    /// A branch may hold **another shell**: tabs inside a tab, each with its own stacks. The
+    /// inner shell's frame is drawn inside the outer one's body, the inner branches keep their
+    /// pages while the outer tab is left and chosen again, and Back works from the inside
+    /// out: the inner branch's pages, the inner shell's [`ShellBack`], then the outer ones.
+    /// A branch whose first route is a shell opens where that shell's first branch does.
     ///
     /// ```
     /// use frus_widgets::{
@@ -762,8 +770,9 @@ struct Node {
     builder: RouteBuilder,
     redirect: Option<Redirect>,
     children: Vec<Rc<Node>>,
-    /// The shell and branch this route is in, if it is in one.
-    member: Option<(u64, usize)>,
+    /// The shells and branches this route is in, the outermost first: empty when it is in
+    /// none, two long when it is in a shell inside a branch of another (milestone 851).
+    member: ShellPath,
     /// When this route is itself a shell: what it is.
     spec: Option<Rc<ShellSpec>>,
     /// The route's own transition, if it has one.
@@ -791,25 +800,40 @@ struct Building<'a> {
 fn build_node(
     route: GoRoute,
     parent: Option<&str>,
-    member: Option<(u64, usize)>,
+    member: ShellPath,
     building: &mut Building,
 ) -> Rc<Node> {
     if let Some(parts) = route.shell {
-        assert!(
-            member.is_none(),
-            "a shell inside a branch of another shell is not supported"
-        );
+        // A shell inside a branch of another is one more level: its branches' routes are in
+        // both, the outer shell's branch first (milestone 851).
         assert!(!parts.branches.is_empty(), "a shell needs a branch");
         let id = building.shells.len() as u64 + 1;
-        let mut children = Vec::new();
+        // Its number is taken before its branches are built, so that a shell inside one of
+        // them gets another.
+        building.shells.insert(
+            id,
+            Rc::new(ShellSpec {
+                builder: parts.builder.clone(),
+                initial: Vec::new(),
+                back: parts.back,
+                branch_transition: parts.branch_transition,
+            }),
+        );
+        let mut children: Vec<Rc<Node>> = Vec::new();
         let mut initial = Vec::new();
         for (index, branch) in parts.branches.into_iter().enumerate() {
             assert!(!branch.routes.is_empty(), "a shell's branch needs a route");
             let first = children.len();
+            let inside: ShellPath = member.iter().copied().chain([(id, index)]).collect();
             for child in branch.routes {
-                children.push(build_node(child, parent, Some((id, index)), building));
+                children.push(build_node(child, parent, inside.clone(), building));
             }
             let start = branch.initial.unwrap_or_else(|| {
+                // A branch that opens on a shell of its own opens where that shell's first
+                // branch does.
+                if let Some(spec) = &children[first].spec {
+                    return spec.initial[0].clone();
+                }
                 let path: &str = &children[first].full_path;
                 assert!(
                     !path.contains(':') && !path.contains('*'),
@@ -834,7 +858,7 @@ fn build_node(
             builder: route.builder,
             redirect: route.redirect,
             children,
-            member: None,
+            member,
             spec: Some(spec),
             transition: route.transition,
             accept: None,
@@ -874,7 +898,7 @@ fn build_node(
     let children = route
         .routes
         .into_iter()
-        .map(|child| build_node(child, Some(&full_path), member, building))
+        .map(|child| build_node(child, Some(&full_path), member.clone(), building))
         .collect();
     let node = Rc::new(Node {
         full_path,
@@ -976,11 +1000,60 @@ struct Page {
     state: Rc<GoRouterState>,
     /// Whether it was pushed rather than made by a `go`: what restoring the stack replays.
     pushed: bool,
-    /// The shell and branch whose stack it is in, if it is shown inside a shell. The pages of
-    /// one shell are always next to each other in the stack, and of one branch.
-    shell: Option<(u64, usize)>,
+    /// The shells and branches whose stacks it is in, the outermost first: empty when it is
+    /// shown inside no shell. The pages of one shell are always next to each other in the
+    /// stack, and of one branch; so are those of a shell inside that branch.
+    shells: ShellPath,
     /// Who waits for what the page is popped with ([`GoRouter::push_for_result`]).
     result: Option<Rc<PopSlot>>,
+}
+
+impl Page {
+    /// The innermost shell it is in, with the branch: the one whose navigator shows it.
+    fn innermost(&self) -> Option<(u64, usize)> {
+        self.shells.last().copied()
+    }
+
+    /// The branch of `shell` it is in, if it is in that shell.
+    fn branch_in(&self, shell: u64) -> Option<usize> {
+        self.shells
+            .iter()
+            .find(|(s, _)| *s == shell)
+            .map(|(_, branch)| *branch)
+    }
+
+    /// Whether it is in `shell`.
+    fn in_shell(&self, shell: u64) -> bool {
+        self.branch_in(shell).is_some()
+    }
+
+    /// What stands for it in a navigator `depth` shells deep: itself, or the shell it is in
+    /// one level down.
+    fn unit_key(&self, depth: usize) -> u64 {
+        match self.shells.get(depth) {
+            Some((shell, _)) => hash_of(("shell", *shell)),
+            None => self.key,
+        }
+    }
+}
+
+/// How many levels of shell two pages share, branch and all.
+fn shared_levels(a: &Page, b: &Page) -> usize {
+    a.shells
+        .iter()
+        .zip(b.shells.iter())
+        .take_while(|(x, y)| x == y)
+        .count()
+}
+
+/// The shell two pages are in different branches of, when they are: the level they part at
+/// is one shell, in two branches. With whether `b`'s branch is the later one.
+fn branch_switch(a: &Page, b: &Page) -> Option<(u64, bool)> {
+    let level = shared_levels(a, b);
+    match (a.shells.get(level), b.shells.get(level)) {
+        (Some((s, x)), Some((t, y))) if s == t && x != y => Some((*s, y > x)),
+        _ => None,
+    }
 }
 
 /// Hands a popped page's result (or `None`) to whoever pushed it.
@@ -1023,9 +1096,9 @@ struct ShellStacks {
 
 struct Transition {
     from: Page,
-    /// The shell the page left was in, as it was then — what is drawn leaving when the whole
-    /// shell goes.
-    from_shell: Option<ShellStacks>,
+    /// The shells the page left was in, as they were then — what is drawn leaving when a
+    /// whole shell goes.
+    from_shells: Rc<HashMap<u64, ShellStacks>>,
     controller: AnimationController,
     forward: bool,
     /// What it plays: the route's own, or the theme's (milestone 785).
@@ -1291,7 +1364,7 @@ impl GoRouter {
         };
         let nodes = routes
             .into_iter()
-            .map(|route| build_node(route, None, None, &mut building))
+            .map(|route| build_node(route, None, ShellPath::from([]), &mut building))
             .collect();
         Self {
             inner: Rc::new(Inner {
@@ -1529,7 +1602,8 @@ impl GoRouter {
     }
 
     /// The branch of a shell the page on top is in — the tab on show — or `None` when the
-    /// page on top is not in a shell.
+    /// page on top is not in a shell. In a shell inside another shell's branch, the inner
+    /// shell's.
     pub fn current_branch(&self) -> Option<usize> {
         self.start();
         self.inner
@@ -1537,12 +1611,13 @@ impl GoRouter {
             .borrow()
             .pages
             .last()
-            .and_then(|page| page.shell)
+            .and_then(Page::innermost)
             .map(|(_, branch)| branch)
     }
 
     /// What the system's Back would do now: the innermost stack first — a branch's own pages
-    /// — then the shell's [`ShellBack`], then the pages beneath.
+    /// — then the shell's [`ShellBack`], then the same for the shell around it, if any, then
+    /// the pages beneath.
     fn back_action(&self) -> BackAction {
         self.start();
         let stack = self.inner.stack.borrow();
@@ -1550,11 +1625,8 @@ impl GoRouter {
         let Some(top) = pages.last() else {
             return BackAction::Nothing;
         };
-        if let Some((shell, branch)) = top.shell {
-            let run = pages
-                .iter()
-                .filter(|page| page.shell.map(|(s, _)| s) == Some(shell))
-                .count();
+        for &(shell, branch) in top.shells.iter().rev() {
+            let run = pages.iter().filter(|page| page.in_shell(shell)).count();
             if run > 1 {
                 return BackAction::Page;
             }
@@ -1789,8 +1861,9 @@ impl GoRouter {
         self.pop()
     }
 
-    /// Shows branch `index` of the shell on show (see [`NavigationShell::go_branch`]).
-    /// Nothing when the page on top is in no shell.
+    /// Shows branch `index` of the shell on show (see [`NavigationShell::go_branch`]): the
+    /// innermost one, when a shell is inside another's branch. Nothing when the page on top
+    /// is in no shell.
     pub fn go_branch(&self, index: usize) {
         self.start();
         let shell = self
@@ -1800,7 +1873,7 @@ impl GoRouter {
             .pages
             .iter()
             .rev()
-            .find_map(|page| page.shell)
+            .find_map(Page::innermost)
             .map(|(shell, _)| shell);
         match shell {
             Some(shell) => self.show_branch(shell, index),
@@ -1820,10 +1893,8 @@ impl GoRouter {
             return;
         }
         let current = self.inner.stack.borrow().pages.clone();
-        let start = current
-            .iter()
-            .position(|page| page.shell.map(|(s, _)| s) == Some(shell));
-        let active = start.and_then(|at| current[at].shell).map(|(_, b)| b);
+        let start = current.iter().position(|page| page.in_shell(shell));
+        let active = start.and_then(|at| current[at].branch_in(shell));
         if let (Some(start), Some(active)) = (start, active) {
             if active == index {
                 // The tab on show, chosen again: back to its first page, as phones do.
@@ -2102,16 +2173,21 @@ impl GoRouter {
                                 node: Some(node.clone()),
                                 state: Rc::new(page_state),
                                 pushed: false,
-                                shell: node.member,
+                                shells: node.member.clone(),
                                 result: None,
                             }
                         })
                         .collect();
                     // A location that is where a shell's branch was left — a tab shown
                     // again, a browser's Back to it — finds that branch's stack as it was:
-                    // its pushed pages, and so their state.
+                    // its pushed pages, and so their state. The outermost shell whose branch
+                    // was left there, so that a shell inside that branch comes back with it.
                     if extra.is_none() {
-                        if let Some((shell, branch)) = pages.last().and_then(|page| page.shell) {
+                        let levels = pages
+                            .last()
+                            .map(|page| page.shells.clone())
+                            .unwrap_or_else(|| ShellPath::from([]));
+                        for &(shell, branch) in levels.iter() {
                             let saved = self
                                 .inner
                                 .shells
@@ -2125,10 +2201,11 @@ impl GoRouter {
                             {
                                 let start = pages
                                     .iter()
-                                    .position(|page| page.shell.is_some())
+                                    .position(|page| page.in_shell(shell))
                                     .unwrap_or(pages.len());
                                 pages.truncate(start);
                                 pages.extend(saved);
+                                break;
                             }
                         }
                     }
@@ -2145,30 +2222,37 @@ impl GoRouter {
                     // anything else, it covers the whole window.
                     // The shell on show is the one of the page on top *before* a replace
                     // took it off: replacing a branch's only page keeps the new one there.
-                    let mut shell = None;
-                    if let Some((s, branch)) = leaf.member {
-                        if let Some((_, on_show)) = current
-                            .last()
-                            .and_then(|page| page.shell)
-                            .filter(|(top, _)| *top == s)
-                        {
-                            if on_show != branch {
-                                let start = pages
-                                    .iter()
-                                    .position(|page| page.shell.is_some())
-                                    .unwrap_or(pages.len());
-                                pages.truncate(start);
-                                pages.extend(self.branch_pages(s, branch, current));
-                            }
-                            shell = if on_show == branch {
-                                Some((s, branch))
-                            } else {
-                                pages
-                                    .last()
-                                    .and_then(|page| page.shell)
-                                    .filter(|(top, b)| *top == s && *b == branch)
-                            };
+                    // Level by level, for a shell inside another's branch: as deep as the
+                    // shells on show are the page's own (milestone 851).
+                    let mut levels: Vec<(u64, usize)> = Vec::new();
+                    let mut on_top = current
+                        .last()
+                        .map(|page| page.shells.clone())
+                        .unwrap_or_else(|| ShellPath::from([]));
+                    for (depth, &(s, branch)) in leaf.member.iter().enumerate() {
+                        let Some(&(top, on_show)) = on_top.get(depth) else {
+                            break;
+                        };
+                        if top != s {
+                            break;
                         }
+                        if on_show != branch {
+                            let start = pages
+                                .iter()
+                                .position(|page| page.in_shell(s))
+                                .unwrap_or(pages.len());
+                            pages.truncate(start);
+                            pages.extend(self.branch_pages(s, branch, current));
+                            on_top = pages
+                                .last()
+                                .map(|page| page.shells.clone())
+                                .unwrap_or_else(|| ShellPath::from([]));
+                            if on_top.get(depth) != Some(&(s, branch)) {
+                                // The branch's start was sent outside it.
+                                break;
+                            }
+                        }
+                        levels.push((s, branch));
                     }
                     let unique = self.inner.unique.get() + 1;
                     self.inner.unique.set(unique);
@@ -2177,7 +2261,7 @@ impl GoRouter {
                         node: Some(leaf),
                         state: Rc::new(state),
                         pushed: true,
-                        shell,
+                        shells: levels.into(),
                         result: None,
                     });
                     pages
@@ -2211,7 +2295,7 @@ impl GoRouter {
         };
         self.pages_for(&initial, None, Mode::Go, current)
             .into_iter()
-            .filter(|page| page.shell == Some((shell, branch)))
+            .filter(|page| page.branch_in(shell) == Some(branch))
             .collect()
     }
 
@@ -2223,7 +2307,7 @@ impl GoRouter {
             node: None,
             state: Rc::new(state),
             pushed: mode != Mode::Go,
-            shell: None,
+            shells: ShellPath::from([]),
             result: None,
         };
         match mode {
@@ -2277,11 +2361,8 @@ impl GoRouter {
         // Another branch of the same shell: tabs switch at once, as they do on phones —
         // unless the shell has a transition between its branches (milestone 785), which
         // goes forwards to a later branch and backwards to an earlier one.
-        let switch = match (
-            old_top.as_ref().and_then(|p| p.shell),
-            new_top.as_ref().and_then(|p| p.shell),
-        ) {
-            (Some((a, x)), Some((b, y))) if a == b && x != y => Some((a, y > x)),
+        let switch = match (&old_top, &new_top) {
+            (Some(old), Some(new)) => branch_switch(old, new),
             _ => None,
         };
         let branch_transition = switch.and_then(|(shell, _)| {
@@ -2320,9 +2401,13 @@ impl GoRouter {
                 );
                 stack.transition = Some(Transition {
                     from: old.clone(),
-                    from_shell: old
-                        .shell
-                        .and_then(|(shell, _)| shells_before.get(&shell).cloned()),
+                    from_shells: Rc::new(
+                        shells_before
+                            .iter()
+                            .filter(|(shell, _)| old.in_shell(**shell))
+                            .map(|(shell, stacks)| (*shell, stacks.clone()))
+                            .collect(),
+                    ),
                     controller,
                     forward,
                     builder,
@@ -2349,7 +2434,7 @@ impl GoRouter {
                     kind,
                     from: old_top.as_ref().map(|page| page.state.location.clone()),
                     to: new.state.location.clone(),
-                    branch: new.shell.map(|(_, branch)| branch),
+                    branch: new.innermost().map(|(_, branch)| branch),
                 });
                 self.inner.changes.notify_listeners();
             }
@@ -2366,29 +2451,51 @@ impl GoRouter {
     }
 
     /// Keeps each shell's branches in step with the stack: the run of a shell's pages is its
-    /// branch on show; a shell no longer in the stack is let go, with what its branches held.
+    /// branch on show; a shell no longer in the stack is let go, with what its branches held
+    /// — unless it is inside a branch another shell keeps, which keeps it too.
     fn keep_branches(&self) {
         let pages = self.inner.stack.borrow().pages.clone();
         let specs = self.inner.config.borrow().shells.clone();
         let mut shells = self.inner.shells.borrow_mut();
         let mut present = Vec::new();
         for page in &pages {
-            let Some((shell, branch)) = page.shell else {
-                continue;
-            };
-            if !present.contains(&shell) {
-                present.push(shell);
-                let count = specs.get(&shell).map_or(0, |spec| spec.initial.len());
-                let stacks = shells.entry(shell).or_insert_with(|| ShellStacks {
-                    current: branch,
-                    branches: vec![Vec::new(); count],
-                });
-                stacks.current = branch;
-                stacks.branches[branch].clear();
+            for &(shell, branch) in page.shells.iter() {
+                if !present.contains(&shell) {
+                    present.push(shell);
+                    let count = specs.get(&shell).map_or(0, |spec| spec.initial.len());
+                    let stacks = shells.entry(shell).or_insert_with(|| ShellStacks {
+                        current: branch,
+                        branches: vec![Vec::new(); count],
+                    });
+                    stacks.current = branch;
+                    stacks.branches[branch].clear();
+                }
+                if let Some(stacks) = shells.get_mut(&shell) {
+                    stacks.branches[branch].push(page.clone());
+                }
             }
-            if let Some(stacks) = shells.get_mut(&shell) {
-                stacks.branches[branch].push(page.clone());
+        }
+        // A shell inside a branch not on show is kept with that branch: what its own branches
+        // hold is there when the outer tab is chosen again.
+        let mut at = 0;
+        while at < present.len() {
+            let inner: Vec<u64> = shells
+                .get(&present[at])
+                .map(|stacks| {
+                    stacks
+                        .branches
+                        .iter()
+                        .flatten()
+                        .flat_map(|page| page.shells.iter().map(|(shell, _)| *shell))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for shell in inner {
+                if !present.contains(&shell) && shells.contains_key(&shell) {
+                    present.push(shell);
+                }
             }
+            at += 1;
         }
         shells.retain(|shell, _| present.contains(shell));
     }
@@ -2636,7 +2743,7 @@ impl GoRouter {
                 stack.transition.as_ref().map(|t| {
                     (
                         t.from.clone(),
-                        t.from_shell.clone(),
+                        t.from_shells.clone(),
                         t.controller.value(),
                         t.forward,
                         t.builder,
@@ -2664,36 +2771,33 @@ impl GoRouter {
         // Every page has a restoration scope of its own, named by where it is in the stack
         // and where it leads: ids only have to be unique within a page, and a page that
         // leaves the stack takes its values with it. A page of a shell's branch is named by
-        // its place in the branch, which does not change as other tabs are shown.
+        // its innermost shell and branch and its place among that branch's own pages, which
+        // does not change as other tabs are shown.
         let mut named: Vec<(u64, String)> = Vec::new();
-        let mut run_start: HashMap<u64, usize> = HashMap::new();
-        for (at, page) in pages.iter().enumerate() {
-            let name = match page.shell {
-                Some((shell, branch)) => {
-                    let start = *run_start.entry(shell).or_insert(at);
-                    format!(
-                        "shell {shell} branch {branch} route {} {}",
-                        at - start,
-                        page.state.location
-                    )
-                }
-                None => format!("route {at} {}", page.state.location),
-            };
-            named.push((page.key, name));
-        }
-        for (shell, stacks) in &shells {
-            for (branch, stack) in stacks.branches.iter().enumerate() {
-                if branch == stacks.current {
-                    continue;
-                }
-                for (at, page) in stack.iter().enumerate() {
-                    named.push((
-                        page.key,
+        let mut name_run = |run: &[Page], outer: bool| {
+            let mut seen: HashMap<(u64, usize), usize> = HashMap::new();
+            for (at, page) in run.iter().enumerate() {
+                let name = match page.innermost() {
+                    Some((shell, branch)) => {
+                        let place = seen.entry((shell, branch)).or_insert(0);
+                        *place += 1;
                         format!(
-                            "shell {shell} branch {branch} route {at} {}",
+                            "shell {shell} branch {branch} route {} {}",
+                            *place - 1,
                             page.state.location
-                        ),
-                    ));
+                        )
+                    }
+                    None if outer => format!("route {at} {}", page.state.location),
+                    None => continue,
+                };
+                named.push((page.key, name));
+            }
+        };
+        name_run(&pages, true);
+        for stacks in shells.values() {
+            for (branch, stack) in stacks.branches.iter().enumerate() {
+                if branch != stacks.current {
+                    name_run(stack, false);
                 }
             }
         }
@@ -2747,14 +2851,15 @@ impl GoRouter {
             ))
         };
 
-        // Which navigator plays the motion under way: a shell's, when both pages are in its
-        // branch — the frame stays put and only the branch moves — else the outer one.
-        // Between two branches, nothing moves.
+        // Which navigator plays the motion under way: that of the innermost shell both pages
+        // are in, in the same branch — the frames around it stay put and only that branch
+        // moves — else the outer one. Between two branches of a shell, nothing moves.
         let play = |a: &Page, b: &Page| -> Option<Option<u64>> {
-            match (a.shell, b.shell) {
-                (Some((s, x)), Some((t, y))) if s == t => (x == y).then_some(Some(s)),
-                _ => Some(None),
+            if branch_switch(a, b).is_some() {
+                return None;
             }
+            let level = shared_levels(a, b);
+            Some(level.checked_sub(1).map(|level| a.shells[level].0))
         };
         let top = pages.last().expect("a router has at least one page");
         // A back gesture takes the page on top away with that page's own transition.
@@ -2768,207 +2873,217 @@ impl GoRouter {
                 .and_then(|(from, snapshot, progress, forward, builder, branch)| {
                     // A move between two branches plays in the shell's own navigator.
                     let at = if *branch {
-                        top.shell.map(|(shell, _)| Some(shell))
+                        branch_switch(from, top).map(|(shell, _)| Some(shell))
                     } else {
                         play(from, top)
                     };
-                    Some((from, snapshot, *progress, *forward, *builder, at?))
+                    Some((from, &**snapshot, *progress, *forward, *builder, at?))
                 });
-        let gesture_in = |scope: Option<u64>| {
-            gesture
-                .filter(|(_, at)| *at == scope)
-                .map(|(progress, _)| progress)
+        let assembly = Assembly {
+            router: self,
+            cx,
+            make: &make,
+            pop: &pop,
+            specs: &specs,
+            kept: &kept,
+            gesture,
+            slide,
+            top_transition,
         };
-        let slide_in = |scope: Option<u64>| {
-            slide.as_ref().filter(|(.., at)| *at == scope).map(
-                |(from, _, progress, forward, builder, _)| {
-                    ((*from).clone(), *progress, *forward, *builder)
-                },
-            )
-        };
+        Box::new(assembly.navigator(&pages, 0, None, None, &shells, true))
+    }
+}
 
-        // A shell: its frame, around a navigator of its own holding every branch's pages —
-        // the branch on show, and the others kept, so that what they hold is still there when
-        // they are shown again.
-        let make_shell = |shell: u64, stacks: &ShellStacks, live: bool, back: bool| {
-            let branch = stacks.current;
-            let run = &stacks.branches[branch];
-            let inner_key = |b: usize, page: &Page| hash_of((b, page.key));
-            let mut slots: Vec<Slot> = run
-                .iter()
-                .enumerate()
-                .map(|(at, page)| Slot {
-                    key: (at, inner_key(branch, page)),
-                    page: page.key,
-                    make: Box::new(move |entering| make(page, at > 0, entering)),
-                })
-                .collect();
-            if live {
-                let mine = kept
-                    .iter()
-                    .rev()
-                    .filter(|page| page.shell.map(|(s, _)| s) == Some(shell));
-                for (back, page) in mine.enumerate() {
-                    slots.push(Slot {
-                        key: (run.len() + back, inner_key(branch, page)),
-                        page: page.key,
-                        make: Box::new(move |entering| make(page, true, entering)),
-                    });
-                }
-            }
-            for (other, stack) in stacks.branches.iter().enumerate() {
-                if other == branch {
-                    continue;
-                }
-                for (at, page) in stack.iter().enumerate() {
-                    slots.push(Slot {
-                        key: (at, inner_key(other, page)),
-                        page: page.key,
-                        make: Box::new(move |entering| make(page, at > 0, entering)),
-                    });
-                }
-            }
-            let motion = match (
-                live.then(|| gesture_in(Some(shell))).flatten(),
-                live.then(|| slide_in(Some(shell))).flatten(),
-            ) {
-                (Some(progress), _) => Motion::Gesture(progress, top_transition),
-                (None, Some((from, progress, forward, builder))) => {
-                    let at = match slots.iter().position(|slot| slot.page == from.key) {
-                        Some(at) => at,
-                        None => {
-                            slots.push(Slot {
-                                key: (run.len(), inner_key(branch, &from)),
-                                page: from.key,
-                                make: Box::new(move |entering| make(&from, true, entering)),
-                            });
-                            slots.len() - 1
-                        }
-                    };
-                    Motion::Slide {
-                        from: at,
-                        progress,
-                        forward,
-                        builder,
-                    }
-                }
-                _ => Motion::Still,
-            };
-            let navigator = assemble(slots, run.len(), motion).expand();
-            let handle = NavigationShell {
-                router: self.clone(),
-                shell,
-                current: branch,
-                count: stacks.branches.len(),
-            };
-            let frame = match specs.get(&shell) {
-                Some(spec) => (spec.builder)(cx, &handle, Box::new(navigator)),
-                None => Box::new(navigator),
-            };
-            Box::new(crate::ScaffoldScope::new(
-                crate::ScaffoldInfo::route(back.then(|| pop.clone())),
-                frame,
-            )) as Box<dyn Widget>
-        };
+/// What building the router's navigators needs at every level: the outer one, and a shell's
+/// inside it, and a shell's inside a branch of that one.
+struct Assembly<'a, 'c> {
+    router: &'a GoRouter,
+    cx: &'a BuildContext<'c>,
+    /// Builds a page, told whether it has one beneath it and how far in it is.
+    make: &'a dyn Fn(&Page, bool, f32) -> Box<dyn Widget>,
+    pop: &'a crate::Callback,
+    specs: &'a HashMap<u64, Rc<ShellSpec>>,
+    /// The pages kept for a return, the nearest last.
+    kept: &'a [Page],
+    /// A back gesture's progress, and the navigator it plays in (`None`: the outer one).
+    gesture: Option<(f32, Option<u64>)>,
+    /// The transition under way: the page leaving, the shells it was in as they were, its
+    /// progress, its direction, what it plays, and the navigator it plays in.
+    #[allow(clippy::type_complexity)]
+    slide: Option<(
+        &'a Page,
+        &'a HashMap<u64, ShellStacks>,
+        f32,
+        bool,
+        PageTransitionsBuilder,
+        Option<u64>,
+    )>,
+    top_transition: PageTransitionsBuilder,
+}
 
-        // The outer stack: each page not in a shell, and each shell once, for its pages.
-        let mut units: Vec<Unit> = Vec::new();
-        for (at, page) in pages.iter().enumerate() {
-            match page.shell {
-                Some((shell, _)) => {
-                    if !matches!(units.last(), Some(Unit::Shell(s)) if *s == shell) {
-                        units.push(Unit::Shell(shell));
-                    }
-                }
-                None => units.push(Unit::Page(at)),
-            }
+impl<'a> Assembly<'a, '_> {
+    /// A slot's key: the unit's own, or mixed with the branch it is in, in a shell's
+    /// navigator, so that two branches' pages never share one.
+    fn key(salt: Option<usize>, unit: u64) -> u64 {
+        match salt {
+            Some(branch) => hash_of((branch, unit)),
+            None => unit,
         }
-        let unit_key = |unit: &Unit| match unit {
-            Unit::Page(at) => pages[*at].key,
-            Unit::Shell(shell) => hash_of(("shell", *shell)),
-        };
-        let page_unit_key = |page: &Page| match page.shell {
-            Some((shell, _)) => hash_of(("shell", shell)),
-            None => page.key,
-        };
-        let mut slots: Vec<Slot> = Vec::new();
-        for (at, unit) in units.iter().enumerate() {
-            let key = unit_key(unit);
-            let make_unit: Box<dyn Fn(f32) -> Box<dyn Widget> + '_> = match *unit {
-                Unit::Page(index) => {
-                    let page = &pages[index];
-                    Box::new(move |entering| make(page, at > 0, entering))
-                }
-                Unit::Shell(shell) => {
-                    let make_shell = &make_shell;
-                    let stacks = &shells[&shell];
-                    Box::new(move |_| make_shell(shell, stacks, true, at > 0))
+    }
+
+    /// The slots of a run of pages `depth` shells deep: each page not in a deeper shell, and
+    /// each deeper shell once, for its pages.
+    fn run_slots(
+        &'a self,
+        run: &'a [Page],
+        depth: usize,
+        salt: Option<usize>,
+        stacks: &'a HashMap<u64, ShellStacks>,
+        live: bool,
+    ) -> Vec<Slot<'a>> {
+        let mut slots: Vec<Slot<'a>> = Vec::new();
+        let mut last_shell = None;
+        for page in run {
+            let shell = page.shells.get(depth).map(|(shell, _)| *shell);
+            if shell.is_some() && shell == last_shell {
+                continue;
+            }
+            last_shell = shell;
+            let at = slots.len();
+            let unit = page.unit_key(depth);
+            let make: MakeAt<'a> = match shell {
+                None => Box::new(move |entering| (self.make)(page, at > 0, entering)),
+                Some(shell) => {
+                    Box::new(move |_| self.shell(shell, stacks, live, at > 0, depth + 1))
                 }
             };
             slots.push(Slot {
-                key: (at, key),
-                page: key,
-                make: make_unit,
+                key: (at, Self::key(salt, unit)),
+                page: unit,
+                make,
             });
         }
+        slots
+    }
+
+    /// A navigator `depth` shells deep — `scope` is the innermost of them, `None` for the
+    /// outer one — whose stack is `run`; with the pages kept for a return that are its own
+    /// and, in a shell, the branches not on show, built and not drawn.
+    #[allow(clippy::too_many_arguments)]
+    fn navigator(
+        &'a self,
+        run: &'a [Page],
+        depth: usize,
+        scope: Option<u64>,
+        shell: Option<&'a ShellStacks>,
+        stacks: &'a HashMap<u64, ShellStacks>,
+        live: bool,
+    ) -> Navigator {
+        let salt = shell.map(|s| s.current);
+        let mut slots = self.run_slots(run, depth, salt, stacks, live);
+        let shown = slots.len();
         // The pages kept for a return are kept in the tree, at the depth they will come back
-        // at, so that what their components hold is still there. Those of a shell are kept in
-        // the shell's own navigator.
-        for (back, page) in kept
-            .iter()
-            .rev()
-            .filter(|page| page.shell.is_none())
-            .enumerate()
-        {
-            slots.push(Slot {
-                key: (units.len() + back, page.key),
-                page: page.key,
-                make: Box::new(move |entering| make(page, true, entering)),
+        // at, so that what their components hold is still there. Those of a shell are kept
+        // in the shell's own navigator.
+        if live {
+            let mine = self.kept.iter().rev().filter(|page| {
+                page.shells.len() == depth && page.innermost().map(|(s, _)| s) == scope
             });
+            for (back, page) in mine.enumerate() {
+                slots.push(Slot {
+                    key: (shown + back, Self::key(salt, page.key)),
+                    page: page.key,
+                    make: Box::new(move |entering| (self.make)(page, true, entering)),
+                });
+            }
         }
-        let motion = match (gesture_in(None), slide_in(None)) {
-            (Some(progress), _) if units.len() >= 2 => Motion::Gesture(progress, top_transition),
-            (_, Some((from, progress, forward, builder))) => {
-                let key = page_unit_key(&from);
-                let at = match slots.iter().position(|slot| slot.page == key) {
-                    Some(at) => Some(at),
-                    // The page leaving is gone from the stack (a pop took it off the top): it
-                    // is drawn as it was, a shell with the branches it had.
+        // A shell's other branches, as they were left, so that what they hold is still there
+        // when they are shown again.
+        if let Some(shell) = shell {
+            for (other, stack) in shell.branches.iter().enumerate() {
+                if other != shell.current {
+                    slots.extend(self.run_slots(stack, depth, Some(other), stacks, false));
+                }
+            }
+        }
+        let gesture = self
+            .gesture
+            .filter(|(_, at)| live && *at == scope)
+            .map(|(progress, _)| progress);
+        let slide = self.slide.filter(|(.., at)| live && *at == scope);
+        let motion = match (gesture, slide) {
+            (Some(progress), _) if shown >= 2 => Motion::Gesture(progress, self.top_transition),
+            (_, Some((from, snapshot, progress, forward, builder, _))) => {
+                let unit = from.unit_key(depth);
+                let at = match slots.iter().position(|slot| slot.page == unit) {
+                    Some(at) => at,
+                    // The page leaving is gone from the stack (a pop took it off the top):
+                    // it is drawn as it was, a shell with the branches it had.
                     None => {
-                        let make_gone: Option<MakeAt<'_>> = match from.shell {
-                            Some((shell, _)) => slide
-                                .as_ref()
-                                .and_then(|(_, snapshot, ..)| (*snapshot).clone())
-                                .map(|stacks| {
-                                    let make_shell = &make_shell;
-                                    Box::new(move |_| make_shell(shell, &stacks, false, true))
-                                        as MakeAt<'_>
-                                }),
-                            None => Some(Box::new(move |entering| make(&from, true, entering))),
+                        let make: MakeAt<'a> = match from.shells.get(depth) {
+                            Some(&(gone, _)) => Box::new(move |_| {
+                                self.shell(gone, snapshot, false, true, depth + 1)
+                            }),
+                            None => Box::new(move |entering| (self.make)(from, true, entering)),
                         };
-                        make_gone.map(|make_gone| {
-                            slots.push(Slot {
-                                key: (units.len(), key),
-                                page: key,
-                                make: make_gone,
-                            });
-                            slots.len() - 1
-                        })
+                        slots.push(Slot {
+                            key: (shown, Self::key(salt, unit)),
+                            page: unit,
+                            make,
+                        });
+                        slots.len() - 1
                     }
                 };
-                match at {
-                    Some(at) => Motion::Slide {
-                        from: at,
-                        progress,
-                        forward,
-                        builder,
-                    },
-                    None => Motion::Still,
+                Motion::Slide {
+                    from: at,
+                    progress,
+                    forward,
+                    builder,
                 }
             }
             _ => Motion::Still,
         };
-        Box::new(assemble(slots, units.len(), motion))
+        assemble(slots, shown, motion)
+    }
+
+    /// A shell `depth` shells deep, itself included: its frame, around a navigator of its
+    /// own holding every branch's pages — the branch on show, and the others kept.
+    fn shell(
+        &'a self,
+        shell: u64,
+        stacks: &'a HashMap<u64, ShellStacks>,
+        live: bool,
+        back: bool,
+        depth: usize,
+    ) -> Box<dyn Widget> {
+        let Some(own) = stacks.get(&shell) else {
+            return Box::new(crate::SizedBox::empty());
+        };
+        let branch = own.current;
+        let navigator = self
+            .navigator(
+                &own.branches[branch],
+                depth,
+                Some(shell),
+                Some(own),
+                stacks,
+                live,
+            )
+            .expand();
+        let handle = NavigationShell {
+            router: self.router.clone(),
+            shell,
+            current: branch,
+            count: own.branches.len(),
+        };
+        let frame = match self.specs.get(&shell) {
+            Some(spec) => (spec.builder)(self.cx, &handle, Box::new(navigator)),
+            None => Box::new(navigator),
+        };
+        Box::new(crate::ScaffoldScope::new(
+            crate::ScaffoldInfo::route(back.then(|| self.pop.clone())),
+            frame,
+        ))
     }
 }
 
@@ -2978,12 +3093,6 @@ struct Slot<'a> {
     key: (usize, u64),
     page: u64,
     make: Box<dyn Fn(f32) -> Box<dyn Widget> + 'a>,
-}
-
-/// An entry of the outer stack: a page, or a shell standing for all of its pages.
-enum Unit {
-    Page(usize),
-    Shell(u64),
 }
 
 /// What a navigator plays.
@@ -4468,5 +4577,237 @@ mod motion_patterns {
         r.push("/b");
         assert!(builder_of(&r).is_none());
         assert_eq!(r.location(), "/b");
+    }
+}
+
+/// A shell inside a branch of another shell (milestone 851).
+#[cfg(test)]
+mod nested_shell_tests {
+    use super::*;
+    use crate::Container;
+
+    fn page(_: &BuildContext, _: &GoRouterState) -> Container {
+        Container::new()
+    }
+
+    /// The outer shell is shell 1 and the inner one shell 2: numbers are taken in the order
+    /// the shells are met.
+    const OUTER: u64 = 1;
+    const INNER: u64 = 2;
+
+    /// Two tabs; the second holds a shell of its own, with two tabs of its own — the first
+    /// with pages under its first.
+    fn library() -> GoRoute {
+        GoRoute::shell(
+            |_, _, body| body,
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/home", page)]),
+                ShellBranch::new(vec![GoRoute::shell(
+                    |_, _, body| body,
+                    vec![
+                        ShellBranch::new(vec![GoRoute::new("/books", page)
+                            .routes(vec![GoRoute::new("item/:id", page)])]),
+                        ShellBranch::new(vec![GoRoute::new("/music", page)]),
+                    ],
+                )]),
+            ],
+        )
+    }
+
+    fn router() -> GoRouter {
+        GoRouter::new(vec![library(), GoRoute::new("/login", page)])
+            .initial_location("/home")
+            .animate(false)
+    }
+
+    /// The shells and branches of the page on top, the outermost first.
+    fn levels(router: &GoRouter) -> Vec<(u64, usize)> {
+        router.start();
+        router
+            .inner
+            .stack
+            .borrow()
+            .pages
+            .last()
+            .map(|page| page.shells.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn top_key(router: &GoRouter) -> u64 {
+        router.start();
+        router.inner.stack.borrow().pages.last().unwrap().key
+    }
+
+    /// **A shell inside a branch no longer panics**, and a location inside it puts the page
+    /// in both: the outer shell's branch, then the inner shell's.
+    #[test]
+    fn a_shell_inside_a_branch_is_one_more_level() {
+        let r = router();
+        assert_eq!(levels(&r), [(OUTER, 0)]);
+        r.go("/music");
+        assert_eq!(r.locations(), ["/music"]);
+        assert_eq!(levels(&r), [(OUTER, 1), (INNER, 1)]);
+        assert_eq!(r.current_branch(), Some(1), "the inner tab on show");
+        r.go("/books/item/7");
+        assert_eq!(r.locations(), ["/books", "/books/item/7"]);
+        assert_eq!(levels(&r), [(OUTER, 1), (INNER, 0)]);
+        assert_eq!(r.current_branch(), Some(0));
+    }
+
+    /// **The outer branch opens where its inner shell's first branch does**, and each level
+    /// keeps its tabs: leaving the outer tab and coming back finds the inner tab, its pages
+    /// and their state as they were; the inner tab not on show is kept too.
+    #[test]
+    fn each_level_keeps_its_own_stacks() {
+        let r = router();
+        r.go_branch(0);
+        r.show_branch(OUTER, 1);
+        assert_eq!(r.locations(), ["/books"], "the inner shell's first branch");
+        assert_eq!(levels(&r), [(OUTER, 1), (INNER, 0)]);
+
+        r.push("/books/item/3");
+        let item = top_key(&r);
+        r.show_branch(INNER, 1);
+        assert_eq!(r.locations(), ["/music"]);
+        r.push("/books/item/4");
+        assert_eq!(
+            r.locations(),
+            ["/books", "/books/item/3", "/books/item/4"],
+            "a page of the other inner tab is pushed onto that tab, shown first"
+        );
+        r.pop();
+        assert_eq!(top_key(&r), item);
+
+        r.show_branch(OUTER, 0);
+        assert_eq!(r.locations(), ["/home"]);
+        assert_eq!(levels(&r), [(OUTER, 0)]);
+        assert!(
+            r.inner.shells.borrow().contains_key(&INNER),
+            "the inner shell is kept while its outer tab is not on show"
+        );
+
+        r.show_branch(OUTER, 1);
+        assert_eq!(r.locations(), ["/books", "/books/item/3"]);
+        assert_eq!(top_key(&r), item, "the same page, and so the same state");
+        r.show_branch(INNER, 1);
+        assert_eq!(r.locations(), ["/music"], "the other inner tab as it was");
+    }
+
+    /// **The handle a frame is given switches its own shell's tabs**: the router's own
+    /// `go_branch` switches the innermost shell's.
+    #[test]
+    fn go_branch_switches_the_innermost_shell() {
+        let r = router();
+        r.go("/books");
+        r.go_branch(1);
+        assert_eq!(r.locations(), ["/music"]);
+        assert_eq!(levels(&r), [(OUTER, 1), (INNER, 1)]);
+    }
+
+    /// **Back works from the inside out**: the inner branch's own pages, the inner shell's
+    /// first tab, then the outer shell's, then nothing.
+    #[test]
+    fn back_goes_from_the_inner_shell_out() {
+        let r = router();
+        r.go("/books/item/1");
+        r.show_branch(INNER, 1);
+        assert_eq!(r.location(), "/music");
+
+        assert!(r.pop());
+        assert_eq!(
+            r.location(),
+            "/books/item/1",
+            "the inner first tab, as left"
+        );
+        assert!(r.can_go_back());
+        assert!(r.pop());
+        assert_eq!(r.location(), "/books");
+        assert!(r.can_pop(), "the outer first tab is still to go back to");
+        assert!(!r.can_go_back(), "but no gesture switches tabs");
+        assert!(r.pop());
+        assert_eq!(r.location(), "/home");
+        assert_eq!(levels(&r), [(OUTER, 0)]);
+        assert!(!r.pop(), "the outer first tab's first page: Back leaves");
+    }
+
+    /// **A route outside both shells covers them**, and Back comes back to the inner tab.
+    #[test]
+    fn a_route_outside_covers_both_shells() {
+        let r = router();
+        r.go("/music");
+        r.push("/login");
+        assert_eq!(levels(&r), []);
+        assert_eq!(r.locations(), ["/music", "/login"]);
+        assert!(r.pop());
+        assert_eq!(r.location(), "/music");
+        assert_eq!(levels(&r), [(OUTER, 1), (INNER, 1)]);
+    }
+
+    /// **Built, both frames are drawn, one inside the other**, each around a navigator of
+    /// its own; a push inside the inner tab plays in the inner navigator, the frames staying
+    /// put.
+    #[test]
+    fn both_frames_are_built_and_the_inner_branch_moves_alone() {
+        let outer_frames = Rc::new(Cell::new(0));
+        let inner_frames = Rc::new(Cell::new(0));
+        let (o, i) = (outer_frames.clone(), inner_frames.clone());
+        let shell = GoRoute::shell(
+            move |_, shell, body| {
+                o.set(o.get() + 1);
+                assert_eq!(shell.branch_count(), 2);
+                body
+            },
+            vec![
+                ShellBranch::new(vec![GoRoute::new("/home", page)]),
+                ShellBranch::new(vec![GoRoute::shell(
+                    move |_, shell, body| {
+                        i.set(i.get() + 1);
+                        assert_eq!(shell.current_index(), 0);
+                        body
+                    },
+                    vec![
+                        ShellBranch::new(vec![GoRoute::new("/books", page)
+                            .routes(vec![GoRoute::new("item/:id", page)])]),
+                        ShellBranch::new(vec![GoRoute::new("/music", page)]),
+                    ],
+                )]),
+            ],
+        );
+        let r = GoRouter::new(vec![shell]).initial_location("/books");
+        let runtime = crate::Runtime::default();
+        let theme = crate::Theme::default().with_platform(frus_core::TargetPlatform::Linux);
+        let build = || r.build(&BuildContext::for_test(&runtime, &theme));
+        let _ = build();
+        assert_eq!((outer_frames.get(), inner_frames.get()), (1, 1));
+
+        fn navigators(widget: &dyn Widget, out: &mut Vec<(Option<(f32, bool)>, usize)>) {
+            if widget.navigator().is_some() {
+                out.push((
+                    widget.navigator(),
+                    widget.children().len() - widget.navigator_retained(),
+                ));
+            }
+            for child in widget.children() {
+                navigators(child.as_ref(), out);
+            }
+        }
+        let mut found = Vec::new();
+        navigators(build().as_ref(), &mut found);
+        assert_eq!(found.len(), 3, "the outer navigator, and one per shell");
+
+        r.push("/books/item/2");
+        r.tick(0.05);
+        let mut found = Vec::new();
+        navigators(build().as_ref(), &mut found);
+        let moving: Vec<_> = found
+            .iter()
+            .filter(|(motion, _)| motion.is_some_and(|(p, _)| p < 1.0))
+            .collect();
+        assert_eq!(moving.len(), 1, "one navigator plays it: {found:?}");
+        assert_eq!(moving[0].1, 2, "the inner one, both pages drawn");
+        assert_eq!(
+            found[0].1, 1,
+            "the outer navigator shows the outer shell alone"
+        );
     }
 }

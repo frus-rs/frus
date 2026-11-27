@@ -7013,10 +7013,15 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         (off_x, off_y): (f32, f32),
         clip: Rect,
     ) {
+        // **A page is handed the whole navigator** (milestone 851, #516), as a route hands
+        // its page the screen: a page whose root is a plain box — a coloured container, a
+        // column — is as big as the screen rather than as its content. Asked how big it
+        // wanted to be, a container holding a column hugged it, and a scrolling body given
+        // the rest of a column that had no rest came out with no height at all.
         let rects = self.cached_rects(
             id,
             screen,
-            Constraints::definite(Size::new(bounds.width, bounds.height)),
+            Constraints::filled(Size::new(bounds.width, bounds.height)),
         );
         let screen_clip = clip.intersect(bounds);
         let mut index = 0;
