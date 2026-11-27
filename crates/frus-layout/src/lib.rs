@@ -17,11 +17,13 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
+mod nodes;
 mod style;
 mod tree;
 
+pub use nodes::Memo;
 pub use style::{Align, AlignContent, Dimension, FlexDirection, Justify, Style};
-pub use tree::{Layout, MeasureFn, NodeId, Overflowing, Side};
+pub use tree::{Layout, MeasureFn, NodeId, Overflowing, Side, StyleSnapshot};
 
 // Re-export of the core geometry types, as a convenience for callers.
 pub use frus_core::{Rect, Size};

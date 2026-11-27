@@ -909,6 +909,11 @@ pub struct Runtime {
     /// the next). Interior mutability: `build_ui` updates it while holding only a
     /// shared reference to the `Runtime`.
     pub layout_cache: RefCell<LayoutCache>,
+    /// What the trees a measurement lays out on its own (a viewport measuring its content, a
+    /// box measuring its child, a stack its layers) measured the last time, node by node:
+    /// the next one starts from it (milestone 853). Apart from `layout_cache`, which is
+    /// borrowed while a root is laid out and so while those measurements run.
+    pub(crate) nested_layouts: RefCell<crate::relayout::NestedLayouts>,
     /// **Repaint**-boundary cache (primitives + interactions retained per boundary,
     /// from one frame to the next). Same interior mutability.
     pub paint_cache: RefCell<crate::paintcache::PaintCache>,

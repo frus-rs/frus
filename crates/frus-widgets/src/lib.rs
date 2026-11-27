@@ -798,7 +798,8 @@ pub use widgettheme::{
     DefaultTextStyle, DividerTheme, DrawerTheme, DropdownTheme, ExpansionPanelListTheme,
     GridTileBarTheme, IconButtonTheme, IconTheme, InkTheme, MenuBarTheme, MenuTheme,
     PageSelectorTheme, RadioTheme, SegmentedTheme, SliderTheme, SwitchTheme, TabBarTheme,
-    TextFieldTheme, TextSelectionTheme, TitleBarTheme, ToggleButtonsTheme, WidgetThemes,
+    TableTheme, TextFieldTheme, TextSelectionTheme, TitleBarTheme, ToggleButtonsTheme,
+    WidgetThemes,
 };
 
 // Convenience re-exports for callers.

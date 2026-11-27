@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use frus_core::{Rect, Size};
-use taffy::{AvailableSpace, TaffyTree, TraversePartialTree};
+use taffy::AvailableSpace;
+
+use crate::nodes::{Memo, Tree};
 
 use crate::style::Style;
 
@@ -23,6 +25,9 @@ pub type NodeId = taffy::NodeId;
 /// closure that borrows the tree, which is how a box whose content is built from the
 /// space offered gets measured at all.
 pub type MeasureFn<'a> = Box<dyn Fn(Option<f32>, Option<f32>) -> Size + 'a>;
+
+/// A node's style, kept to be put back ([`Layout::style_snapshot`]).
+pub struct StyleSnapshot(taffy::Style);
 
 /// The edge a box's content ran past.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,9 +61,11 @@ pub struct Overflowing {
 /// A layout tree. `T` is user data attached to the nodes — a colour, say — handed
 /// back with each computed rectangle.
 pub struct Layout<'a, T> {
-    tree: TaffyTree<T>,
+    tree: Tree<T>,
     /// Constrained measurements, one per "measured" leaf.
     measures: HashMap<NodeId, MeasureFn<'a>>,
+    /// What the measurements are taken under, said by the caller (see [`Layout::reuse`]).
+    context: u64,
 }
 
 /// **The rule a self-measuring widget has to keep**, checked where every measurement
@@ -109,26 +116,100 @@ fn debug_assert_measurement(measured: f32, bound: Option<f32>, axis: &str) {
 impl<'a, T> Layout<'a, T> {
     /// Creates an empty tree.
     pub fn new() -> Self {
-        let tree = TaffyTree::new();
         Self {
-            tree,
+            tree: Tree::new(),
             measures: HashMap::new(),
+            context: 0,
         }
     }
 
     /// Adds a leaf — a node with no children — carrying associated data.
     pub fn leaf(&mut self, style: Style, data: T) -> NodeId {
-        self.tree
-            .new_leaf_with_context(style.to_taffy(), data)
-            .expect("creating a layout leaf")
+        self.tree.add(style.to_taffy(), Some(data))
     }
 
     /// Adds a **measured** leaf: its size comes from `measure`, given the space
     /// offered, rather than from a dimension fixed in the style.
+    ///
+    /// Nothing says what its answer depends on, so it is measured afresh in every layout,
+    /// and so is every box above it: [`Layout::measured_leaf_keyed`] says it.
     pub fn measured_leaf(&mut self, style: Style, data: T, measure: MeasureFn<'a>) -> NodeId {
-        let node = self.leaf(style, data);
+        self.measured_leaf_keyed(style, data, None, measure)
+    }
+
+    /// A measured leaf whose answer depends on its style, the space offered and `key` alone:
+    /// two leaves with the same key and style measure alike. A leaf of a layout made with
+    /// [`Layout::reuse`] that is the same as one of the last layout keeps that one's answers
+    /// (milestone 853). `None` is [`Layout::measured_leaf`].
+    pub fn measured_leaf_keyed(
+        &mut self,
+        style: Style,
+        data: T,
+        key: Option<u64>,
+        measure: MeasureFn<'a>,
+    ) -> NodeId {
+        let node = self.tree.add_measured(style.to_taffy(), Some(data), key);
         self.measures.insert(node, measure);
         node
+    }
+
+    /// Says where a node stands in the caller's own tree: a stable identity, the same from
+    /// one frame to the next, that [`Layout::reuse`] looks the last layout's node up by.
+    ///
+    /// It only says where to look. A node is the same as the last layout's only when its
+    /// style, its content and its children are the same as that node's, all the way down.
+    pub fn set_identity(&mut self, node: NodeId, identity: u64) {
+        self.tree.set_identity(node, identity);
+    }
+
+    /// Hands this layout what the last layout of the same root left ([`Layout::into_memo`]),
+    /// before it is computed (milestone 853).
+    ///
+    /// A node that is the same subtree as one of the last layout — the same style, the same
+    /// content, the same children, all the way down — starts with the answers that one gave:
+    /// asked the same question, it answers without being laid out again, and if it is placed
+    /// the way it was, everything below it is placed the way it was too. A change deep in a
+    /// tree lays out the path from it to the root, and each box on that path asks its other
+    /// children what they already know. The rectangles are the ones a layout from scratch
+    /// gives.
+    ///
+    /// `context` is what the measurements depend on that no node says — the reader's font
+    /// size, say: a memo made under another context is not used.
+    pub fn reuse(&mut self, memo: Memo, context: u64) {
+        self.context = context;
+        self.tree.reuse(memo);
+    }
+
+    /// What this layout leaves for the next layout of the same root, after it is computed.
+    pub fn into_memo(self, root: NodeId) -> Memo {
+        self.tree.into_memo(root, self.context)
+    }
+
+    /// How many nodes the computations so far laid out, rather than answering from a cache —
+    /// what [`Layout::reuse`] saves.
+    pub fn laid_out(&self) -> u32 {
+        self.tree.computed
+    }
+
+    /// A node's style as it is now, to put back with [`Layout::restore_style`]: a tree laid
+    /// out more than once under different constraints starts each time from the style it was
+    /// built with, since each `compute*` may change its root's.
+    pub fn style_snapshot(&self, node: NodeId) -> StyleSnapshot {
+        StyleSnapshot(self.tree.style(node).clone())
+    }
+
+    /// Puts back a style taken with [`Layout::style_snapshot`]. What the node's children
+    /// measured is kept; what the node and the nodes above it computed is forgotten only if
+    /// the style differs.
+    pub fn restore_style(&mut self, node: NodeId, snapshot: &StyleSnapshot) {
+        if *self.tree.style(node) != snapshot.0 {
+            self.tree.set_style(node, snapshot.0.clone());
+        }
+    }
+
+    /// How many nodes started with the last layout's answers.
+    pub fn reused(&self) -> u32 {
+        self.tree.reused
     }
 
     /// Adds `dy` to a node's **top margin**, after it has been built.
@@ -141,7 +222,7 @@ impl<'a, T> Layout<'a, T> {
         if dy <= 0.0 {
             return;
         }
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         let base = match style.margin.top {
             taffy::LengthPercentageAuto::Length(v) => v,
             // A percentage or `auto` margin is resolved against the parent, which is
@@ -150,19 +231,19 @@ impl<'a, T> Layout<'a, T> {
             _ => 0.0,
         };
         style.margin.top = taffy::LengthPercentageAuto::Length(base + dy);
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Forgets the size a node was given on one axis, so that it is sized by the layout —
     /// what a default gives way to when the room on offer replaces it.
     pub fn clear_size(&mut self, node: NodeId, horizontal: bool) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         if horizontal {
             style.size.width = taffy::Dimension::Auto;
         } else {
             style.size.height = taffy::Dimension::Auto;
         }
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Makes a node **fill the space its parent leaves it**, after it has been built:
@@ -173,7 +254,7 @@ impl<'a, T> Layout<'a, T> {
     /// parent runs the same way, stretch if it runs across — and a widget does not know
     /// what it was put inside. The parent does, so it says so here.
     pub fn fill_parent(&mut self, node: NodeId, horizontal: bool, grow: bool) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         let size = if horizontal {
             style.size.width
         } else {
@@ -197,7 +278,7 @@ impl<'a, T> Layout<'a, T> {
             }
             style.align_self = Some(taffy::AlignItems::Stretch);
         }
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Lets a node **give way** along its parent's main axis, after it has been built.
@@ -215,7 +296,7 @@ impl<'a, T> Layout<'a, T> {
     /// it, and one that both grows and refuses to give way is a box that can only get
     /// bigger than the thing holding it.
     pub fn allow_shrink(&mut self, node: NodeId) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         // **The floor, not just the willingness.** A flex item's automatic minimum is its
         // **min-content** size, so `flex_shrink` on its own buys nothing: the item agrees
         // to shrink and then refuses to go below the widest thing inside it. A lone child
@@ -247,7 +328,7 @@ impl<'a, T> Layout<'a, T> {
             changed = true;
         }
         if changed {
-            self.tree.set_style(node, style).expect("setting a style");
+            self.tree.set_style(node, style);
         }
     }
 
@@ -266,14 +347,14 @@ impl<'a, T> Layout<'a, T> {
     ///
     /// A child that has already chosen a size of its own keeps it.
     pub fn set_tile_shape(&mut self, node: NodeId, ratio: f32) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         if !matches!(style.size.width, taffy::Dimension::Auto)
             || !matches!(style.size.height, taffy::Dimension::Auto)
         {
             return;
         }
         style.aspect_ratio = Some(ratio);
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Sets a node's **minimum width**, after it has been built.
@@ -282,12 +363,12 @@ impl<'a, T> Layout<'a, T> {
     /// same number across a column would be a floor on the *cross* axis, where the box is
     /// handed a width rather than asked for one.
     pub fn set_min_width(&mut self, node: NodeId, width: f32) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         if !matches!(style.min_size.width, taffy::Dimension::Auto) {
             return;
         }
         style.min_size.width = taffy::Dimension::Length(width);
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Lifts a node's **least size on one axis**, after it has been built: the floor of a
@@ -296,14 +377,14 @@ impl<'a, T> Layout<'a, T> {
     /// Only the parent can say so, since only the parent knows which axis is its line;
     /// across the line the child's own floor stands.
     pub fn clear_min(&mut self, node: NodeId, horizontal: bool) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         let floor = if horizontal {
             &mut style.min_size.width
         } else {
             &mut style.min_size.height
         };
         *floor = taffy::style_helpers::length(0.0_f32);
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Makes the **root** of a layout fill one axis of whatever room it is computed in.
@@ -314,7 +395,7 @@ impl<'a, T> Layout<'a, T> {
     /// — which is the right answer in both cases. A row at the top of a frame fills the
     /// window; the same row measured for its natural size still shrink-wraps.
     pub fn fill_root(&mut self, node: NodeId, horizontal: bool) {
-        let mut style = self.tree.style(node).expect("a node we made").clone();
+        let mut style = self.tree.style(node).clone();
         let axis = if horizontal {
             &mut style.size.width
         } else {
@@ -324,7 +405,7 @@ impl<'a, T> Layout<'a, T> {
             return;
         }
         *axis = taffy::Dimension::Percent(1.0);
-        self.tree.set_style(node, style).expect("setting a style");
+        self.tree.set_style(node, style);
     }
 
     /// Adds a container — a node with children — with no associated data.
@@ -335,7 +416,7 @@ impl<'a, T> Layout<'a, T> {
         if style.overlap {
             use taffy::style_helpers::{line, span};
             for &child in children {
-                let mut placed = self.tree.style(child).expect("a node we made").clone();
+                let mut placed = self.tree.style(child).clone();
                 placed.grid_row = taffy::Line {
                     start: line(1),
                     end: span(1),
@@ -344,12 +425,10 @@ impl<'a, T> Layout<'a, T> {
                     start: line(1),
                     end: span(1),
                 };
-                self.tree.set_style(child, placed).expect("setting a style");
+                self.tree.set_style(child, placed);
             }
         }
-        self.tree
-            .new_with_children(style.to_taffy(), children)
-            .expect("creating a layout container")
+        self.tree.add_container(style.to_taffy(), children)
     }
 
     /// Computes the layout from `root`, within the given available space.
@@ -372,7 +451,8 @@ impl<'a, T> Layout<'a, T> {
     /// paged view is *told*, and a page that hugged its content would leave the rest
     /// of the panel empty and unclickable.
     pub fn compute_filled(&mut self, root: NodeId, width: f32, height: f32) {
-        if let Ok(current) = self.tree.style(root) {
+        {
+            let current = self.tree.style(root);
             let mut style = current.clone();
             let mut changed = false;
             if matches!(style.size.width, taffy::Dimension::Auto) {
@@ -384,7 +464,7 @@ impl<'a, T> Layout<'a, T> {
                 changed = true;
             }
             if changed {
-                let _ = self.tree.set_style(root, style);
+                self.tree.set_style(root, style);
             }
         }
         self.compute(root, Size::new(width, height));
@@ -406,7 +486,8 @@ impl<'a, T> Layout<'a, T> {
         free_x: bool,
         free_y: bool,
     ) {
-        if let Ok(current) = self.tree.style(root) {
+        {
+            let current = self.tree.style(root);
             let mut style = current.clone();
             if !free_x {
                 style.size.width = taffy::Dimension::Length(width);
@@ -414,7 +495,7 @@ impl<'a, T> Layout<'a, T> {
             if !free_y {
                 style.size.height = taffy::Dimension::Length(height);
             }
-            let _ = self.tree.set_style(root, style);
+            self.tree.set_style(root, style);
         }
         self.compute_scroll(root, width, height, free_x, free_y);
     }
@@ -491,7 +572,8 @@ impl<'a, T> Layout<'a, T> {
         let fill_w = fill[0] && !free_x;
         let fill_h = fill[1] && !free_y;
         if fill_w || fill_h {
-            if let Ok(current) = self.tree.style(root) {
+            {
+                let current = self.tree.style(root);
                 let mut style = current.clone();
                 let mut changed = false;
                 if fill_w && matches!(style.size.width, taffy::Dimension::Auto) {
@@ -503,7 +585,7 @@ impl<'a, T> Layout<'a, T> {
                     changed = true;
                 }
                 if changed {
-                    let _ = self.tree.set_style(root, style);
+                    self.tree.set_style(root, style);
                 }
             }
         }
@@ -528,42 +610,37 @@ impl<'a, T> Layout<'a, T> {
     /// measurements** routed to their closures.
     fn compute_in(&mut self, root: NodeId, available: taffy::Size<AvailableSpace>) {
         let measures = &self.measures;
-        self.tree
-            .compute_layout_with_measure(
-                root,
-                available,
-                |known: taffy::Size<Option<f32>>,
-                 space: taffy::Size<AvailableSpace>,
-                 node,
-                 _ctx,
-                 _style| {
-                    let Some(measure) = measures.get(&node) else {
-                        return taffy::Size::ZERO;
-                    };
-                    // The constraint resolved per axis: the known dimension if taffy
-                    // has already settled it, otherwise from the space offered
-                    // (min-content = as narrow as possible, 0; max-content = free).
-                    let bound = |known: Option<f32>, space: AvailableSpace| {
-                        known.or(match space {
-                            AvailableSpace::Definite(v) => Some(v),
-                            AvailableSpace::MinContent => Some(0.0),
-                            AvailableSpace::MaxContent => None,
-                        })
-                    };
-                    let (bw, bh) = (
-                        bound(known.width, space.width),
-                        bound(known.height, space.height),
-                    );
-                    let size = measure(bw, bh);
-                    debug_assert_measurement(size.width, bw, "width");
-                    debug_assert_measurement(size.height, bh, "height");
-                    taffy::Size {
-                        width: size.width,
-                        height: size.height,
-                    }
-                },
-            )
-            .expect("computing the layout");
+        self.tree.compute(
+            root,
+            available,
+            |known: taffy::Size<Option<f32>>, space: taffy::Size<AvailableSpace>, node| {
+                let Some(measure) = measures.get(&node) else {
+                    return taffy::Size::ZERO;
+                };
+                // The constraint resolved per axis: the known dimension if taffy
+                // has already settled it, otherwise from the space offered
+                // (min-content = as narrow as possible, 0; max-content = free).
+                let bound = |known: Option<f32>, space: AvailableSpace| {
+                    known.or(match space {
+                        AvailableSpace::Definite(v) => Some(v),
+                        AvailableSpace::MinContent => Some(0.0),
+                        AvailableSpace::MaxContent => None,
+                    })
+                };
+                let (bw, bh) = (
+                    bound(known.width, space.width),
+                    bound(known.height, space.height),
+                );
+                let size = measure(bw, bh);
+                debug_assert_measurement(size.width, bw, "width");
+                debug_assert_measurement(size.height, bh, "height");
+                taffy::Size {
+                    width: size.width,
+                    height: size.height,
+                }
+            },
+            self.context,
+        );
     }
 
     /// The size a node came out at, after a `compute*`.
@@ -572,10 +649,8 @@ impl<'a, T> Layout<'a, T> {
     /// allocates one entry per node to do it; this is for the one caller that wants a
     /// single box back — a measurement asking how big the thing it just laid out is.
     pub fn size_of(&self, node: NodeId) -> Size {
-        self.tree
-            .layout(node)
-            .map(|l| Size::new(l.size.width, l.size.height))
-            .unwrap_or(Size::new(0.0, 0.0))
+        let l = self.tree.placed(node);
+        Size::new(l.size.width, l.size.height)
     }
 
     /// Walks the tree in prefix order and returns, for each node, its rectangle in
@@ -615,11 +690,11 @@ impl<'a, T> Layout<'a, T> {
         // at 22: one pixel of overflow that exists nowhere but in the rounding, reported
         // against a widget nobody wrote wrong. Four of this framework's own goldens wore a
         // band for it the day the band was painted.
-        let layout = self.tree.unrounded_layout(node);
+        let layout = self.tree.unrounded(node);
         let x = offset_x + layout.location.x;
         let y = offset_y + layout.location.y;
 
-        let child_count = self.tree.child_count(node);
+        let child_count = self.tree.count(node);
         if child_count > 0 {
             // The content box, in the node's own coordinates. Taffy places children
             // relative to the border box, so these bounds are directly comparable.
@@ -630,8 +705,8 @@ impl<'a, T> Layout<'a, T> {
 
             let (mut over_l, mut over_t, mut over_r, mut over_b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
             for i in 0..child_count {
-                let child = self.tree.child_at_index(node, i).expect("the node's child");
-                let c = self.tree.unrounded_layout(child);
+                let child = self.tree.child_at(node, i);
+                let c = self.tree.unrounded(child);
                 over_l = over_l.max(left - c.location.x);
                 over_t = over_t.max(top - c.location.y);
                 over_r = over_r.max(c.location.x + c.size.width - right);
@@ -657,7 +732,7 @@ impl<'a, T> Layout<'a, T> {
         }
 
         for i in 0..child_count {
-            let child = self.tree.child_at_index(node, i).expect("the node's child");
+            let child = self.tree.child_at(node, i);
             self.collect_overflow(child, x, y, out);
         }
     }
@@ -669,16 +744,16 @@ impl<'a, T> Layout<'a, T> {
         offset_y: f32,
         out: &mut Vec<(Rect, Option<&'s T>)>,
     ) {
-        let layout = self.tree.layout(node).expect("the node's layout");
+        let layout = self.tree.placed(node);
         let x = offset_x + layout.location.x;
         let y = offset_y + layout.location.y;
 
         let rect = Rect::new(x, y, layout.size.width, layout.size.height);
-        out.push((rect, self.tree.get_node_context(node)));
+        out.push((rect, self.tree.data(node)));
 
-        let child_count = self.tree.child_count(node);
+        let child_count = self.tree.count(node);
         for i in 0..child_count {
-            let child = self.tree.child_at_index(node, i).expect("the node's child");
+            let child = self.tree.child_at(node, i);
             self.collect(child, x, y, out);
         }
     }
@@ -1101,5 +1176,153 @@ mod tests {
         assert_eq!(size.width, 200.0);
         assert_eq!(wide.0, 60.0, "a box handed over is filled, and centred in");
         assert_eq!(tall.0, 85.0);
+    }
+
+    /// A list of `rows` rows, each a row holding a measured label (a paragraph that wraps
+    /// at the width it is given) and a fixed box; `wide` makes one label's text longer. Every
+    /// node has an identity, as a widget tree gives it.
+    fn list(rows: usize, wide: Option<usize>, memo: Option<Memo>) -> (Vec<Rect>, Memo, u32, u32) {
+        let mut layout: Layout<'_, ()> = Layout::new();
+        layout.reuse(memo.unwrap_or_default(), 7);
+        let mut children = Vec::new();
+        for i in 0..rows {
+            let words: f32 = if wide == Some(i) { 30.0 } else { 10.0 };
+            let label = layout.measured_leaf_keyed(
+                Style {
+                    flex_grow: 1.0,
+                    ..Default::default()
+                },
+                (),
+                Some(words.to_bits() as u64),
+                Box::new(move |w, _| {
+                    // Ten pixels a word, wrapped at the width offered, twenty a line.
+                    let width = w.unwrap_or(f32::INFINITY);
+                    let per_line = (width / 10.0).floor().max(1.0);
+                    let lines = (words / per_line).ceil();
+                    Size::new((words * 10.0).min(width), lines * 20.0)
+                }),
+            );
+            layout.set_identity(label, 1000 + i as u64);
+            let mark = layout.leaf(
+                Style {
+                    width: Dimension::Length(24.0),
+                    height: Dimension::Length(24.0),
+                    ..Default::default()
+                },
+                (),
+            );
+            layout.set_identity(mark, 2000 + i as u64);
+            let row = layout.container(
+                Style {
+                    flex_direction: FlexDirection::Row,
+                    ..Default::default()
+                },
+                &[label, mark],
+            );
+            layout.set_identity(row, 3000 + i as u64);
+            children.push(row);
+        }
+        let column = layout.container(
+            Style {
+                flex_direction: FlexDirection::Column,
+                ..Default::default()
+            },
+            &children,
+        );
+        layout.set_identity(column, 1);
+        layout.compute_scroll(column, 200.0, 0.0, false, true);
+        let rects = layout
+            .absolute_rects(column)
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        let (laid_out, reused) = (layout.laid_out(), layout.reused());
+        (rects, layout.into_memo(column), laid_out, reused)
+    }
+
+    /// **A layout handed the last one's memo gives the rectangles a layout from scratch
+    /// gives, and lays out only what changed** (milestone 853): one row of fifty grows a
+    /// line, and the other forty-nine answer from what they measured a frame ago.
+    #[test]
+    fn a_memo_lays_out_the_changed_path_alone_and_changes_no_rectangle() {
+        let (first, memo, fresh, reused) = list(50, None, None);
+        assert_eq!(reused, 0, "nothing to start from");
+        let (same, memo, again, reused) = list(50, None, Some(memo));
+        assert_eq!(same, first, "the same tree, the same boxes");
+        assert_eq!(again, 0, "and nothing laid out: the root answered");
+        assert_eq!(reused, 151, "every node was the same");
+
+        let (scratch, _, _, _) = list(50, Some(20), None);
+        let (grown, _, laid_out, _) = list(50, Some(20), Some(memo));
+        assert_eq!(grown, scratch, "the rectangles of a layout from scratch");
+        assert_ne!(grown, first, "and the row did grow");
+        assert!(
+            laid_out * 10 < fresh,
+            "the path to the changed row, not the list: {laid_out} of {fresh}"
+        );
+    }
+
+    /// A memo taken under another context (the reader's font size, the surface) is not used.
+    #[test]
+    fn a_memo_from_another_context_is_ignored() {
+        let (_, memo, _, _) = list(5, None, None);
+        let mut layout: Layout<'_, ()> = Layout::new();
+        layout.reuse(memo, 8);
+        let leaf = layout.leaf(Style::default(), ());
+        layout.set_identity(leaf, 1);
+        layout.compute(leaf, Size::new(10.0, 10.0));
+        assert_eq!(layout.reused(), 0);
+    }
+
+    /// **A measured leaf nothing describes** is measured afresh, and so is everything above
+    /// it; its siblings still answer from the memo.
+    #[test]
+    fn an_unkeyed_measurement_is_measured_again() {
+        let build = |memo: Option<Memo>| {
+            let mut layout: Layout<'_, ()> = Layout::new();
+            layout.reuse(memo.unwrap_or_default(), 0);
+            let opaque =
+                layout.measured_leaf(Style::default(), (), Box::new(|_, _| Size::new(30.0, 10.0)));
+            layout.set_identity(opaque, 1);
+            let plain = layout.leaf(
+                Style {
+                    width: Dimension::Length(10.0),
+                    height: Dimension::Length(10.0),
+                    ..Default::default()
+                },
+                (),
+            );
+            layout.set_identity(plain, 2);
+            let row = layout.container(Style::default(), &[opaque, plain]);
+            layout.set_identity(row, 3);
+            layout.compute(row, Size::new(100.0, 100.0));
+            let rects: Vec<Rect> = layout
+                .absolute_rects(row)
+                .into_iter()
+                .map(|(r, _)| r)
+                .collect();
+            let reused = layout.reused();
+            (rects, layout.into_memo(row), reused)
+        };
+        let (first, memo, _) = build(None);
+        let (second, _, reused) = build(Some(memo));
+        assert_eq!(first, second);
+        assert_eq!(reused, 1, "the plain box alone");
+    }
+
+    /// A style changed after the first computation — a second pass at a bound, as
+    /// `compute_axes` makes — forgets what the node and the nodes above it kept, the memo's
+    /// answers included.
+    #[test]
+    fn a_style_changed_between_two_passes_is_laid_out_again() {
+        let (_, memo, _, _) = list(3, None, None);
+        let mut layout: Layout<'_, ()> = Layout::new();
+        layout.reuse(memo, 7);
+        let leaf = layout.leaf(Style::default(), ());
+        layout.set_identity(leaf, 1);
+        layout.compute(leaf, Size::new(10.0, 10.0));
+        layout.fill_root(leaf, true);
+        layout.compute(leaf, Size::new(10.0, 10.0));
+        assert_eq!(layout.size_of(leaf).width, 10.0);
     }
 }

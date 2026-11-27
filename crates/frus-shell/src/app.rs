@@ -14986,6 +14986,17 @@ pub mod testing {
             self.costs
         }
 
+        /// The layout nodes the last frame laid out, and those that started with what the
+        /// frame before measured (milestone 853).
+        pub fn layout_nodes(&self) -> (u32, u32) {
+            self.shell
+                .win
+                .runtime
+                .layout_cache
+                .borrow()
+                .last_frame_nodes()
+        }
+
         /// What the application keeps for restoration, as the platform would be handed it
         /// now: `None` when it has not turned restoration on (milestone 753).
         pub fn restoration_data(&self) -> Option<Vec<u8>> {
