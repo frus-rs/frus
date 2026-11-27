@@ -18,11 +18,13 @@
 //! Standard output carries the protocol and nothing else: what the tool would say goes to
 //! standard error, and every program it starts has its output captured.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -198,6 +200,42 @@ const FINDER: &str = r#""text": {"type": "string", "description": "The words the
 /// The property that picks the application.
 const APP: &str = r#""app_id": {"type": "string", "description": "Which app, when several run (from launch_app or app_status). Default: the last one."}"#;
 
+// --- Requests in flight ---
+
+/// What a cancelled request's work returns: the request is not answered at all.
+const CANCELLED: &str = "the request was cancelled";
+
+thread_local! {
+    /// The cancellation flag of the request this thread is serving, if it serves one.
+    static REQUEST: std::cell::RefCell<Option<Arc<AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether the client cancelled the request this thread is serving
+/// (`notifications/cancelled`). Every wait of the server asks, at least ten times a second.
+fn cancelled() -> bool {
+    REQUEST.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    })
+}
+
+/// Sleeps `time`, or less when the request is cancelled: whether it was.
+fn pause(time: Duration) -> bool {
+    let deadline = Instant::now() + time;
+    loop {
+        if cancelled() {
+            return true;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        std::thread::sleep(left.min(Duration::from_millis(50)));
+    }
+}
+
 /// The tools' definitions.
 fn tools() -> Value {
     json::parse(&TOOLS.replace("FINDER", FINDER).replace("APP", APP))
@@ -249,7 +287,10 @@ impl Hub {
                 self.host
             )
         })?;
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+        // Read in short slices, so that a request the client cancelled stops waiting for the
+        // answer (and closes the connection) instead of holding on for the whole minute.
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+        let deadline = Instant::now() + Duration::from_secs(60);
         write!(
             stream,
             "POST /api HTTP/1.1\r\nHost: {}\r\nX-Frus-DevTools: {}\r\nContent-Type: application/json\r\n\
@@ -260,9 +301,29 @@ impl Hub {
         )
         .map_err(|e| e.to_string())?;
         let mut answer = Vec::new();
-        stream
-            .read_to_end(&mut answer)
-            .map_err(|e| format!("DevTools did not answer: {e}"))?;
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => answer.extend_from_slice(&chunk[..n]),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    if cancelled() {
+                        return Err(CANCELLED.into());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!("DevTools did not answer: {e}"));
+                    }
+                }
+                Err(e) => return Err(format!("DevTools did not answer: {e}")),
+            }
+        }
         let answer = String::from_utf8_lossy(&answer);
         let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
         if !head.starts_with("HTTP/1.1 200") {
@@ -428,7 +489,8 @@ impl Shared {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Waits until `done` holds, or `wait` has passed: whether it holds.
+    /// Waits until `done` holds, or `wait` has passed, or the request is cancelled: whether it
+    /// holds.
     fn wait_until(&self, wait: Duration, mut done: impl FnMut(&State) -> bool) -> bool {
         let deadline = Instant::now() + wait;
         let mut state = self.lock();
@@ -437,12 +499,12 @@ impl Shared {
                 return true;
             }
             let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            if left.is_zero() || cancelled() {
                 return false;
             }
             state = self
                 .changed
-                .wait_timeout(state, left.min(Duration::from_millis(500)))
+                .wait_timeout(state, left.min(Duration::from_millis(100)))
                 .map(|(state, _)| state)
                 .unwrap_or_else(|e| e.into_inner().0);
         }
@@ -450,15 +512,20 @@ impl Shared {
 }
 
 /// An application the server drives: one it launched, or one it attached to.
+///
+/// Shared by the requests served at the same time (milestone 854): everything a request may
+/// change is behind its own lock.
 struct Session {
     id: String,
-    /// The `frus run` it started, and its input: none when attached.
-    child: Option<Child>,
-    input: Option<ChildStdin>,
+    /// Whether the server started it (`launch_app`) rather than attached to it.
+    launched: bool,
+    /// The `frus run` it started, and its input: none when attached, or once stopped.
+    child: Mutex<Option<Child>>,
+    input: Mutex<Option<ChildStdin>>,
     root: Option<PathBuf>,
     started_at: SystemTime,
     shared: Arc<Shared>,
-    commands: u64,
+    commands: AtomicU64,
 }
 
 impl Session {
@@ -467,16 +534,16 @@ impl Session {
     }
 
     /// A command to the launched `frus run` (`app.restart`, `app.stop`).
-    fn command(&mut self, method: &str, params: Value) -> Result<(), String> {
-        self.commands += 1;
+    fn command(&self, method: &str, params: Value) -> Result<(), String> {
+        let number = self.commands.fetch_add(1, Ordering::SeqCst) + 1;
         let line = object([
-            ("id", self.commands.into()),
+            ("id", number.into()),
             ("method", method.into()),
             ("params", params),
         ])
         .to_json();
-        let input = self
-            .input
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
+        let input = input
             .as_mut()
             .ok_or("this app was attached to, not launched")?;
         writeln!(input, "{line}")
@@ -488,10 +555,13 @@ impl Session {
     /// (`wait`), and an application restarting is asked again until it is back.
     fn call(&self, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
         let deadline = Instant::now() + wait;
-        if self.child.is_some() {
+        if self.launched {
             let up = self
                 .shared
                 .wait_until(wait, |s| s.hub.is_some() || s.stopped.is_some());
+            if cancelled() {
+                return Err(CANCELLED.into());
+            }
             let state = self.shared.lock();
             if let Some(why) = &state.stopped {
                 return Err(format!(
@@ -516,32 +586,47 @@ impl Session {
                     if (why.contains("not connected") || why.contains("did not answer"))
                         && Instant::now() < deadline =>
                 {
-                    std::thread::sleep(Duration::from_millis(300));
+                    if pause(Duration::from_millis(300)) {
+                        return Err(CANCELLED.into());
+                    }
                 }
                 outcome => return outcome,
             }
         }
     }
 
-    /// Ends the run: asked to stop, then made to.
-    fn stop(&mut self) -> String {
-        let Some(child) = self.child.as_mut() else {
+    /// Ends the run: asked to stop, then made to. Not cut short by a cancellation: a run half
+    /// stopped would be left behind.
+    fn stop(&self) -> String {
+        let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            if self.launched {
+                return format!("{} is already stopped.", self.id);
+            }
             return match self.hub().map(|hub| hub.call("stop", object([]))) {
                 Some(Ok(_)) => format!("Asked the `frus run` of {} to stop.", self.id),
                 _ => format!("Detached from {}.", self.id),
             };
         };
         let pid = child.id();
+        // A run still building reads no command until its application is up: it is ended at
+        // once, its build with it.
+        let building = {
+            let state = self.shared.lock();
+            !state.started && state.hub.is_none() && state.stopped.is_none()
+        };
+        if building {
+            kill_tree(&mut child, pid);
+            return format!("Stopped {} while it was building.", self.id);
+        }
         let _ = self.command("app.stop", object([]));
         let deadline = Instant::now() + Duration::from_secs(20);
-        let child = self.child.as_mut().expect("launched");
         while Instant::now() < deadline {
             if let Ok(Some(_)) = child.try_wait() {
                 return format!("Stopped {}.", self.id);
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        kill_tree(child, pid);
+        kill_tree(&mut child, pid);
         format!("Stopped {} (it had to be killed).", self.id)
     }
 }
@@ -618,12 +703,13 @@ fn launch(
     }
     Ok(Session {
         id: format!("frus-run-{}", child.id()),
-        input: child.stdin.take(),
-        child: Some(child),
+        launched: true,
+        input: Mutex::new(child.stdin.take()),
+        child: Mutex::new(Some(child)),
         root: Some(root.to_path_buf()),
         started_at: SystemTime::now(),
         shared,
-        commands: 0,
+        commands: AtomicU64::new(0),
     })
 }
 
@@ -646,12 +732,13 @@ fn attached(hub: Hub, root: Option<PathBuf>) -> Result<Session, String> {
     }
     Ok(Session {
         id: format!("{}@{}", text("app"), hub.host),
-        child: None,
-        input: None,
+        launched: false,
+        child: Mutex::new(None),
+        input: Mutex::new(None),
         root,
         started_at: SystemTime::now(),
         shared,
-        commands: 0,
+        commands: AtomicU64::new(0),
     })
 }
 
@@ -723,7 +810,7 @@ fn newest_source(root: &Path) -> Option<SystemTime> {
 // --- The server ---
 
 struct Server {
-    sessions: Vec<Session>,
+    sessions: Mutex<Vec<Arc<Session>>>,
     /// Where the server was started: the default project.
     here: PathBuf,
 }
@@ -1033,25 +1120,64 @@ fn unbase64(text: &str) -> Result<Vec<u8>, String> {
 /// A frus command run in the application's directory, its output captured.
 fn frus_command(root: &Path, args: &[&str]) -> ToolResult {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
-    let output = Command::new(program)
+    let mut child = Command::new(program)
         .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("could not run frus {}: {e}", args.join(" ")))?;
-    let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
-    let errors = String::from_utf8_lossy(&output.stderr);
+    // Both streams read to their end on threads of their own, so that a full pipe never
+    // holds the command up while the request waits for it, or watches for a cancellation.
+    let drain = |stream: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut stream) = stream {
+                let _ = stream.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if pause(Duration::from_millis(100)) {
+                    let pid = child.id();
+                    kill_tree(&mut child, pid);
+                    return Err(CANCELLED.into());
+                }
+            }
+            Err(e) => return Err(format!("frus {}: {e}", args.join(" "))),
+        }
+    };
+    let mut said = String::from_utf8_lossy(&out.join().unwrap_or_default()).into_owned();
+    let errors = err.join().unwrap_or_default();
+    let errors = String::from_utf8_lossy(&errors);
     if !errors.trim().is_empty() {
         said.push_str("\n--- standard error ---\n");
         said.push_str(&errors);
     }
-    let verdict = if output.status.success() {
+    let verdict = if status.success() {
         "succeeded"
     } else {
         "failed"
     };
     let report = format!("`frus {}` {verdict}.\n{said}", args.join(" "));
-    if output.status.success() {
+    if status.success() {
         Ok(vec![text(report)])
     } else {
         Err(clip(report))
@@ -1066,24 +1192,54 @@ impl Server {
         Ok(Project::find(&dir)?.root)
     }
 
+    /// The sessions as they are now, in the order they were made.
+    fn sessions(&self) -> MutexGuard<'_, Vec<Arc<Session>>> {
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Adds `session`, in place of one with the same id.
+    fn add(&self, session: Arc<Session>) {
+        let mut sessions = self.sessions();
+        sessions.retain(|s| s.id != session.id);
+        sessions.push(session);
+    }
+
+    /// The session `id`, if it is in the list.
+    fn find(&self, id: &str) -> Option<Arc<Session>> {
+        self.sessions().iter().find(|s| s.id == id).cloned()
+    }
+
+    /// Takes the session `id` out of the list, if it is there.
+    fn remove(&self, id: &str) -> Option<Arc<Session>> {
+        let mut sessions = self.sessions();
+        let index = sessions.iter().position(|s| s.id == id)?;
+        Some(sessions.remove(index))
+    }
+
     /// The session a tool acts on: `app_id`'s, or the last one; with none, a run of the
     /// project's found and attached to.
-    fn session(&mut self, args: &Value) -> Result<&mut Session, String> {
+    fn session(&self, args: &Value) -> Result<Arc<Session>, String> {
         if let Some(id) = arg_str(args, "app_id") {
             return self
-                .sessions
-                .iter_mut()
+                .sessions()
+                .iter()
                 .find(|s| s.id == id)
+                .cloned()
                 .ok_or_else(|| format!("no app `{id}`: app_status lists them"));
         }
-        if self.sessions.is_empty() {
+        // The list is not held while a run is looked for: that asks each noted run whether it
+        // is alive, and other requests go on meanwhile.
+        if self.sessions().is_empty() {
             let root = self.project_root(args).ok();
             if let Some(hub) = root.as_ref().and_then(|root| self.discover(root).ok()) {
-                let session = attached(hub, root)?;
-                self.sessions.push(session);
+                let session = Arc::new(attached(hub, root)?);
+                let mut sessions = self.sessions();
+                if sessions.is_empty() {
+                    sessions.push(session);
+                }
             }
         }
-        self.sessions.last_mut().ok_or_else(|| {
+        self.sessions().last().cloned().ok_or_else(|| {
             "no app: start one with launch_app, or attach_app to a `frus run` that is going".into()
         })
     }
@@ -1104,11 +1260,11 @@ impl Server {
     }
 
     /// An application call through the session `args` picks.
-    fn app(&mut self, args: &Value, method: &str, params: Value) -> Result<Value, String> {
+    fn app(&self, args: &Value, method: &str, params: Value) -> Result<Value, String> {
         self.session(args)?.call(method, params, READY_WAIT)
     }
 
-    fn call_tool(&mut self, name: &str, args: &Value) -> ToolResult {
+    fn call_tool(&self, name: &str, args: &Value) -> ToolResult {
         match name {
             "list_devices" => {
                 let found = crate::devices::discover();
@@ -1130,19 +1286,13 @@ impl Server {
                 let device = session.shared.lock().device.clone();
                 let uri = session.hub().map(|h| h.uri()).unwrap_or_default();
                 let says = format!("Attached to {} on {device}. DevTools: {uri}", session.id);
-                self.sessions.retain(|s| s.id != session.id);
-                self.sessions.push(session);
+                self.add(Arc::new(session));
                 Ok(vec![text(says)])
             }
             "app_status" => self.app_status(args),
             "stop_app" => {
                 let id = self.session(args)?.id.clone();
-                let index = self
-                    .sessions
-                    .iter()
-                    .position(|s| s.id == id)
-                    .ok_or("no app")?;
-                let mut session = self.sessions.remove(index);
+                let session = self.remove(&id).ok_or("no app")?;
                 Ok(vec![text(session.stop())])
             }
             "hot_reload" => self.reload(args, false),
@@ -1398,7 +1548,7 @@ impl Server {
         }
     }
 
-    fn launch_app(&mut self, args: &Value) -> ToolResult {
+    fn launch_app(&self, args: &Value) -> ToolResult {
         let root = self.project_root(args)?;
         let flags: Vec<String> = args
             .get("flags")
@@ -1439,20 +1589,31 @@ impl Server {
                 slot.as_deref().filter(|_| several),
             )?;
             ids.push(session.id.clone());
-            self.sessions.push(session);
+            // In the list at once: app_status and get_logs see it while it builds.
+            self.add(Arc::new(session));
         }
         let wait = seconds(args, "wait_seconds", 300);
         let deadline = Instant::now() + wait;
         let mut said = Vec::new();
         let mut failed = Vec::new();
         for id in &ids {
-            let Some(session) = self.sessions.iter().find(|s| &s.id == id) else {
+            let Some(session) = self.find(id) else {
                 continue;
             };
             let left = deadline.saturating_duration_since(Instant::now());
             let up = session.shared.wait_until(left, |s| {
                 s.stopped.is_some() || if release { s.started } else { s.hub.is_some() }
             });
+            if cancelled() {
+                // The agent gave up on the launch: the runs it started are not left building
+                // behind its back.
+                for id in &ids {
+                    if let Some(session) = self.remove(id) {
+                        session.stop();
+                    }
+                }
+                return Err(CANCELLED.into());
+            }
             let (stopped, progress, device) = {
                 let state = session.shared.lock();
                 (
@@ -1481,7 +1642,7 @@ impl Server {
                 said.push(self.describe(id, Duration::from_secs(30)));
             }
         }
-        self.sessions.retain(|s| !failed.contains(&s.id));
+        self.sessions().retain(|s| !failed.contains(&s.id));
         if several {
             said.push("Each device is its own app: pass app_id to act on one.".into());
         }
@@ -1493,7 +1654,7 @@ impl Server {
 
     /// A session's state, with its application's `hello` once it answers.
     fn describe(&self, id: &str, wait: Duration) -> String {
-        let Some(session) = self.sessions.iter().find(|s| s.id == id) else {
+        let Some(session) = self.find(id) else {
             return format!("no app `{id}`");
         };
         let (device, stopped, hub, progress, started, hot) = {
@@ -1507,7 +1668,7 @@ impl Server {
                 s.hot,
             )
         };
-        let how = if session.child.is_some() {
+        let how = if session.launched {
             if hot {
                 "launched, hot reload on"
             } else {
@@ -1548,11 +1709,11 @@ impl Server {
         }
     }
 
-    fn app_status(&mut self, args: &Value) -> ToolResult {
-        if self.sessions.is_empty() {
+    fn app_status(&self, args: &Value) -> ToolResult {
+        if self.sessions().is_empty() {
             let _ = self.session(args);
         }
-        if self.sessions.is_empty() {
+        if self.sessions().is_empty() {
             return Ok(vec![text(
                 "No app. launch_app starts one; attach_app reaches a `frus run` already going.",
             )]);
@@ -1563,8 +1724,11 @@ impl Server {
             session
                 .shared
                 .wait_until(wait, |s| s.hub.is_some() || s.stopped.is_some());
+            if cancelled() {
+                return Err(CANCELLED.into());
+            }
         }
-        let ids: Vec<String> = self.sessions.iter().map(|s| s.id.clone()).collect();
+        let ids: Vec<String> = self.sessions().iter().map(|s| s.id.clone()).collect();
         let lines: Vec<String> = ids
             .iter()
             .map(|id| self.describe(id, Duration::from_secs(5)))
@@ -1575,14 +1739,16 @@ impl Server {
         ))])
     }
 
-    fn reload(&mut self, args: &Value, full: bool) -> ToolResult {
+    fn reload(&self, args: &Value, full: bool) -> ToolResult {
         let wait = seconds(args, "wait_seconds", 300);
         let session = self.session(args)?;
         let asked = SystemTime::now();
-        if session.child.is_none() {
+        if !session.launched {
             let hub = session.hub().ok_or("no DevTools")?;
             hub.call(if full { "restart" } else { "reload" }, object([]))?;
-            std::thread::sleep(Duration::from_secs(1));
+            if pause(Duration::from_secs(1)) {
+                return Err(CANCELLED.into());
+            }
             session.call("hello", object([]), wait)?;
             return Ok(vec![text(if full {
                 "Restart asked of the `frus run` attached to; the app answers again."
@@ -1614,6 +1780,9 @@ impl Server {
         let done = shared.wait_until(wait, |s| {
             s.outcome_since(since).is_some() || s.stopped.is_some()
         });
+        if cancelled() {
+            return Err(CANCELLED.into());
+        }
         let state = shared.lock();
         if let Some(why) = &state.stopped {
             return Err(format!(
@@ -1686,12 +1855,12 @@ Errors:
         }
     }
 
-    fn logs(&mut self, args: &Value) -> ToolResult {
+    fn logs(&self, args: &Value) -> ToolResult {
         let since = arg_f64(args, "since").map(|n| n as u64);
         let limit = arg_f64(args, "limit").map_or(100, |l| l.max(1.0) as usize);
         let errors_only = arg_bool(args, "errors_only");
         let session = self.session(args)?;
-        let lines: Vec<Line> = if session.child.is_some() {
+        let lines: Vec<Line> = if session.launched {
             let state = session.shared.lock();
             state
                 .lines
@@ -1749,7 +1918,7 @@ Errors:
         Ok(vec![text(out)])
     }
 
-    fn screenshot(&mut self, args: &Value) -> ToolResult {
+    fn screenshot(&self, args: &Value) -> ToolResult {
         let max = arg_f64(args, "max_size").map_or(1024, |m| m.max(0.0) as u32);
         let mut params = object([]);
         if let Value::Object(members) = &mut params {
@@ -1828,7 +1997,7 @@ Errors:
     }
 
     /// One JSON-RPC message from the client: the answer to send, if it is a request.
-    fn handle(&mut self, message: &Value) -> Option<Value> {
+    fn handle(&self, message: &Value) -> Option<Value> {
         let id = message.get("id").cloned();
         let method = message.get("method").and_then(Value::as_str);
         let (Some(id), Some(method)) = (id, method) else {
@@ -1898,9 +2067,10 @@ Errors:
     }
 
     /// The client is gone: every run launched is stopped.
-    fn shut_down(&mut self) {
-        for mut session in self.sessions.drain(..) {
-            if session.child.is_some() {
+    fn shut_down(&self) {
+        let sessions: Vec<Arc<Session>> = self.sessions().drain(..).collect();
+        for session in sessions {
+            if session.launched {
                 let _ = session.stop();
             }
         }
@@ -1922,29 +2092,94 @@ fn error(id: Value, code: i32, message: &str) -> Value {
 }
 
 /// `frus mcp`: serves until the client closes standard input.
+///
+/// Requests are served **side by side** (milestone 854): a tool's call runs on a thread of its
+/// own, so that while `launch_app` waits for a build, `app_status`, `get_logs` or a `ping` are
+/// read and answered. Each answer is written whole, one line, under one lock. A request the
+/// client cancels (`notifications/cancelled`) stops waiting and is not answered.
 pub(crate) fn mcp() -> Result<ExitCode, String> {
     report::to_stderr();
-    let mut server = Server {
-        sessions: Vec::new(),
+    let server = Arc::new(Server {
+        sessions: Mutex::new(Vec::new()),
         here: std::env::current_dir().map_err(|e| e.to_string())?,
-    };
+    });
     let stdin = std::io::stdin();
-    for line in stdin.lock().lines().map_while(Result::ok) {
+    serve(&server, stdin.lock(), report::line);
+    server.shut_down();
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The requests being served, by their id (as JSON), each with its cancellation flag.
+type InFlight = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
+
+/// Reads `input` to its end, a message a line, and sends each answer to `send`. Returns once
+/// the input has ended and every request still served has stopped: those are cancelled
+/// first, as their client is gone.
+fn serve(server: &Arc<Server>, input: impl BufRead, send: fn(&Value)) {
+    let in_flight = InFlight::default();
+    let flights =
+        |in_flight: &InFlight| in_flight.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    for line in input.lines().map_while(Result::ok) {
         let line = line.trim_start_matches('\u{feff}').trim();
         if line.is_empty() {
             continue;
         }
-        let answer = match json::parse(line) {
-            Ok(message @ Value::Object(_)) => server.handle(&message),
-            Ok(_) => Some(error(Value::Null, -32600, "a message is one JSON object")),
-            Err(why) => Some(error(Value::Null, -32700, &why)),
+        let message = match json::parse(line) {
+            Ok(message @ Value::Object(_)) => message,
+            Ok(_) => {
+                send(&error(Value::Null, -32600, "a message is one JSON object"));
+                continue;
+            }
+            Err(why) => {
+                send(&error(Value::Null, -32700, &why));
+                continue;
+            }
         };
-        if let Some(answer) = answer {
-            report::line(&answer);
+        let method = message.get("method").and_then(Value::as_str);
+        if method == Some("notifications/cancelled") {
+            let asked = message
+                .get("params")
+                .and_then(|p| p.get("requestId"))
+                .map(Value::to_json);
+            if let Some(flag) = asked.and_then(|id| flights(&in_flight).get(&id).cloned()) {
+                flag.store(true, Ordering::SeqCst);
+            }
+            continue;
         }
+        let id = message.get("id").map(Value::to_json);
+        let (Some(id), Some("tools/call")) = (id, method) else {
+            // Everything but a tool's call is answered at once, in order.
+            if let Some(answer) = server.handle(&message) {
+                send(&answer);
+            }
+            continue;
+        };
+        let flag = Arc::new(AtomicBool::new(false));
+        in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone(), flag.clone());
+        let (server, in_flight) = (server.clone(), in_flight.clone());
+        workers.retain(|worker| !worker.is_finished());
+        workers.push(std::thread::spawn(move || {
+            REQUEST.with(|request| *request.borrow_mut() = Some(flag.clone()));
+            let answer = server.handle(&message);
+            in_flight
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
+            if let Some(answer) = answer.filter(|_| !flag.load(Ordering::SeqCst)) {
+                send(&answer);
+            }
+        }));
     }
-    server.shut_down();
-    Ok(ExitCode::SUCCESS)
+    for flag in flights(&in_flight).values() {
+        flag.store(true, Ordering::SeqCst);
+    }
+    for worker in workers {
+        let _ = worker.join();
+    }
 }
 
 #[cfg(test)]
@@ -1954,7 +2189,7 @@ mod tests {
 
     fn server() -> Server {
         Server {
-            sessions: Vec::new(),
+            sessions: Mutex::new(Vec::new()),
             here: std::env::temp_dir(),
         }
     }

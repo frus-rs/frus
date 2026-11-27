@@ -3225,6 +3225,8 @@ type Overlay<'a, Msg> = (
     Option<frus_core::Color>,
     std::rc::Rc<Theme>,
     Option<crate::OverlayPresentation>,
+    // The values in scope where it was declared (milestone 854).
+    Option<std::rc::Rc<[crate::scoped::ScopedValue]>>,
 );
 
 struct Builder<'a, Msg> {
@@ -6554,6 +6556,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     widget.overlay_scrim(&self.theme),
                     self.theme.clone(),
                     widget.overlay_presentation(),
+                    self.runtime.states.scopes().capture(),
                 ));
             }
         } else {
@@ -7156,6 +7159,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             None,
             self.theme.clone(),
             None,
+            self.runtime.states.scopes().capture(),
         ));
     }
 
@@ -7277,6 +7281,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             None,
             self.theme.clone(),
             None,
+            self.runtime.states.scopes().capture(),
         ));
     }
 
@@ -7296,8 +7301,19 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             scrim,
             theme,
             presentation,
+            scope,
         )) = self.overlays.pop()
         {
+            // **What was in scope where it was declared**, for the whole of its layout and
+            // painting (milestone 854): the walk has left that place, and a component inside
+            // (a dialog's form, a menu's rows, a list built on demand) finds the model the
+            // page put in scope, as it finds the page's theme. The scope in force when the
+            // walk ended is put back after it.
+            let runtime = self.runtime;
+            let _scope = runtime
+                .states
+                .scopes()
+                .restore(scope.as_deref().unwrap_or(&[]));
             // The application's snack bar, already shown inside a scaffold's own layout —
             // above its bottom bar, its floating button above it — is not shown again over
             // the window (milestone 766).
@@ -7308,6 +7324,14 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // painting; whatever was in force when the walk ended is put back after it,
             // so two overlays declared under two themes do not bleed into each other.
             let outer = std::mem::replace(&mut self.theme, theme);
+            // **Its components are built first**, under that theme and that scope. Content an
+            // overlay holds outside its children (a dialog's panel, a drawer's, a sheet's) is
+            // reached by no walk before this one, and the layout cache's fingerprint, taken
+            // first, read a component inside that had never been built: a panic in a debug
+            // build, an empty fingerprint in a release one (milestone 854). The same
+            // preparation a list's row gets (milestone 748); a component already built this
+            // frame is not built again.
+            build_deferred_at(content, oid, &self.theme, runtime);
             // Drawers slide along a **spring curve** (a gentle arrival), not linearly; the
             // other overlays keep their raw progress.
             let progress = if matches!(

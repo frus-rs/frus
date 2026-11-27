@@ -8,10 +8,22 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 853 so far, each documenting the objective, the alternatives
+> record — one per step, 854 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **An overlay sees the page's scope, and `frus mcp` serves requests side by side** (J854,
+  L-043, L-053). A component inside a dialog, a sheet, a drawer, a popover, a hover card, a
+  menu's row, a dropdown's option, a search view or an open container finds the `Model` the
+  page that declared it put in scope, the nearest one first, and is built again alone when it
+  changes; it used to find the application's, or panic with none. A page pushed on the router
+  sees what is in scope around the router, not what the page that pushed it put there. The
+  managing-state guide says how to carry a model where it is not in scope. `frus mcp` serves
+  each tool's call on its own thread: `app_status`, `get_logs` and `ping` are answered while
+  `launch_app` builds; `notifications/cancelled` stops the request it names, which is not
+  answered, and a cancelled launch ends the runs it started. A run still building is stopped
+  at once instead of after twenty seconds.
 
 - **A change lays out the path to it, not the whole tree** (J853, L-042, part of #224). A
   layout keeps, node by node, what each box measured, and the next layout of the same root

@@ -712,14 +712,22 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** widgets
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** `provide` / `service` keep one value per type for the whole application. Two
-  instances of a screen cannot each give their own value to their subtree (the second
-  `provide` replaces the first), and a value that changes cannot rebuild only the widgets that
-  read it.
-- **Workaround:** Pass the value down, or key the global value by the screen's identity.
+- **Status:** fixed in 0.7.0
+- **What you hit:** Up to 0.6.0, `provide` / `service` kept one value per type for the whole
+  application, and a change rebuilt the whole tree. Since milestone 825 a `Scoped` puts a value
+  in scope for a subtree, the nearest one wins, and a `Model` builds again only the components
+  that read it. Milestone 825 left overlays unchecked: a component inside a dialog, a sheet, a
+  menu or any other overlay found the application's value instead of the page's, or panicked
+  with none. Since milestone 854 an overlay sees what is in scope where it is declared, checked
+  for every overlay kind through the shell's frame; a page pushed on the router sees what is
+  above the router, not the page that pushed it.
+- **Workaround:** None needed. To take a value where it is not in scope (a page pushed on the
+  router, a snack bar), wrap what is shown in `Scoped::new(model.clone(), ..)`, or put it around
+  the router with `FrusApp::builder`.
 - **Evidence:** [#222](https://github.com/frus-rs/frus/issues/222),
-  [crates/frus-widgets/src/component.rs](crates/frus-widgets/src/component.rs)
+  [docs/milestone-825.md](docs/milestone-825.md),
+  [docs/milestone-854.md](docs/milestone-854.md),
+  [docs/guide/managing-state.md](docs/guide/managing-state.md)
 
 ### L-044 Routes and translation keys are strings checked at run time
 
@@ -847,11 +855,17 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** tooling
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** While `launch_app` waits for a build, every other request waits too, and a
-  cancellation is not acted on. Only tools are offered, not resources or prompts.
-- **Workaround:** Pass a smaller `wait_seconds` and poll `app_status`.
-- **Evidence:** [docs/milestone-789.md](docs/milestone-789.md)
+- **Status:** partial
+- **What you hit:** Up to 0.6.0, while `launch_app` waited for a build every other request
+  waited too, and a cancellation was not acted on. Since milestone 854 each tool's call is
+  served on its own thread: `app_status`, `get_logs` or a `ping` are answered while a launch
+  builds, and `notifications/cancelled` stops the request it names (a cancelled launch ends the
+  runs it started). What is left: only tools are offered, not resources or prompts, and no
+  progress is reported while a request waits.
+- **Workaround:** None needed for waiting. Follow a long launch with `app_status` and
+  `get_logs`.
+- **Evidence:** [docs/milestone-789.md](docs/milestone-789.md),
+  [docs/milestone-854.md](docs/milestone-854.md)
 
 ## Packaging and size
 
