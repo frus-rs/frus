@@ -249,6 +249,9 @@ mod window_memory;
 #[cfg(any(all(desktop, target_os = "linux"), test))]
 mod window_system;
 // The Windows host of native views (milestone 802).
+/// The file tree through the shell (milestone 855).
+#[cfg(all(test, desktop))]
+mod file_tree_tests;
 /// Shortcuts written with the primary modifier, and the editing defaults overridden, through
 /// the shell (milestone 852).
 #[cfg(all(test, desktop))]

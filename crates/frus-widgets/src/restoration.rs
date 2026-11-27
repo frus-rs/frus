@@ -459,6 +459,10 @@ pub(crate) struct ItemScopes {
     prefix: &'static str,
     /// The key each index had when it was last built.
     keys: RefCell<std::collections::HashMap<usize, u64>>,
+    /// The key of the item at an index, told by the list's owner before it is built (milestone
+    /// 855): a guess that is right the first time, so a keyed row is built once.
+    #[allow(clippy::type_complexity)]
+    known: RefCell<Option<Rc<dyn Fn(usize) -> Option<u64>>>>,
 }
 
 impl ItemScopes {
@@ -468,7 +472,13 @@ impl ItemScopes {
             parent: RefCell::new(current_scope()),
             prefix,
             keys: RefCell::default(),
+            known: RefCell::default(),
         })
+    }
+
+    /// Tells the key of the item at each index before it is built (milestone 855).
+    pub(crate) fn set_known_keys(&self, keys: Rc<dyn Fn(usize) -> Option<u64>>) {
+        *self.known.borrow_mut() = Some(keys);
     }
 
     /// Puts the items below `parent` instead: the list's own restoration id.
@@ -491,7 +501,11 @@ impl ItemScopes {
         index: usize,
         build: impl Fn() -> Box<dyn Widget<Msg>>,
     ) -> Box<dyn Widget<Msg>> {
-        let guess = self.keys.borrow().get(&index).copied();
+        let known = self.known.borrow().clone();
+        let guess = match known {
+            Some(known) => known(index),
+            None => self.keys.borrow().get(&index).copied(),
+        };
         let item = {
             let _scope = enter_scope(self.scope_of(index, guess));
             build()
