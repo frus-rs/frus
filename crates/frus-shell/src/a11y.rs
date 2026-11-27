@@ -114,6 +114,10 @@ fn to_ak_node(rect: Rect, sem: &SemanticsProperties) -> Node {
         // A control that opens something says whether it is open (milestone 786).
         node.set_expanded(expanded);
     }
+    if sem.multiselectable {
+        // A tree or a list whose items are selected several at a time (milestone 855).
+        node.set_multiselectable();
+    }
     if let Some((min, value, max)) = sem.range {
         node.set_numeric_value(value as f64);
         node.set_min_numeric_value(min as f64);
@@ -490,6 +494,15 @@ mod tests {
         assert_eq!(item.is_selected(), Some(true));
         assert_eq!(item.toggled(), None);
         assert_eq!(item.is_expanded(), Some(false));
+    }
+
+    /// A tree whose items are selected several at a time says so (milestone 855).
+    #[test]
+    fn a_tree_of_several_selections_is_multiselectable() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 300.0);
+        let tree = to_ak_node(rect, &sem(Role::Tree).multiselectable(true));
+        assert!(tree.is_multiselectable());
+        assert!(!to_ak_node(rect, &sem(Role::Tree)).is_multiselectable());
     }
 
     #[test]

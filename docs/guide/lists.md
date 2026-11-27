@@ -447,9 +447,18 @@ and `ChatStrings` replaces their words.
 
 ## A tree of files
 
-`FileTree` shows folders and files: a chevron opens a folder, a row selects, Right and Left
-open and close from the keyboard, and a folder whose children are not loaded yet shows a loading
-row until the application gives them.
+`FileTree` shows folders and files: a chevron opens a folder, a row selects, and a folder whose
+children are not loaded yet shows a loading row until the application gives them. It scrolls,
+and only the rows in view are built, so a tree with tens of thousands of open rows costs what its
+window shows. It takes the room on offer, or `.height(..)`; `.shrink_wrap(true)` makes a short
+tree as tall as its rows, inside a page that scrolls.
+
+The keyboard works as in a desktop explorer: Up and Down go from row to row, Right opens a
+folder and then goes into it, Left closes it and then goes up to its parent, Home and End go to
+the ends, Enter activates (`on_activate`) and Space selects, and letters typed go to the next
+row whose name starts with them. With `.multi_select(true)`, Ctrl (Cmd on an Apple keyboard)
+with a click or Space adds a row to the selection, Shift with a click, an arrow, Home or End
+selects a range, and the new selection arrives in `on_selection_change`.
 
 ```rust
 use frus::{FileNode, FileTree};
@@ -468,5 +477,25 @@ let tree: FileTree<Msg> = FileTree::new(vec![
 .selected(Some(2))
 .on_toggle(Msg::Toggle)
 .on_select(Msg::Select);
+# let _ = tree;
+```
+
+Several rows at once, in a tree of its own height:
+
+```rust
+use frus::{FileNode, FileTree};
+
+#[derive(Clone)]
+enum Msg {
+    Selected(Vec<u64>),
+    Open(u64),
+}
+
+let tree: FileTree<Msg> = FileTree::new((1..=5_000).map(|i| FileNode::file(i, format!("file {i}"))))
+    .multi_select(true)
+    .selection([1, 2])
+    .on_selection_change(Msg::Selected)
+    .on_activate(Msg::Open)
+    .height(320.0);
 # let _ = tree;
 ```

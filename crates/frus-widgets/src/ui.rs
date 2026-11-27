@@ -476,6 +476,9 @@ struct Hit<Msg> {
     /// get back to the untransformed frame where `rect` lives. `None` = an axis-aligned,
     /// untransformed rect (the common case).
     xform: Option<Affine>,
+    /// What a click sends told the modifiers held, when the target says
+    /// ([`Widget::on_modified_click`], milestone 855).
+    modified: Option<crate::rowkeys::ModifiedClick<Msg>>,
 }
 
 impl<Msg> Hit<Msg> {
@@ -542,6 +545,9 @@ struct Snapshot {
     overlays: usize,
     /// The hover cards walked (milestone 809): a subtree holding one is never replayed.
     hover_watches: usize,
+    /// The stops that answer keys themselves (milestone 855): a subtree holding one is never
+    /// replayed, since the closures are not part of what a boundary keeps.
+    row_keys: usize,
     focus_scope_start: Option<usize>,
 }
 
@@ -869,6 +875,18 @@ pub struct Ui<Msg = crate::callback::Callback> {
         std::ops::Range<usize>,
         std::rc::Rc<dyn Fn(KeyStroke) -> Option<Msg>>,
     )>,
+    /// The focus stops that answer keys themselves ([`Widget::on_row_key`], milestone 855).
+    row_keys: Vec<(WidgetId, crate::rowkeys::RowKeyHandler<Msg>)>,
+}
+
+/// What [`Ui::row_key`] found a focus stop answers to a key (milestone 855).
+pub struct RowKeyOutcome<Msg> {
+    /// The messages to send, in order.
+    pub messages: Vec<Msg>,
+    /// The focus stop the focus moves to: a row of the same list, built or not.
+    pub focus: Option<WidgetId>,
+    /// The scrolls that bring that row into view, nearest region first.
+    pub scrolls: Vec<(WidgetId, (f32, f32))>,
 }
 
 impl<Msg: Clone> Ui<Msg> {
@@ -1108,6 +1126,95 @@ impl<Msg: Clone> Ui<Msg> {
             .iter()
             .find(|hit| hit.id == id)
             .and_then(|hit| hit.msg.clone())
+    }
+
+    /// The message target `id` emits for a click with `modifiers` held (milestone 855): what
+    /// its [`Widget::on_modified_click`] answers, when it has one and answers, otherwise
+    /// [`msg_for`](Self::msg_for)'s.
+    pub fn msg_for_click(&self, id: WidgetId, modifiers: crate::ClickModifiers) -> Option<Msg> {
+        let hit = self.hits.iter().find(|hit| hit.id == id)?;
+        hit.modified
+            .as_ref()
+            .and_then(|modified| modified(modifiers))
+            .or_else(|| hit.msg.clone())
+    }
+
+    /// What the focus stop `focused` answers to `key` itself ([`Widget::on_row_key`],
+    /// milestone 855), and, when the answer moves the focus to another row of its list, the
+    /// identity that row has (built or not) and the scrolls that bring it into view.
+    pub fn row_key(
+        &self,
+        focused: WidgetId,
+        key: crate::RowKey,
+        runtime: &crate::Runtime,
+    ) -> Option<RowKeyOutcome<Msg>> {
+        let (_, handler) = self.row_keys.iter().rev().find(|(id, _)| *id == focused)?;
+        let answer = handler(key)?;
+        let mut outcome = RowKeyOutcome {
+            messages: answer.messages,
+            focus: None,
+            scrolls: Vec::new(),
+        };
+        if let Some(target) = answer.focus {
+            // The row's identity is its list's, keyed: the list builds it there.
+            let list = self
+                .focusables
+                .iter()
+                .find(|f| f.id == focused)
+                .and_then(|f| f.scroll);
+            if let Some(list) = list {
+                outcome.focus = Some(list.keyed(target.key));
+                outcome.scrolls = self.reveal_list_item(list, target.index, runtime);
+            }
+        }
+        Some(outcome)
+    }
+
+    /// The scrolls that bring item `index` of the virtualised list `list` into view, built or
+    /// not, the least movement that does it (milestone 855) — as [`reveal`](Self::reveal) does
+    /// for a focus stop.
+    pub fn reveal_list_item(
+        &self,
+        list: WidgetId,
+        index: usize,
+        runtime: &crate::Runtime,
+    ) -> Vec<(WidgetId, (f32, f32))> {
+        let Some(shape) = runtime.list_shapes.borrow().get(&list).copied() else {
+            return Vec::new();
+        };
+        let Some(area) = self.scrollables.iter().find(|area| area.id == list) else {
+            return Vec::new();
+        };
+        let known = runtime.item_extents.borrow();
+        let known = known.get(&list).filter(|_| shape.variable);
+        let (start, length) = match known {
+            Some(known) => {
+                let guess = known.estimate(shape.item_extent);
+                (known.start_of(index, guess), known.extent_or(index, guess))
+            }
+            None => (index as f32 * shape.item_extent, shape.item_extent),
+        };
+        let current = runtime.scroll.get(&list).copied().unwrap_or((0.0, 0.0));
+        let viewport = area.viewport;
+        let along = shape.lead + start;
+        // Where it is on the screen: from the end the items start at, which for a reversed
+        // list is the far one.
+        let target = if shape.across {
+            let x = if area.reverse_x {
+                viewport.width - (along + length) + current.0
+            } else {
+                along - current.0
+            };
+            Rect::new(viewport.x + x, viewport.y, length, viewport.height)
+        } else {
+            let y = if area.reverse_y {
+                viewport.height - (along + length) + current.1
+            } else {
+                along - current.1
+            };
+            Rect::new(viewport.x, viewport.y + y, viewport.width, length)
+        };
+        self.reveal_rect(target, Some(list), runtime)
     }
 
     /// The editing action the button `id` of a selection bar performs, for a button that
@@ -3266,6 +3373,8 @@ struct Builder<'a, Msg> {
         std::ops::Range<usize>,
         std::rc::Rc<dyn Fn(KeyStroke) -> Option<Msg>>,
     )>,
+    /// The focus stops that answer keys themselves (milestone 855).
+    row_keys: Vec<(WidgetId, crate::rowkeys::RowKeyHandler<Msg>)>,
     scrollables: Vec<Scrollable>,
     scrollbars: Vec<Scrollbar>,
     draggables: Vec<(WidgetId, Rect)>,
@@ -3569,6 +3678,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             system_ui: self.system_ui.len(),
             overlays: self.overlays.len(),
             hover_watches: self.hover_watches.len(),
+            row_keys: self.row_keys.len(),
             focus_scope_start: self.focus_scope_start,
         }
     }
@@ -3602,6 +3712,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if self.overlays.len() != snap.overlays
             || self.focus_scope_start != snap.focus_scope_start
             || self.hover_watches.len() != snap.hover_watches
+            || self.row_keys.len() != snap.row_keys
         {
             return None;
         }
@@ -3970,6 +4081,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                 rect: own,
                 msg: None,
                 xform: None,
+                modified: None,
             });
         }
         if barrier.paint {
@@ -4862,6 +4974,9 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             && !self.focus_excluded
             && (self.scroll_host.is_some() || (visible.width > 0.0 && visible.height > 0.0))
         {
+            if let Some(keys) = widget.on_row_key() {
+                self.row_keys.push((id, keys));
+            }
             self.focusables.push(Focusable {
                 id,
                 rect: visible,
@@ -4887,6 +5002,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     rect: touch,
                     msg: None,
                     xform: None,
+                    modified: None,
                 });
             }
             // A target for a press: something that answers a tap, or a double or a secondary
@@ -4901,6 +5017,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     rect: touch,
                     msg: tap,
                     xform: None,
+                    modified: widget.on_modified_click(),
                 });
             }
             // A detector that takes a drag (milestone 582).
@@ -4928,6 +5045,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     rect: touch,
                     msg: Some(msg),
                     xform: None,
+                    modified: None,
                 });
             }
             if let Some(action) = widget.edit_action() {
@@ -7561,6 +7679,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                     rect: window,
                     msg: Some(msg),
                     xform: None,
+                    modified: None,
                 });
             }
 
@@ -8018,6 +8137,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         autofill_group: None,
         scopes: Vec::new(),
         listeners: Vec::new(),
+        row_keys: Vec::new(),
         overflows: std::cell::RefCell::new(Vec::new()),
         pending_overflows: std::cell::RefCell::new(std::collections::HashMap::new()),
         built,
@@ -8108,6 +8228,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         overflows: builder.overflows.into_inner(),
         scopes: builder.scopes,
         listeners: builder.listeners,
+        row_keys: builder.row_keys,
     };
     (ui, builder.inspector)
 }

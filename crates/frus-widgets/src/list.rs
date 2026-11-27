@@ -369,6 +369,14 @@ impl<Msg> ListView<Msg> {
         self
     }
 
+    /// The key of the row at each index, told before it is built (milestone 855): a list whose
+    /// owner knows its rows' keys builds a keyed row once rather than twice the first time it
+    /// shows, which is what learning the key by building it costs.
+    pub(crate) fn item_keys(self, keys: impl Fn(usize) -> Option<u64> + 'static) -> Self {
+        self.rows_scope.set_known_keys(std::rc::Rc::new(keys));
+        self
+    }
+
     /// Glides back to the start each time `generation` changes (milestone 815). The first
     /// generation the list is built with is where it starts counting, not a request.
     pub(crate) fn back_to_start_on(mut self, generation: u32) -> Self {

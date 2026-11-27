@@ -221,6 +221,9 @@ pub(crate) fn node_dom_holding(sem: &SemanticsProperties, holds: bool) -> NodeDo
     if let Some(expanded) = sem.expanded {
         attrs.push(("aria-expanded", expanded.to_string()));
     }
+    if sem.multiselectable {
+        attrs.push(("aria-multiselectable", "true".into()));
+    }
     if sem.disabled {
         attrs.push(("aria-disabled", "true".into()));
     }
@@ -955,6 +958,16 @@ mod tests {
         let dom = node_dom(&sem(Role::TreeItem).toggled(true).expanded(false));
         assert_eq!(dom.attr("aria-selected"), Some("true"));
         assert_eq!(dom.attr("aria-expanded"), Some("false"));
+    }
+
+    #[test]
+    fn a_tree_of_several_selections_is_multiselectable() {
+        let dom = node_dom(&sem(Role::Tree).multiselectable(true));
+        assert_eq!(dom.attr("aria-multiselectable"), Some("true"));
+        assert_eq!(
+            node_dom(&sem(Role::Tree)).attr("aria-multiselectable"),
+            None
+        );
     }
 
     #[test]

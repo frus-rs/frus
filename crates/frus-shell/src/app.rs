@@ -8362,8 +8362,15 @@ impl<A: Application> App<A> {
                 // A **positional** click, on a sub-region such as a chart's point, takes
                 // priority over `on_click`.
                 let positional = self.positional_click_on(released);
-                let message =
-                    positional.or_else(|| self.win.ui.as_ref().and_then(|ui| ui.msg_for(pressed)));
+                // With Shift or the platform's own modifier held, what the target says
+                // to them (milestone 855).
+                let modifiers = self.click_modifiers();
+                let message = positional.or_else(|| {
+                    self.win
+                        .ui
+                        .as_ref()
+                        .and_then(|ui| ui.msg_for_click(pressed, modifiers))
+                });
                 // The spoken announcement of the effect — a sort, a selection — read off
                 // the clicked widget before `dispatch` rebuilds the tree.
                 let announce = self
@@ -10636,6 +10643,47 @@ impl<A: Application> App<A> {
         }
         let editing = editing.or_else(|| self.default_editing(stroke));
 
+        // A focus stop that answers keys itself — a row of a tree, which moves the focus to
+        // another row of its list, built or not (milestone 855). After the application's
+        // shortcuts, before the shell's own use of the key. A held Enter or Space activates
+        // once.
+        if let (Some(stroke), Some(focused)) = (stroke, self.win.runtime.input.focused) {
+            let repeat_activation = event.repeat
+                && matches!(
+                    stroke.key,
+                    frus_widgets::ShortcutKey::Enter | frus_widgets::ShortcutKey::Space
+                );
+            let key = frus_widgets::RowKey {
+                stroke,
+                keyboard: self.keyboard(),
+                at: self.click_clock(),
+            };
+            let outcome = if repeat_activation {
+                None
+            } else {
+                self.win
+                    .ui
+                    .as_ref()
+                    .and_then(|ui| ui.row_key(focused, key, &self.win.runtime))
+            };
+            if let Some(outcome) = outcome {
+                if let Some(next) = outcome.focus {
+                    self.win.runtime.input.focused = Some(next);
+                    self.win.runtime.region = None;
+                    for (area, offset) in outcome.scrolls {
+                        self.win.runtime.scroll_ballistic.remove(&area);
+                        self.win.runtime.scroll_velocity.remove(&area);
+                        self.win.runtime.scroll_target.insert(area, offset);
+                    }
+                }
+                for message in outcome.messages {
+                    self.dispatch(message);
+                }
+                self.request_redraw();
+                return;
+            }
+        }
+
         // Tab and Shift+Tab move between focusables, even with nothing focused.
         if matches!(event.logical_key, WinitKey::Named(NamedKey::Tab)) {
             let forward = !self.shift;
@@ -11941,6 +11989,15 @@ impl<A: Application> App<A> {
     /// (milestone 736); see [`primary_held`].
     fn primary(&self) -> bool {
         primary_held(self.apple_keys, self.ctrl, self.meta)
+    }
+
+    /// The modifiers held now, for a click (milestone 855).
+    fn click_modifiers(&self) -> frus_widgets::ClickModifiers {
+        frus_widgets::ClickModifiers {
+            shift: self.shift,
+            primary: self.primary(),
+            alt: self.alt,
+        }
     }
 
     /// Whether the modifier that makes the arrows jump a word is held: Option on an Apple
@@ -15424,6 +15481,13 @@ pub mod testing {
         #[cfg(all(test, desktop))]
         pub(crate) fn clipboard_text(&mut self) -> Option<String> {
             self.shell.clipboard.get_text()
+        }
+
+        /// Holds the modifier keys — or lets them go — for the presses and clicks that follow
+        /// (milestone 855): a click with Shift or Ctrl held.
+        pub fn hold_modifiers(&mut self, ctrl: bool, shift: bool, alt: bool, meta: bool) {
+            let s = &mut self.shell;
+            (s.ctrl, s.shift, s.alt, s.meta) = (ctrl, shift, alt, meta);
         }
 
         /// Escape, as the keyboard delivers it.

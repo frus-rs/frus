@@ -786,12 +786,18 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** widgets
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** Every row under an expanded node is built, scrolled into view or not,
-  which suits hundreds of rows, not tens of thousands. Left on a closed node and Right on an open one do nothing; there is no type-ahead,
-  no Home/End, no multi-selection and no drag and drop.
-- **Workaround:** Keep large trees collapsed, or show deep levels in a `ListView::builder`.
-- **Evidence:** [docs/milestone-811.md](docs/milestone-811.md)
+- **Status:** fixed in 0.7.0
+- **What you hit:** Up to 0.6.0, every row under an expanded node was built, scrolled into view
+  or not, and Left on a closed node and Right on an open one did nothing; there was no
+  type-ahead, no Home/End and no multi-selection. Since milestone 855 the open part of the tree
+  is shown by a virtualised list: only the rows in view are built (50,000 open rows build the
+  15 of a 400 px window). The keys of a desktop tree view — Right into a folder, Left up to the
+  parent, Home, End, Enter, Space, type-ahead — move the focus to rows that are not built yet,
+  through `Widget::on_row_key`, and `multi_select(true)` adds Ctrl/Cmd-click, Shift-click and
+  Shift+arrows, with `on_selection_change`. Drag and drop of rows is still not done.
+- **Workaround:** None needed; for drag and drop, move rows with commands of your own.
+- **Evidence:** [docs/milestone-811.md](docs/milestone-811.md),
+  [docs/milestone-855.md](docs/milestone-855.md)
 
 ## Tooling and hot reload
 
