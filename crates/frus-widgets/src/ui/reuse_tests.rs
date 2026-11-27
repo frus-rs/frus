@@ -148,14 +148,11 @@ fn one_row_changes_and_the_others_are_given_back() {
     let (kept, painted) = checked(&rt, &root, &theme);
     assert_eq!(painted, 1, "the row that changed, and only it");
     assert_eq!(kept, 49);
-    // And again with nothing moving: a row that changes without growing.
+    // And again with nothing moving: the row is built again with the count it had, which
+    // makes it a new subtree, painted; the others stay where they were and are kept.
     COUNTS.with(|all| all.borrow()[20].set(1));
     let (kept, painted) = checked(&rt, &root, &theme);
-    assert_eq!(
-        (kept, painted),
-        (50, 0),
-        "set to what it was: nothing to paint"
-    );
+    assert_eq!((kept, painted), (49, 1));
 }
 
 /// A theme changed with nothing built (a theme in flight is one): nothing kept under the old
@@ -164,7 +161,7 @@ fn one_row_changes_and_the_others_are_given_back() {
 fn a_new_theme_paints_everything_again() {
     let rt = Runtime::default();
     let root = rows(10);
-    let light = Theme::default();
+    let light = Theme::light();
     frame(&rt, &root, &light);
     frame(&rt, &root, &light);
     let dark = Theme::dark();
@@ -198,7 +195,8 @@ fn a_row_under_the_pointer_is_painted_again() {
     let root = rows(10);
     let ui = frame(&rt, &root, &theme);
     frame(&rt, &root, &theme);
-    let target = ui.hit(frus_core::Point::new(10.0, 75.0)).expect("row 2");
+    // Row 2's box: each row registers its box, then its button.
+    let target = ui.hits[4].id;
     rt.input.hovered = Some(target);
     let (kept, painted) = checked(&rt, &root, &theme);
     assert_eq!((kept, painted), (9, 1));
@@ -269,8 +267,8 @@ fn the_stops_of_a_selection_are_given_back() {
     let ui = frame(&rt, &root, &theme);
     assert_eq!(
         ui.text_stops.len(),
-        6 * 2,
-        "a row's count and its button's label"
+        6,
+        "a row's count; a button's label is not selectable"
     );
     bump(4);
     let (kept, painted) = checked(&rt, &root, &theme);

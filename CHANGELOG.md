@@ -8,10 +8,25 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 853 so far, each documenting the objective, the alternatives
+> record — one per step, 856 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
+
+- **A change paints what changed, and the rest is given back** (J856, L-042, part of #224).
+  Every component is now a boundary of the paint cache: one that was not built again gives
+  back what its subtree painted and registered the frame before (its primitives, hit
+  targets, focus stops, accessibility nodes, selection stops, shortcut scopes...), moved by
+  whole pixels when a row above it grew or its list scrolled, and is painted again when its
+  theme, surface, place, clip, scopes or any state its paint reads (hover, focus, a value in
+  flight, ink) changed. What the cache keeps is bounded to four times the frame. Cutting a
+  line with an ellipsis now finds the cut by halving instead of measuring the line once per
+  character dropped, which at a thousand rows kept the measurement cache too full to hold
+  anything. NUMBERS_CHANGELOG `Widget::paint` documents that a paint follows from the
+  widget and its arguments; `PaintCache::held`, `LayoutCache::last_frame_time` are new
+  diagnostics. The repaint boundaries of milestone 88 now also keep shortcut scopes, keystroke
+  listeners, edit actions and overflow bands, and see a caret blink, a drag over them and a
+  colour or a radius in flight.
 
 - **A change lays out the path to it, not the whole tree** (J853, L-042, part of #224). A
   layout keeps, node by node, what each box measured, and the next layout of the same root

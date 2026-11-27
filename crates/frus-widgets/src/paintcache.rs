@@ -40,7 +40,9 @@
 //! ## Memory
 //! A component nested in another is kept in both, so the kept output is bounded: past four
 //! times what the frame itself painted and registered, the largest entries are dropped and
-//! not taken again until their subtree changes.
+//! not taken again until their subtree changes. A subtree that has changed two frames in a
+//! row (the ancestors of a component that ticks) is not copied again until it stands still
+//! for a frame.
 //!
 //! The cache does not know the application's `Msg` type (the `Runtime` is
 //! generic-agnostic): the data is stored **erased** behind a `Box<dyn Any>`, and
@@ -76,6 +78,9 @@ pub(crate) struct Slot {
     pub(crate) size: usize,
     /// Dropped for room: not taken again under this lock.
     pub(crate) oversize: bool,
+    /// How many frames in a row the subtree has changed (milestone 856): one that changes
+    /// every frame is not copied every frame.
+    pub(crate) streak: u8,
 }
 
 /// How many times what the frame painted and registered the kept output may hold.
@@ -229,6 +234,7 @@ mod tests {
             data: Some(Box::new(7u32)),
             size,
             oversize: false,
+            streak: 0,
         }
     }
 

@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 use frus_widgets::{
     component, BuildContext, Callback, Column, ListTile, Scaffold, SingleChildScrollView, Switch,
-    Text, UseState, Widget,
+    UseState, Widget,
 };
 
 use crate::app::testing::Driver;

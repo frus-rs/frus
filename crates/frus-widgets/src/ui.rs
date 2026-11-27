@@ -4936,18 +4936,30 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         let media = crate::MediaQuery::of();
 
         // Kept under the same lock and fingerprint: given back where it can be.
-        let (kept, oversize) = {
+        let (kept, oversize, streak) = {
             let mut cache = self.runtime.paint_cache.borrow_mut();
             match cache.slot(id) {
-                Some(slot) if slot.lock == lock => (
-                    slot.data
-                        .as_ref()
-                        .filter(|_| slot.fingerprint == fingerprint && slot.rect_count == count)
-                        .and_then(|data| data.downcast_ref::<std::rc::Rc<BoundaryData<Msg>>>())
-                        .cloned(),
-                    slot.oversize,
-                ),
-                _ => (None, false),
+                Some(slot) => {
+                    let same = slot.lock == lock
+                        && slot.fingerprint == fingerprint
+                        && slot.rect_count == count;
+                    (
+                        slot.data
+                            .as_ref()
+                            .filter(|_| same)
+                            .and_then(|data| data.downcast_ref::<std::rc::Rc<BoundaryData<Msg>>>())
+                            .cloned(),
+                        slot.oversize && slot.lock == lock,
+                        // How many frames in a row it has changed: unchanged since it was
+                        // last painted, it starts again from nought.
+                        if same {
+                            0
+                        } else {
+                            slot.streak.saturating_add(1)
+                        },
+                    )
+                }
+                None => (None, false, 0),
             }
         };
         if let Some(data) = kept {
@@ -4974,7 +4986,10 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             start + count,
             "a plain subtree takes its rects in the walk's order"
         );
-        let data = (!oversize)
+        // A subtree that changes frame after frame — the ancestors of a ticking component —
+        // is not copied every frame only to be painted again the next: it is kept again
+        // once it has stood still for a frame.
+        let data = (!oversize && streak < 2)
             .then(|| self.capture_since(&snap, origin, clip, media))
             .flatten();
         self.wants_animation |= outer.0;
@@ -4998,6 +5013,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
                         .map(|data| Box::new(std::rc::Rc::new(data)) as Box<dyn std::any::Any>),
                     size,
                     oversize: false,
+                    streak,
                 },
             );
         }
