@@ -120,6 +120,9 @@ struct Entry {
     /// because it is computed from the same taffy pass and would otherwise need a
     /// second one on every cache hit.
     overflows: Vec<Overflowing>,
+    /// What the layout that made these rectangles measured, node by node: the next layout of
+    /// this root, under whatever constraints, starts from it (milestone 853).
+    memo: Option<frus_layout::Memo>,
 }
 
 /// The relayout cache, retained in the [`crate::Runtime`] from one frame to the next.
@@ -137,6 +140,12 @@ pub struct LayoutCache {
     last_misses: u32,
     hits: u32,
     misses: u32,
+    /// Diagnostic: the nodes the frame's layouts laid out, and those that started with the
+    /// last layout's answers (milestone 853).
+    laid_out: u32,
+    reused_nodes: u32,
+    last_laid_out: u32,
+    last_reused_nodes: u32,
 }
 
 impl LayoutCache {
@@ -166,7 +175,15 @@ impl LayoutCache {
             }
         }
         self.misses += 1;
-        let (rects, overflows) = compute_rects(root, key, runtime, theme, c);
+        // What the last layout of this root measured: the nodes it still holds answer from it.
+        let memo = self
+            .entries
+            .get_mut(&key)
+            .and_then(|slots| slots.iter_mut().flatten().find_map(|e| e.memo.take()));
+        let (rects, overflows, memo) = compute_rects(root, key, runtime, theme, c, memo);
+        self.laid_out += memo.1;
+        self.reused_nodes += memo.2;
+        let memo = memo.0;
         if volatile {
             // Nothing is stored either: an entry that can never be trusted would only
             // sit there being evicted and re-made.
@@ -178,6 +195,7 @@ impl LayoutCache {
             constraints: c,
             rects: rects.clone(),
             overflows: overflows.clone(),
+            memo: Some(memo),
         };
         let slots = self.entries.entry(key).or_default();
         // The other constraints' answer is kept only while it describes the same tree: a
@@ -198,11 +216,75 @@ impl LayoutCache {
         self.last_misses = self.misses;
         self.hits = 0;
         self.misses = 0;
+        self.last_laid_out = std::mem::take(&mut self.laid_out);
+        self.last_reused_nodes = std::mem::take(&mut self.reused_nodes);
     }
 
     /// Reuses and recomputations of the last completed frame (diagnostic).
     pub fn last_frame_stats(&self) -> (u32, u32) {
         (self.last_hits, self.last_misses)
+    }
+
+    /// The nodes the last completed frame's layouts laid out, and those that started with
+    /// the answers of the layout before (diagnostic, milestone 853).
+    pub fn last_frame_nodes(&self) -> (u32, u32) {
+        (self.last_laid_out, self.last_reused_nodes)
+    }
+}
+
+/// What a tree laid out inside a measurement is: one widget can lay out more than one
+/// (milestone 853).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Nested {
+    /// A box that transforms its constraints, measuring its child.
+    Transformed,
+    /// A layout builder, measuring what it built.
+    Built,
+    /// A viewport measuring its content.
+    Viewport,
+    /// A stack measuring one of its layers (the layer's own identity says which).
+    Layer,
+}
+
+/// The memos of the trees measurements lay out on their own, by the identity of the subtree
+/// laid out and what it is laid out for. A tree laid out several times in one frame (taffy
+/// asks a measurement more than one question) starts each time from the last.
+#[derive(Default)]
+pub(crate) struct NestedLayouts {
+    memos: HashMap<(WidgetId, Nested), frus_layout::Memo>,
+    touched: HashSet<(WidgetId, Nested)>,
+}
+
+impl NestedLayouts {
+    /// Hands `layout` what the last tree laid out for `key` left, before it is built.
+    pub(crate) fn begin<T>(
+        runtime: &Runtime,
+        key: (WidgetId, Nested),
+        layout: &mut frus_layout::Layout<'_, T>,
+    ) {
+        let memo = {
+            let mut this = runtime.nested_layouts.borrow_mut();
+            this.touched.insert(key);
+            this.memos.remove(&key).unwrap_or_default()
+        };
+        layout.reuse(memo, measuring_context());
+    }
+
+    /// Keeps what `layout`, computed, leaves for the next tree laid out for `key`.
+    pub(crate) fn end<T>(
+        runtime: &Runtime,
+        key: (WidgetId, Nested),
+        layout: frus_layout::Layout<'_, T>,
+        root: frus_layout::NodeId,
+    ) {
+        let memo = layout.into_memo(root);
+        runtime.nested_layouts.borrow_mut().memos.insert(key, memo);
+    }
+
+    /// Forgets the trees no measurement laid out this frame.
+    pub(crate) fn end_frame(&mut self) {
+        let touched = std::mem::take(&mut self.touched);
+        self.memos.retain(|key, _| touched.contains(key));
     }
 }
 
@@ -214,8 +296,14 @@ fn compute_rects<Msg>(
     runtime: &Runtime,
     theme: &crate::theme::Theme,
     c: Constraints,
-) -> (Vec<Rect>, Vec<Overflowing>) {
+    memo: Option<frus_layout::Memo>,
+) -> (Vec<Rect>, Vec<Overflowing>, (frus_layout::Memo, u32, u32)) {
     let mut layout = frus_layout::Layout::new();
+    if let Some(memo) = memo {
+        layout.reuse(memo, measuring_context());
+    } else {
+        layout.reuse(frus_layout::Memo::default(), measuring_context());
+    }
     let node = build_layout(root, key, runtime, theme, &mut layout);
     // `compute_scroll(_, _, false, false)` is equivalent to `compute` (both axes
     // `Definite`): a single path covers both cases.
@@ -233,7 +321,18 @@ fn compute_rects<Msg>(
         .into_iter()
         .map(|(rect, _)| rect)
         .collect();
-    (rects, layout.overflows(node))
+    let overflows = layout.overflows(node);
+    let (laid_out, reused) = (layout.laid_out(), layout.reused());
+    (rects, overflows, (layout.into_memo(node), laid_out, reused))
+}
+
+/// What every measurement of a root depends on that no node of it says: the reader's font
+/// size and the surface. A memo taken under another is not used (milestone 853).
+fn measuring_context() -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    frus_core::text_scale().to_bits().hash(&mut hasher);
+    crate::MediaQuery::of().measure_hash(&mut hasher);
+    hasher.finish()
 }
 
 /// A 64-bit fingerprint of a subtree's **layout** — styles + structure, following
@@ -671,6 +770,49 @@ mod tests {
         cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
         cache.rects(WidgetId::ROOT, &tree, &rt, &theme, c);
         assert_eq!((cache.hits, cache.misses), (0, 2));
+    }
+
+    /// **A root whose one row changed lays out the path to that row** (milestone 853): the
+    /// other rows start with what the last layout measured, and the rectangles are the ones
+    /// a layout from scratch gives.
+    #[test]
+    fn a_changed_row_lays_out_its_path_alone() {
+        let rt = Runtime::default();
+        let theme = crate::theme::Theme::default();
+        let c = Constraints::definite(Size::new(300.0, 4000.0));
+        let page = |label: &str| -> Flex<()> {
+            let mut column = Flex::column();
+            for i in 0..50 {
+                let text = if i == 7 {
+                    label.to_string()
+                } else {
+                    format!("Row {i}")
+                };
+                column = column.child(
+                    Flex::row()
+                        .child(crate::Text::new(text))
+                        .child(Container::new().width(24.0).height(24.0)),
+                );
+            }
+            column
+        };
+        let mut cache = LayoutCache::default();
+        cache.rects(WidgetId::ROOT, &page("short"), &rt, &theme, c);
+        cache.end_frame();
+        let (everything, _) = cache.last_frame_nodes();
+        let grown = page("a label long enough to wrap onto a second line of the row it is in");
+        let kept = cache.rects(WidgetId::ROOT, &grown, &rt, &theme, c);
+        cache.end_frame();
+        let (laid_out, reused) = cache.last_frame_nodes();
+
+        let mut scratch = LayoutCache::default();
+        let fresh = scratch.rects(WidgetId::ROOT, &grown, &rt, &theme, c);
+        assert_eq!(kept, fresh, "the rectangles of a layout from scratch");
+        assert!(reused >= 49 * 3, "the other rows were kept: {reused}");
+        assert!(
+            laid_out * 10 < everything,
+            "the path to the row, not the page: {laid_out} of {everything}"
+        );
     }
 
     #[test]

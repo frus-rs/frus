@@ -47,12 +47,12 @@ fn ticker() -> Box<dyn Widget> {
     }))
 }
 
-/// An inbox: an app bar, a ticking leaf, and forty rows, each a component.
-fn screen() -> FrusApp {
-    FrusApp::from_fn(|_cx| {
+/// The same inbox with `rows` rows.
+fn screen_of(rows: usize) -> FrusApp {
+    FrusApp::from_fn(move |_cx| {
         SCREEN_BUILT.with(|n| n.set(n.get() + 1));
         let mut list = Column::new().child(ticker());
-        for index in 0..ROWS {
+        for index in 0..rows {
             list = list.child(row(index));
         }
         Box::new(
@@ -87,8 +87,12 @@ fn screen_built() -> u32 {
 }
 
 fn settled() -> Driver<FrusApp> {
+    settled_with(ROWS)
+}
+
+fn settled_with(rows: usize) -> Driver<FrusApp> {
     frus_widgets::__use_memory_prefs();
-    let mut driver = Driver::new(screen(), 400.0, 800.0);
+    let mut driver = Driver::new(screen_of(rows), 400.0, 800.0);
     for _ in 0..30 {
         driver.frame(1.0 / 60.0);
     }
@@ -104,7 +108,19 @@ fn shows(driver: &Driver<FrusApp>, text: &str) -> bool {
 #[test]
 #[ignore = "a measurement: run it by hand, in a release build"]
 fn rebuild_cost_of_one_leaf_tick() {
-    let mut driver = settled();
+    tick_cost(ROWS);
+}
+
+/// The same measurement on a screen of a thousand rows, none of them virtualised.
+/// `cargo test -p frus-shell --release rebuild_cost -- --ignored --nocapture`
+#[test]
+#[ignore = "a measurement: run it by hand, in a release build"]
+fn rebuild_cost_of_one_leaf_tick_among_a_thousand_rows() {
+    tick_cost(1000);
+}
+
+fn tick_cost(rows_on_screen: usize) {
+    let mut driver = settled_with(rows_on_screen);
     let (mut builds, mut layouts) = (Vec::new(), Vec::new());
     let mut rows = 0;
     let mut screens = 0;
@@ -125,13 +141,35 @@ fn rebuild_cost_of_one_leaf_tick() {
         v[v.len() / 2]
     };
     println!(
-        "822 leaf tick: build {:.3} ms, layout {:.3} ms (medians of {TICKS}); per tick {} rows and {} screens built",
+        "leaf tick, {rows_on_screen} rows: build {:.3} ms, layout {:.3} ms (medians of {TICKS}); per tick {} rows and {} screens built",
         median(&mut builds),
         median(&mut layouts),
         rows as f32 / TICKS as f32,
         screens as f32 / TICKS as f32,
     );
     assert!(shows(&driver, &format!("Ticks: {TICKS}")));
+}
+
+/// **One tick in a leaf lays out the path to the leaf** (milestone 853): the forty rows beside
+/// it answer from what the frame before measured, and only the boxes between the leaf and
+/// its layout root are laid out again.
+#[test]
+fn a_leaf_tick_lays_out_the_path_to_the_leaf() {
+    let mut driver = settled();
+    for n in 1..=3 {
+        driver.update(tick());
+        driver.frame(1.0 / 60.0);
+        let (laid_out, reused) = driver.layout_nodes();
+        assert!(
+            reused >= 200,
+            "tick {n}: the rows keep what they measured ({reused} kept)"
+        );
+        assert!(
+            laid_out <= 30,
+            "tick {n}: the path to the leaf, not the screen ({laid_out} laid out)"
+        );
+        assert!(shows(&driver, &format!("Ticks: {n}")));
+    }
 }
 
 /// **One tick in a leaf builds the leaf**: not the screen, not one of its forty rows, through

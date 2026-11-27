@@ -684,13 +684,21 @@ as welcome. A real use case is the best argument for moving an entry up.
 
 - **Area:** widgets
 - **Platforms:** All
-- **Status:** open
-- **What you hit:** There is no retained widget tree: a rebuild builds the whole tree from `view`
-  or from the root component, and nothing is memoized. Text measurement is cached, so this is
-  rarely the bottleneck, but a large tree with one animating widget pays for all of it.
-- **Workaround:** Keep animations inside components and lists virtualised (`ListView::builder`).
+- **Status:** partial
+- **What you hit:** A component's own state builds that component alone (milestone 822), and
+  the layout that follows lays out the path from the change to its layout root, the other
+  boxes answering from what they measured a frame earlier (milestone 853). What still visits
+  every widget of the screen on such a frame: the layout fingerprint of the root that
+  changed, the building of its layout tree (cheap per node, but not free), and the walk that
+  paints and registers what can be touched, which reuses nothing unless a subtree is an
+  explicit repaint boundary and no build ran. At a thousand rows that walk is most of the
+  frame (about 260 ms of 323 on the laptop) and grows faster than the rows do. A measured
+  leaf that says nothing of what it depends on (`Widget::measure_key`), and a
+  `LayoutBuilder`'s child, are measured every time, with every box above them.
+- **Workaround:** Keep lists virtualised (`ListView::builder`) and animations inside
+  components; give a widget that measures itself a `measure_key`.
 - **Evidence:** [#53](https://github.com/frus-rs/frus/issues/53),
-  [ARCHITECTURE.md](ARCHITECTURE.md)
+  [docs/milestone-822.md](docs/milestone-822.md), [docs/milestone-853.md](docs/milestone-853.md)
 
 ### L-043 Shared state can only be global
 

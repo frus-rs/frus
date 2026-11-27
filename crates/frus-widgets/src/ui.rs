@@ -25,7 +25,7 @@ use crate::physics::{ScrollMetrics, ScrollPhysics};
 use crate::portal::Placement;
 use crate::positioned::Positioning;
 use crate::refresh::Refreshable;
-use crate::relayout::Constraints;
+use crate::relayout::{Constraints, Nested, NestedLayouts};
 use crate::runtime::Runtime;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -2352,6 +2352,34 @@ fn build_layout_scoped<'a, Msg>(
     layout: &mut Layout<'a, BaselineData>,
     baselines: bool,
 ) -> (NodeId, Fills) {
+    let (node, fills) = build_layout_node(widget, id, runtime, theme, layout, baselines);
+    // Where the node stands, so that the next frame's layout of this root finds the node it
+    // may be the same as, and keeps what that one measured (milestone 853).
+    layout.set_identity(node, id.as_u64());
+    (node, fills)
+}
+
+/// What a measured leaf's answer depends on beyond its style: what the widget says
+/// (`Widget::measure_key`) and the surface it is measured under, whose reader's font size
+/// reaches every measured text. `None` when the widget says nothing (milestone 853).
+fn measured_content_key(key: Option<u64>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let key = key?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    frus_core::text_scale().to_bits().hash(&mut hasher);
+    crate::MediaQuery::of().measure_hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+fn build_layout_node<'a, Msg>(
+    widget: &'a dyn Widget<Msg>,
+    id: WidgetId,
+    runtime: &'a Runtime,
+    theme: &Theme,
+    layout: &mut Layout<'a, BaselineData>,
+    baselines: bool,
+) -> (NodeId, Fills) {
     // A component is built into what it stands for before anything is asked of the node,
     // the scope it introduces included — see `Widget::expand` — under the scope a wrapper
     // around it introduces (milestone 642).
@@ -2468,21 +2496,28 @@ fn build_layout_scoped<'a, Msg>(
         let animated = widget.animated_size();
         let factor = widget.size_factor();
         let intrinsic = widget.intrinsic();
+        let nested = NestedTree::new(
+            runtime,
+            (
+                child.map_or(id.child(0), |child| child_id(id, 0, child)),
+                Nested::Transformed,
+            ),
+        );
         let measure: frus_layout::MeasureFn<'a> = Box::new(move |w, h| {
             let Some(child) = child else {
                 return Size::new(0.0, 0.0);
             };
             let (aw, free_x, fill_x) = transform.width.offered(w);
             let (ah, free_y, fill_y) = transform.height.offered(h);
-            let mut inner: Layout<BaselineData> = Layout::new();
-            let node = build_layout(child, child_id(id, 0, child), runtime, &owned, &mut inner);
             // **Handed** every axis that has a number, **asked** about every axis that does
             // not. Merely constraining them instead would leave a child with no size of its
             // own — a plain container — hugging at nothing, and a box asked how big its child
             // wanted to be would come back empty. A loose axis is the exception, and says so:
             // there the number is only the most the child may take (milestone 598).
-            inner.compute_axes(node, aw, ah, [free_x, free_y], [fill_x, fill_y]);
-            let mut size = inner.size_of(node);
+            let mut size = nested.measure(
+                |inner| build_layout(child, nested.key.0, runtime, &owned, inner),
+                |inner, node| inner.compute_axes(node, aw, ah, [free_x, free_y], [fill_x, fill_y]),
+            );
             // A box following its child's size answers with the size it has got to, and is
             // told when the child's has changed (milestone 594). An intrinsic question is
             // answered and not recorded: on an axis the child is **given**, the layout
@@ -2577,6 +2612,7 @@ fn build_layout_scoped<'a, Msg>(
             let offered = Size::new(w.unwrap_or(0.0), h.unwrap_or(0.0));
             let child = build(offered);
             let mut inner: Layout<BaselineData> = Layout::new();
+            NestedLayouts::begin(runtime, (cid, Nested::Built), &mut inner);
             let node = build_layout(child.as_ref(), cid, runtime, &owned, &mut inner);
             // The content is **handed** the offered box, not asked what it would like:
             // it was built from that box. An axis that was not offered is the one being
@@ -2591,7 +2627,9 @@ fn build_layout_scoped<'a, Msg>(
                     h.is_none(),
                 ),
             }
-            inner.size_of(node)
+            let size = inner.size_of(node);
+            NestedLayouts::end(runtime, (cid, Nested::Built), inner, node);
+            size
         });
         return (
             layout.measured_leaf(style, own_baseline, measure),
@@ -2625,20 +2663,23 @@ fn build_layout_scoped<'a, Msg>(
         if hug_x || hug_y || clamp_x || clamp_y {
             let owned = owned_theme(theme);
             let cid = child_id(id, 0, content);
+            let nested = NestedTree::new(runtime, (cid, Nested::Viewport));
             let measure: frus_layout::MeasureFn<'a> = Box::new(move |w, h| {
-                let mut inner: Layout<BaselineData> = Layout::new();
-                let node = build_layout(content, cid, runtime, &owned, &mut inner);
                 // The content is unconstrained on every axis that scrolls — that is what
                 // scrolling means — and on the one being measured. What is left is an axis
                 // with a real number on it, and the content is held to it.
-                inner.compute_scroll(
-                    node,
-                    w.unwrap_or(0.0),
-                    h.unwrap_or(0.0),
-                    hug_x || axis.free_x() || w.is_none(),
-                    hug_y || axis.free_y() || h.is_none(),
+                let content = nested.measure(
+                    |inner| build_layout(content, cid, runtime, &owned, inner),
+                    |inner, node| {
+                        inner.compute_scroll(
+                            node,
+                            w.unwrap_or(0.0),
+                            h.unwrap_or(0.0),
+                            hug_x || axis.free_x() || w.is_none(),
+                            hug_y || axis.free_y() || h.is_none(),
+                        )
+                    },
                 );
-                let content = inner.size_of(node);
                 let pad = widget.scroll_padding();
                 // **Only the hugged axis is answered.** On the axis that scrolls, a
                 // viewport is precisely *not* as big as its content — answering with the
@@ -2681,6 +2722,13 @@ fn build_layout_scoped<'a, Msg>(
         let owned = owned_theme(theme);
         let fit = widget.stack_fit();
         let layers = widget.children();
+        let nested: Vec<NestedTree<'a>> = layers
+            .iter()
+            .enumerate()
+            .map(|(i, layer)| {
+                NestedTree::new(runtime, (child_id(id, i, layer.as_ref()), Nested::Layer))
+            })
+            .collect();
         let measure: frus_layout::MeasureFn<'a> = Box::new(move |w, h| {
             let mut size = Size::new(0.0, 0.0);
             // Under `Expand` the stack is the room; otherwise its largest unpinned layer.
@@ -2690,26 +2738,23 @@ fn build_layout_scoped<'a, Msg>(
                 if layer.positioned().is_some() {
                     continue;
                 }
-                let mut inner: Layout<BaselineData> = Layout::new();
-                let node = build_layout(
-                    layer.as_ref(),
-                    child_id(id, i, layer.as_ref()),
-                    runtime,
-                    &owned,
-                    &mut inner,
-                );
                 // Forced or handed the room, a layer fills it; allowed it, it is asked —
                 // and one that asks for the room takes it on its own, as a root.
                 let fill = fit != crate::StackFit::Loose;
                 let (fill_x, fill_y) = (fill, fill);
-                inner.compute_axes(
-                    node,
-                    w.unwrap_or(0.0),
-                    h.unwrap_or(0.0),
-                    [w.is_none(), h.is_none()],
-                    [fill_x && w.is_some(), fill_y && h.is_some()],
+                let tree = &nested[i];
+                let own = tree.measure(
+                    |inner| build_layout(layer.as_ref(), tree.key.0, runtime, &owned, inner),
+                    |inner, node| {
+                        inner.compute_axes(
+                            node,
+                            w.unwrap_or(0.0),
+                            h.unwrap_or(0.0),
+                            [w.is_none(), h.is_none()],
+                            [fill_x && w.is_some(), fill_y && h.is_some()],
+                        )
+                    },
                 );
-                let own = inner.size_of(node);
                 size = Size::new(size.width.max(own.width), size.height.max(own.height));
             }
             // The room, on each axis that was offered one, when the layers do not decide.
@@ -2800,9 +2845,10 @@ fn build_layout_scoped<'a, Msg>(
         // closure during the computation.
         if let Some(measure) = widget.measure(theme) {
             return (
-                layout.measured_leaf(
+                layout.measured_leaf_keyed(
                     effective_style(widget, id, runtime, theme),
                     own_baseline,
+                    measured_content_key(widget.measure_key(theme)),
                     measure,
                 ),
                 Fills::own(widget, theme),
@@ -3047,6 +3093,60 @@ pub(crate) fn natural_baseline<Msg>(
     rects
         .iter()
         .find_map(|(rect, data)| data.copied().flatten().map(|b| rect.y + b - top))
+}
+
+/// A tree a measurement lays out on its own — a viewport's content, a box's child, a stack's
+/// layer — kept for every question taffy asks the measurement during one layout, and handed,
+/// once that layout is done with it, to the next frame's (milestone 853).
+///
+/// Built at the first question. Each later one puts back the style its root was built with
+/// (every `compute*` may change it) and lays the same tree out again, under the new
+/// constraints: what the nodes measured for an earlier question still answers the questions
+/// they are asked again.
+pub(crate) struct NestedTree<'a> {
+    runtime: &'a Runtime,
+    key: (WidgetId, Nested),
+    tree: std::cell::RefCell<Option<NestedState<'a>>>,
+}
+
+type NestedState<'a> = (Layout<'a, BaselineData>, NodeId, frus_layout::StyleSnapshot);
+
+impl<'a> NestedTree<'a> {
+    pub(crate) fn new(runtime: &'a Runtime, key: (WidgetId, Nested)) -> Self {
+        Self {
+            runtime,
+            key,
+            tree: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// The size the tree comes out at when `compute` lays it out, `build` making it at the
+    /// first question.
+    pub(crate) fn measure(
+        &self,
+        build: impl FnOnce(&mut Layout<'a, BaselineData>) -> NodeId,
+        compute: impl FnOnce(&mut Layout<'a, BaselineData>, NodeId),
+    ) -> Size {
+        let mut slot = self.tree.borrow_mut();
+        let (layout, node, snapshot) = slot.get_or_insert_with(|| {
+            let mut layout = Layout::new();
+            NestedLayouts::begin(self.runtime, self.key, &mut layout);
+            let node = build(&mut layout);
+            let snapshot = layout.style_snapshot(node);
+            (layout, node, snapshot)
+        });
+        layout.restore_style(*node, snapshot);
+        compute(layout, *node);
+        layout.size_of(*node)
+    }
+}
+
+impl Drop for NestedTree<'_> {
+    fn drop(&mut self) {
+        if let Some((layout, node, _)) = self.tree.get_mut().take() {
+            NestedLayouts::end(self.runtime, self.key, layout, node);
+        }
+    }
 }
 
 /// **Natural** (intrinsic) size of a subtree: laid out under free axes (`MaxContent`), with
@@ -7931,6 +8031,7 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
     // End of frame: forget the layout roots and repaint boundaries of widgets that have gone,
     // and freeze the caches' diagnostic counters.
     runtime.layout_cache.borrow_mut().end_frame();
+    runtime.nested_layouts.borrow_mut().end_frame();
     runtime.paint_cache.borrow_mut().end_frame();
 
     // Replays the outgoing subtrees, fading out, over the current scene.
