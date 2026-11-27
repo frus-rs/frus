@@ -2968,6 +2968,30 @@ mod tests {
         assert_ne!(glyph, 0, "and is a real glyph, not the empty box");
     }
 
+    /// The escape key's symbol on an Apple keyboard, `⎋` (U+238B), which shortcut labels draw:
+    /// the bundled sans has no glyph for it, and with no system font (Android, the web) it must
+    /// still come out as a real glyph, from the bundled monospace face, never as a box.
+    #[test]
+    #[cfg(all(feature = "bundled-sans", feature = "bundled-mono"))]
+    fn the_escape_symbol_falls_back_to_a_bundled_face() {
+        let mut db = cosmic_text::fontdb::Database::new();
+        db.load_font_data(DEJAVU_SANS.to_vec());
+        db.load_font_data(DEJAVU_MONO.to_vec());
+        db.set_sans_serif_family(SANS_FAMILY);
+        let mut fs = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        let attrs = Attrs::new().family(cosmic_text::Family::SansSerif);
+        let mut buffer = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
+        buffer.set_size(None, None);
+        buffer.set_text("⎋⌦", &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut fs, false);
+        let ids: Vec<u16> = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| g.glyph_id))
+            .collect();
+        assert_eq!(ids.len(), 2, "two glyphs: {ids:?}");
+        assert!(ids.iter().all(|&id| id != 0), "a box was drawn: {ids:?}");
+    }
+
     /// Reproduces the Android Arabic case **exactly**: the bundled db alone, with no
     /// system font and therefore no platform fallback list, with the Noto Naskh face
     /// loaded. `family_for` must route the Arabic run to the Naskh family, and shaping

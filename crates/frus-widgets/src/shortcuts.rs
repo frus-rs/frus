@@ -180,9 +180,8 @@ impl KeyStroke {
         let key = match stroke.key {
             ShortcutKey::Char(c) => c.to_uppercase().collect(),
             ShortcutKey::Enter => (if apple { "↩" } else { "Enter" }).to_string(),
-            // "Esc" on every keyboard: the bundled sans has no glyph for the escape symbol
-            // (U+238B), and a cut would draw it as a box.
-            ShortcutKey::Escape => "Esc".to_string(),
+            // The bundled sans has no glyph for U+238B; the bundled monospace face draws it.
+            ShortcutKey::Escape => (if apple { "⎋" } else { "Esc" }).to_string(),
             ShortcutKey::Tab => (if apple { "⇥" } else { "Tab" }).to_string(),
             ShortcutKey::Space => "Space".to_string(),
             ShortcutKey::Backspace => (if apple { "⌫" } else { "Backspace" }).to_string(),

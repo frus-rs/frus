@@ -68,8 +68,8 @@ const BASE: &[(u32, u32)] = &[
 /// missing, so this list cannot fall behind them.
 pub(crate) const FRAMEWORK_SYMBOLS: &[char] = &[
     '←', '↑', '→', '↓', '↔', '↕', '↩', '↵', '⇧', '⇥', '−', '∕', '√', '∞', '≈', '≠', '≤', '≥', '⋮',
-    '⌃', '⌘', '⌥', '⌦', '⌫', '⏎', '■', '□', '▲', '▶', '▸', '▼', '▾', '◀', '◂', '○', '●', '★', '☆',
-    '✓', '✔', '✕', '✗', '✘',
+    '⌃', '⌘', '⌥', '⌦', '⌫', '⎋', '⏎', '■', '□', '▲', '▶', '▸', '▼', '▾', '◀', '◂', '○', '●', '★',
+    '☆', '✓', '✔', '✕', '✗', '✘',
 ];
 
 /// The OpenType features the widgets ask for themselves (`RollingDigits`' figures of one width),
