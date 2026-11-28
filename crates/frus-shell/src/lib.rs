@@ -141,6 +141,8 @@ pub mod platform;
 #[cfg(test)]
 mod rebuild_tests;
 #[cfg(test)]
+mod repaint_tests;
+#[cfg(test)]
 mod restoration_tests;
 #[cfg(test)]
 mod scoped_tests;

@@ -8,11 +8,28 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 855 so far, each documenting the objective, the alternatives
+> record — one per step, 856 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A change paints what changed, and the rest is given back** (J856, L-042, part of #224).
+  Every component is now a boundary of the paint cache: one that was not built again gives
+  back what its subtree painted and registered the frame before (its primitives, hit
+  targets, focus stops, accessibility nodes, selection stops, shortcut scopes...), moved by
+  whole pixels when a row above it grew or its list scrolled, and is painted again when its
+  theme, surface, place, clip, scopes or any state its paint reads (hover, focus, a value in
+  flight, ink) changed. What the cache keeps is bounded to four times the frame. Cutting a
+  line with an ellipsis now finds the cut by halving instead of measuring the line once per
+  character dropped, which at a thousand rows kept the measurement cache too full to hold
+  anything. One row's state changing among a thousand `ListTile` rows costs 17 to 54 ms of
+  `build_ui` instead of 1.4 to 3.1 s on a loaded laptop, forty rows 0.6 to 1.9 ms instead of
+  2.6 to 2.9. A `CustomPaint` is painted every frame, its painter being free to read anything.
+  `Widget::paint` documents that a paint follows from the
+  widget and its arguments; `PaintCache::held`, `LayoutCache::last_frame_time` are new
+  diagnostics. The repaint boundaries of milestone 88 now also keep shortcut scopes, keystroke
+  listeners, edit actions and overflow bands, and see a caret blink, a drag over them and a
+  colour or a radius in flight.
 - **A file tree of any size, driven from the keyboard** (J855, L-048). `FileTree` shows the open
   part of its hierarchy in a virtualised list: only the rows in view are built, so 50,000 open
   rows build the 15 of a 400 px window, and a frame of 10,000 open rows takes 1.4 ms instead

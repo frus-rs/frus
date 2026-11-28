@@ -21,6 +21,21 @@ use crate::widget::Widget;
 /// The paint function's type: `(scene, box, theme)`.
 type PaintFn = dyn Fn(&mut Scene, Rect, &Theme);
 
+thread_local! {
+    /// How many times a painter has been asked what it reads (milestone 856).
+    static ASKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A number never answered before: what a painter that may read anything answers for
+/// [`Widget::paint_source`].
+#[inline(never)]
+fn next_question() -> u64 {
+    ASKED.with(|n| {
+        n.set(n.get().wrapping_add(1));
+        n.get()
+    })
+}
+
 /// A fixed-size custom canvas, painted by a closure.
 pub struct CustomPaint<Msg = crate::callback::Callback> {
     width: f32,
@@ -61,6 +76,13 @@ impl<Msg> Widget<Msg> for CustomPaint<Msg> {
 
     fn paint(&self, bounds: Rect, _status: Status, theme: &Theme, scene: &mut Scene) {
         (self.painter)(scene, bounds, theme);
+    }
+
+    /// The painter is the application's closure, and may read anything: a component holding
+    /// one is painted every frame rather than given back (milestone 856). A new number at
+    /// every question says so without asking for any frame of its own.
+    fn paint_source(&self) -> Option<u64> {
+        Some(next_question())
     }
 
     fn on_click(&self) -> Option<Msg> {

@@ -127,6 +127,26 @@ thread_local! {
     static DEPTH: Cell<u32> = const { Cell::new(0) };
     static INTERVALS: RefCell<Vec<Interval>> = const { RefCell::new(Vec::new()) };
     static BACK_BLOCKS: Cell<u32> = const { Cell::new(0) };
+    /// How many component builds have run on this thread, ever: what a component's
+    /// [`built mark`](crate::Widget::built_mark) is set to when its subtree changes
+    /// (milestone 856). Never reset, so a mark taken before a build can never equal one
+    /// taken after.
+    static BUILDS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many component builds have run so far (milestone 856).
+#[inline(never)]
+pub(crate) fn builds() -> u64 {
+    BUILDS.with(|n| n.get())
+}
+
+/// One more component build.
+#[inline(never)]
+fn count_build() -> u64 {
+    BUILDS.with(|n| {
+        n.set(n.get() + 1);
+        n.get()
+    })
 }
 
 // Every access to these goes through a function that is neither generic nor inlined, and so is
@@ -1780,6 +1800,7 @@ impl<Msg> Component<Msg> {
                 dirty: RefCell::new(None),
                 reached: Cell::new(0),
                 asked: RefCell::new(Asked::default()),
+                mark: Cell::new(0),
                 unbuilt: Unbuilt,
             },
             key: None,
@@ -1816,6 +1837,9 @@ struct LazyChild<Msg> {
     reached: Cell<u64>,
     /// What its latest build asked of the frame beyond the widgets.
     asked: RefCell<Asked>,
+    /// The latest build anywhere in its subtree, as [`builds`] counts them (milestone 856):
+    /// set by its own build, and by the walk that builds components when it built one below.
+    mark: Cell<u64>,
     unbuilt: Unbuilt,
 }
 
@@ -1898,6 +1922,7 @@ impl<Msg> LazyChild<Msg> {
         };
         *self.dirty.borrow_mut() = cx.hooks.get().map(|hooks| hooks.dirty.clone());
         crate::rebuilds::note(id);
+        self.mark.set(count_build());
         // SAFETY: called from `expand` only, before the walk reads anything below this
         // component; what was there is retired, not dropped.
         if let Some(old) = unsafe { self.built.replace(child) } {
@@ -1914,6 +1939,12 @@ impl<Msg> LazyChild<Msg> {
     /// What this component built, so that a key the built widget carries is found where the
     /// component stands (milestone 729). Inherent, so that the transparent macro's
     /// `self.inner.built_child()` reaches this rather than the built widget's own.
+    /// This component's own mark, never its child's: inherent, so that the transparent
+    /// macro's `self.inner.built_mark()` reaches this, as with [`Self::built_child`].
+    fn built_mark(&self) -> Option<&Cell<u64>> {
+        Some(&self.mark)
+    }
+
     fn built_child(&self) -> Option<&dyn Widget<Msg>> {
         self.built.get()
     }

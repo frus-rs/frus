@@ -15061,6 +15061,51 @@ pub mod testing {
                 .last_frame_nodes()
         }
 
+        /// What the last frame's layouts took in milliseconds — all of it, and the
+        /// fingerprints alone — out of the [`costs`](Self::costs) of its walk (milestone 856).
+        pub fn layout_time(&self) -> (f32, f32) {
+            self.shell
+                .win
+                .runtime
+                .layout_cache
+                .borrow()
+                .last_frame_time()
+        }
+
+        /// The subtrees the last frame gave back as they were painted before, and those it
+        /// painted (milestone 856).
+        pub fn paint_reuse(&self) -> (u32, u32) {
+            self.shell
+                .win
+                .runtime
+                .paint_cache
+                .borrow()
+                .last_frame_stats()
+        }
+
+        /// Forgets what the paint cache kept, so the next frame paints everything: the frame
+        /// a kept one is checked against (milestone 856).
+        #[cfg(test)]
+        pub(crate) fn forget_paint(&mut self) {
+            *self.shell.win.runtime.paint_cache.borrow_mut() = Default::default();
+        }
+
+        /// The last frame's primitives and what can be pressed and focused in it, written
+        /// out (milestone 856).
+        #[cfg(test)]
+        pub(crate) fn frame_digest(&self) -> String {
+            let Some(ui) = self.shell.win.ui.as_ref() else {
+                return String::new();
+            };
+            let hits: Vec<_> = ui.hit_rects().collect();
+            format!(
+                "{:?}\n{hits:?}\n{:?}\n{:?}",
+                ui.scene().primitives(),
+                ui.traversal_order(),
+                ui.semantics()
+            )
+        }
+
         /// What the application keeps for restoration, as the platform would be handed it
         /// now: `None` when it has not turned restoration on (milestone 753).
         pub fn restoration_data(&self) -> Option<Vec<u8>> {

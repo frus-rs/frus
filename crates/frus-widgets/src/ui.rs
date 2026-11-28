@@ -21,6 +21,7 @@ use crate::dragdrop::{DragSource, DropZone};
 use crate::hero::{lerp_rect, HeroSpot};
 use crate::interaction::{Status, WidgetId};
 use crate::pageview::PageSnap;
+use crate::paintcache::{Lock, Slot};
 use crate::physics::{ScrollMetrics, ScrollPhysics};
 use crate::portal::Placement;
 use crate::positioned::Positioning;
@@ -30,6 +31,8 @@ use crate::runtime::Runtime;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
+#[cfg(test)]
+mod reuse_tests;
 mod semtree;
 mod slivers;
 use semtree::SemanticsBuf;
@@ -491,14 +494,43 @@ impl<Msg> Hit<Msg> {
 }
 
 /// The painted output of a repaint-boundary subtree, cached (see `paintcache.rs`) and
-/// replayed as is on a *hit*. Erased behind a `Box<dyn Any>` in the cache; brought back down
-/// to `Msg` here (one `Msg` instance per app → the `downcast` always succeeds).
-#[derive(Clone)]
+/// replayed as is on a *hit*. Erased behind a `Box<dyn Any>` in the cache (as an `Rc`, so a
+/// hit takes it out without copying it); brought back down to `Msg` here (one `Msg` instance
+/// per app → the `downcast` always succeeds).
 struct BoundaryData<Msg> {
+    /// What it was painted under, beside the fingerprint (milestone 856): the boundary's box
+    /// on screen, the theme in force, the surface and the reader's text scale.
+    origin: Rect,
+    theme: std::cell::RefCell<std::rc::Rc<Theme>>,
+    media: crate::MediaQuery,
+    text_scale: f32,
+    /// Whether it can be given back somewhere else: everything in it is well inside the clip
+    /// and moves with a translation (no transformed layer, no path clip, no scroll area).
+    movable: bool,
+    /// Everything its nodes were given to draw in, on screen.
+    drawn: Option<Rect>,
     prims: Vec<frus_core::Primitive>,
     hits: Vec<Hit<Msg>>,
     long_presses: Vec<Hit<Msg>>,
     dismisses: Vec<Msg>,
+    /// What the widgets in it do to a selection (milestone 856: these were not kept).
+    edit_actions: Vec<(WidgetId, crate::EditAction)>,
+    interactives: Vec<(WidgetId, Rect)>,
+    /// The shortcut and action scopes, and the keystroke listeners, closed inside it, with
+    /// their focus ranges **relative to its first focus stop**.
+    scopes: Vec<Scope<Msg>>,
+    #[allow(clippy::type_complexity)]
+    listeners: Vec<(
+        std::ops::Range<usize>,
+        std::rc::Rc<dyn Fn(KeyStroke) -> Option<Msg>>,
+    )>,
+    /// The boxes in it whose children ran past them.
+    overflows: Vec<Overflowing>,
+    /// Whether something in it asked for the next frame, and how.
+    wants_animation: bool,
+    wants_decoration: bool,
+    /// Whether the selection area's bar had been placed by the end of it.
+    region_bar_placed: bool,
     focusables: Vec<Focusable>,
     scrollables: Vec<Scrollable>,
     draggables: Vec<(WidgetId, Rect)>,
@@ -522,6 +554,31 @@ struct BoundaryData<Msg> {
     lifted: Vec<(usize, Vec<Primitive>)>,
 }
 
+impl<Msg> BoundaryData<Msg> {
+    /// How many primitives and registrations it holds: what the cache's budget counts.
+    fn size(&self) -> usize {
+        self.prims.len()
+            + self
+                .lifted
+                .iter()
+                .map(|(_, prims)| prims.len())
+                .sum::<usize>()
+            + self.hits.len()
+            + self.long_presses.len()
+            + self.focusables.len()
+            + self.semantics.len()
+            + self.text_stops.len()
+            + self.page_text.len()
+            + self.hover_regions.len()
+            + self.inks.len()
+            + self.pans.len()
+            + self.pointer_listeners.len()
+            + self.scopes.len()
+            + self.listeners.len()
+            + 1
+    }
+}
+
 /// Lengths of the builder's collections on entering a boundary: the lower bounds of the
 /// slices to capture on the way out.
 struct Snapshot {
@@ -542,6 +599,11 @@ struct Snapshot {
     page_text: usize,
     semantics: usize,
     system_ui: usize,
+    edit_actions: usize,
+    interactives: usize,
+    scopes: usize,
+    listeners: usize,
+    overflows: usize,
     overlays: usize,
     /// The hover cards walked (milestone 809): a subtree holding one is never replayed.
     hover_watches: usize,
@@ -549,6 +611,10 @@ struct Snapshot {
     /// replayed, since the closures are not part of what a boundary keeps.
     row_keys: usize,
     focus_scope_start: Option<usize>,
+    /// Registries a replay does not give back (milestone 856): a subtree that added to one
+    /// of them is painted every frame.
+    unkept: [usize; 11],
+    title_bar_row: Option<Rect>,
 }
 
 /// Lower bounds of the **interaction** registries at the start of a transformed composition
@@ -611,14 +677,14 @@ struct XformBase {
     platform_views: usize,
 }
 
-/// Node count of the subtree **if** it is "plain" — that is, if the boundary and **all** its
-/// descendants take the default walk branch (children in prefix order): not scrollable, not a
-/// navigator, not a virtualised list, no `layout_builder`, not a stack, no overlay, no
-/// continuous animation. The count then follows the walk's rect order **exactly**, which is
-/// what makes the fingerprint and the bit-for-bit replay correct. `None` = a subtree that
-/// cannot be cached (it is repainted in full — the safe fallback).
-fn plain_subtree_len<Msg>(widget: &dyn Widget<Msg>) -> Option<usize> {
-    if widget.continuous()
+/// Whether a node is "plain": it takes the default walk branch (children in prefix order) —
+/// not scrollable, not a navigator, not a virtualised list, no `layout_builder`, not a stack,
+/// no overlay, no continuous animation. A subtree whose nodes are all plain consumes the
+/// walk's rects in **exactly** their order, which is what makes the fingerprint and the
+/// bit-for-bit replay correct; any other subtree is painted in full every frame (the safe
+/// fallback). See `Builder::survey`, which asks this of every node of a boundary.
+fn plain_node<Msg>(widget: &dyn Widget<Msg>) -> bool {
+    !(widget.continuous()
         || widget.scroll_content().is_some()
         || widget.interactive().is_some()
         || widget.fitted().is_some()
@@ -646,14 +712,76 @@ fn plain_subtree_len<Msg>(widget: &dyn Widget<Msg>) -> Option<usize> {
         // Its image changes with no rebuild, and the shell reads where it is every frame
         // (milestone 794).
         || widget.platform_view().is_some()
-    {
-        return None;
+        // Two more branches of the walk that lay out or place their children themselves, and
+        // read the runtime as they do (milestone 856: a component's subtree is a boundary).
+        || widget.scroll_overlay().is_some()
+        || widget.dismissible().is_some()
+        // Registered into lists of their own, read by the shell every frame.
+        || widget.sheet().is_some()
+        || widget.refresh().is_some())
+}
+
+/// Whether `inner` lies inside `clip` and is smaller than it (milestone 856). Inside, so that
+/// cutting it at the clip leaves it whole wherever it moves within it; smaller, so that no
+/// clip narrowed inside it to its own box can be the clip itself (see [`moved_primitive`]).
+fn well_inside(inner: Rect, clip: Rect) -> bool {
+    inner.x >= clip.x
+        && inner.y >= clip.y
+        && inner.x + inner.width <= clip.x + clip.width
+        && inner.y + inner.height <= clip.y + clip.height
+        && (inner.width < clip.width || inner.height < clip.height)
+}
+
+/// Whether moving `p` is a translation of everything in it (milestone 856): not a layer
+/// turned or scaled about a point on screen, nor one cut by a path, whose geometry a
+/// translation of the primitive does not follow.
+fn moves_plainly(p: &Primitive) -> bool {
+    match p {
+        Primitive::Layer {
+            primitives,
+            clip_shape,
+            transform,
+            ..
+        } => {
+            transform.is_none()
+                && !matches!(clip_shape, ClipShape::Path(_))
+                && primitives.iter().all(moves_plainly)
+        }
+        _ => true,
     }
-    let mut n = 1;
-    for child in widget.children() {
-        n += plain_subtree_len(child.as_ref())?;
+}
+
+/// `p` moved by `(dx, dy)`, except where it was cut by `clip`, the clip of the walk around the
+/// boundary it was kept in: that one stays, as a fresh paint at the new place would have it.
+/// A clip narrowed inside the boundary moves with what it cuts. Where a primitive was cut by
+/// `clip` is told by equality, which is exact because what the boundary drew is
+/// [`well_inside`] `clip`: no clip narrowed to a box inside it can be `clip`.
+fn moved_primitive(p: &Primitive, dx: f32, dy: f32, clip: Rect) -> Primitive {
+    /// Puts `ambient` back wherever the translation turned it into `moved`, in `p` and in
+    /// everything a layer holds.
+    fn keep(p: &mut Primitive, moved: Rect, ambient: Rect) {
+        let own = match p {
+            Primitive::Rect { clip, .. }
+            | Primitive::Text { clip, .. }
+            | Primitive::RichText { clip, .. }
+            | Primitive::Path { clip, .. }
+            | Primitive::Image { clip, .. } => clip,
+            Primitive::Layer {
+                clip, primitives, ..
+            } => {
+                for inner in primitives.iter_mut() {
+                    keep(inner, moved, ambient);
+                }
+                clip
+            }
+        };
+        if *own == moved {
+            *own = ambient;
+        }
     }
-    Some(n)
+    let mut q = p.translated(dx, dy);
+    keep(&mut q, clip.translate(dx, dy), clip);
+    q
 }
 
 /// Moves `v[from..to]` after the rest of `v[from..]`: what a sticky header added, after what
@@ -720,6 +848,20 @@ fn hash_status<H: Hasher>(s: &Status, h: &mut H) {
     s.hover_cursor.map(|p| (quant(p.x), quant(p.y))).hash(h);
     // The thumb a drag took is the one that rises and is painted on top.
     s.thumb.hash(h);
+    // The rest of what a paint may read (milestone 856): a component kept for frames on
+    // end is given back on every one of them, so a field this leaves out is a picture that
+    // stops following it — a caret that stops blinking, a colour that stops moving.
+    s.affinity.hash(h);
+    s.caret_hidden.hash(h);
+    s.drag_over.hash(h);
+    s.anim_color
+        .map(|c| [c.r, c.g, c.b, c.a].map(quant))
+        .hash(h);
+    s.anim_radius
+        .map(|r| [r.top_left, r.top_right, r.bottom_right, r.bottom_left].map(quant))
+        .hash(h);
+    quant(s.scroll_y).hash(h);
+    s.value_placed.hash(h);
 }
 
 /// The result of building an interface for one frame.
@@ -729,6 +871,7 @@ fn hash_status<H: Hasher>(s: &Status, h: &mut H) {
 /// The range is how "focus is inside this subtree" is answered without an ancestor test:
 /// the walk is depth-first, so a subtree's focus stops are contiguous, and the focused
 /// stop's index either falls inside the range or does not.
+#[derive(Clone)]
 struct Scope<Msg> {
     strokes: Vec<(KeyStroke, Intent)>,
     callbacks: Vec<(KeyStroke, Msg)>,
@@ -3415,6 +3558,17 @@ struct Builder<'a, Msg> {
     /// Whether the bar over a selection area's selection has been placed this frame: it goes
     /// against the first text the selection covers, and only that one.
     region_bar_placed: bool,
+    /// Set when the walk did something a kept boundary could not give back, such as a filter
+    /// that reads the clock: the boundaries around it are painted, not kept (milestone 856).
+    /// Counted per boundary, like the two animation flags.
+    not_kept: bool,
+    /// Everything the nodes walked so far were given to draw in, on screen: whether a kept
+    /// boundary can be moved rather than painted again (milestone 856).
+    drawn: Option<Rect>,
+    /// The themes compared this frame, and whether they were alike (see
+    /// [`Builder::same_theme`]).
+    #[allow(clippy::type_complexity)]
+    themes_alike: Vec<(std::rc::Rc<Theme>, std::rc::Rc<Theme>, bool)>,
     reorderables: Vec<(WidgetId, Rect)>,
     interactives: Vec<(WidgetId, Rect)>,
     /// Deferred overlays: (content, id, the anchor's bounds, placement, dismissal, progress
@@ -3613,35 +3767,22 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         }
     }
 
-    /// 64-bit fingerprint of everything painting a boundary subtree reads **without**
-    /// rebuilding the `view`: each descendant's `Status` (in walk order) and the subtree's
-    /// absolute rects. An unchanged fingerprint + generation ⇒ a bit-for-bit identical paint.
-    /// The time is excluded (a cacheable boundary holds no `continuous` widget).
-    fn boundary_fingerprint(
+    /// One pass over a boundary's subtree, in the walk's order and with its identities
+    /// (`child_id`): whether every node of it is plain ([`plain_node`]), how many rectangles
+    /// it takes, and — into `h` — everything its paint reads **without** a build: each node's
+    /// `Status` (the time excluded: a plain subtree holds no `continuous` widget), what it
+    /// reads from outside the tree, its live ink, and the animated values the walk itself
+    /// reads (a transform, an offset, a text style in flight). `None` for a subtree that is not
+    /// plain.
+    fn survey<H: Hasher>(
         &self,
         widget: &dyn Widget<Msg>,
         id: WidgetId,
-        translation: (f32, f32),
-        sub: &[Rect],
-    ) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.rtl().hash(&mut h);
-        translation.0.to_bits().hash(&mut h);
-        translation.1.to_bits().hash(&mut h);
-        for r in sub {
-            r.x.to_bits().hash(&mut h);
-            r.y.to_bits().hash(&mut h);
-            r.width.to_bits().hash(&mut h);
-            r.height.to_bits().hash(&mut h);
+        h: &mut H,
+    ) -> Option<usize> {
+        if !plain_node(widget) {
+            return None;
         }
-        self.hash_statuses(widget, id, &mut h);
-        h.finish()
-    }
-
-    /// Adds `widget`'s `Status` to `h`, then its children's, recursively — following the
-    /// walk's identity scheme (`child_id`) **exactly**, so it lines up with the order in which
-    /// `walk_node` paints them.
-    fn hash_statuses<H: Hasher>(&self, widget: &dyn Widget<Msg>, id: WidgetId, h: &mut H) {
         hash_status(&self.full_status(widget, id), h);
         // What the paint reads from outside the tree: an external texture's frame.
         widget.paint_source().hash(h);
@@ -3652,9 +3793,134 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         if let Some(ripples) = self.runtime.ink.get(&id) {
             ripples.hash_state(h);
         }
-        for (i, child) in widget.children().iter().enumerate() {
-            self.hash_statuses(child.as_ref(), child_id(id, i, child.as_ref()), h);
+        // What the walk reads from the runtime as it passes (milestone 856): a scale or a
+        // turn on its way, an anchor or a slide moving, a text style in flight.
+        if let Some(moving) = self.runtime.anim_transform(id) {
+            [moving.scale_x, moving.scale_y, moving.rotation]
+                .map(quant)
+                .hash(h);
         }
+        if let Some((x, y)) = self.runtime.anim_offset(id) {
+            (quant(x), quant(y)).hash(h);
+        }
+        if widget.anim_text_style().is_some() {
+            if let Some(style) = self.runtime.anim_text_style(id) {
+                format!("{style:?}").hash(h);
+            }
+        }
+        let mut count = 1;
+        for (i, child) in widget.children().iter().enumerate() {
+            count += self.survey(child.as_ref(), child_id(id, i, child.as_ref()), h)?;
+        }
+        Some(count)
+    }
+
+    /// Adds to `h` what the walk carries into a boundary from above it and what it registers
+    /// or paints depends on (milestone 856): the clip, the direction, the focus scopes, the
+    /// selection area, the scroll and refresh hosts, the hover region it is in, the scrolling
+    /// behaviour in force. The theme, the surface and the place are compared apart.
+    fn hash_context<H: Hasher>(&self, clip: Rect, h: &mut H) {
+        let bits = |r: Rect| [r.x, r.y, r.width, r.height].map(f32::to_bits);
+        self.rtl().hash(h);
+        bits(clip).hash(h);
+        self.touch_clip.map(bits).hash(h);
+        (
+            self.focus_excluded,
+            self.focus_skipped,
+            self.focus_order.map(f32::to_bits),
+            self.focus_group,
+            self.autofill_group,
+        )
+            .hash(h);
+        (
+            self.backdrop_group,
+            self.page_heading,
+            self.area,
+            self.hover_parent,
+            self.region_bar_placed,
+        )
+            .hash(h);
+        (self.scroll_host, self.refresh_host, self.hero_screen).hash(h);
+        (self.runtime.page_text, self.runtime.focus_visible).hash(h);
+        crate::ScrollConfiguration::of().hash(h);
+    }
+
+    /// Whether `kept`, the theme a boundary was painted under, is the one in force. Compared
+    /// once per pair and frame — a theme is eleven kilobytes — and, when it is, the entry
+    /// takes the current one, so the entries all hold one theme and the old ones are freed.
+    fn same_theme(&mut self, kept: &std::cell::RefCell<std::rc::Rc<Theme>>) -> bool {
+        let then = kept.borrow().clone();
+        if std::rc::Rc::ptr_eq(&then, &self.theme) {
+            return true;
+        }
+        // The pairs are held, not their addresses: a theme freed during the walk could
+        // otherwise leave its address to another one, which would be taken for it.
+        let known = self
+            .themes_alike
+            .iter()
+            .find(|(a, b, _)| std::rc::Rc::ptr_eq(a, &then) && std::rc::Rc::ptr_eq(b, &self.theme))
+            .map(|(_, _, alike)| *alike);
+        let alike = known.unwrap_or_else(|| {
+            let alike = *then == *self.theme;
+            self.themes_alike
+                .push((then.clone(), self.theme.clone(), alike));
+            alike
+        });
+        if alike {
+            *kept.borrow_mut() = self.theme.clone();
+        }
+        alike
+    }
+
+    /// Where a kept boundary can be given back, if it can: at the same place (no move), or
+    /// moved by `(dx, dy)` — whole physical pixels, with everything it drew still well inside
+    /// the clip, so that moving its output is exactly painting it there. `None` when it has to
+    /// be painted again: another theme, surface or text scale, or a move it cannot follow.
+    fn place_of(
+        &mut self,
+        data: &BoundaryData<Msg>,
+        origin: Rect,
+        clip: Rect,
+        media: &crate::MediaQuery,
+    ) -> Option<(f32, f32)> {
+        if data.media != *media
+            || data.text_scale.to_bits() != frus_core::text_scale().to_bits()
+            || !self.same_theme(&data.theme)
+        {
+            return None;
+        }
+        if data.origin == origin {
+            return Some((0.0, 0.0));
+        }
+        if !data.movable || self.touch_clip.is_some() {
+            return None;
+        }
+        let (dx, dy) = (origin.x - data.origin.x, origin.y - data.origin.y);
+        let scale = media.device_pixel_ratio * media.density;
+        let whole = |v: f32| {
+            let physical = v * scale;
+            (physical - physical.round()).abs() < 1e-3
+        };
+        let drawn = data.drawn?.translate(dx, dy);
+        (whole(dx) && whole(dy) && well_inside(drawn, clip)).then_some((dx, dy))
+    }
+
+    /// The lengths of the registries a replay does not give back (milestone 856): a subtree
+    /// that adds to one of them is painted every frame.
+    fn unkept_lengths(&self) -> [usize; 11] {
+        [
+            self.heroes.len(),
+            self.scrollbars.len(),
+            self.toolbars.len(),
+            self.overlay_cover.len(),
+            self.overlay_paint.len(),
+            self.refreshes.len(),
+            self.dismissables.len(),
+            self.sheets.len(),
+            self.page_lists.len(),
+            self.reorderables.len(),
+            self.platform_views.len(),
+        ]
     }
 
     /// Current lengths of the builder's collections: the lower bound of the slices to capture
@@ -3678,10 +3944,17 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             page_text: self.page_text.len(),
             semantics: self.semantics.len(),
             system_ui: self.system_ui.len(),
+            edit_actions: self.edit_actions.len(),
+            interactives: self.interactives.len(),
+            scopes: self.scopes.len(),
+            listeners: self.listeners.len(),
+            overflows: self.overflows.borrow().len(),
             overlays: self.overlays.len(),
             hover_watches: self.hover_watches.len(),
             row_keys: self.row_keys.len(),
             focus_scope_start: self.focus_scope_start,
+            unkept: self.unkept_lengths(),
+            title_bar_row: self.title_bar_row,
         }
     }
 
@@ -3708,23 +3981,82 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         self.scene.split_off(start)
     }
 
-    fn capture_since(&self, snap: &Snapshot) -> Option<BoundaryData<Msg>> {
-        // A hover card is decided as the walk passes it, from the pointer and the time: a
-        // replayed subtree would leave it as it was (milestone 809).
-        if self.overlays.len() != snap.overlays
+    /// What the subtree walked since `snap` painted and registered, to be given back on a
+    /// later frame — or `None` when it did something a replay cannot give back: pushed an
+    /// overlay, touched the modal focus scope, walked a hover card (decided as the walk passes
+    /// it, from the pointer and the time, milestone 809), added to a registry the replay does
+    /// not keep, or read the clock (milestone 856).
+    fn capture_since(
+        &self,
+        snap: &Snapshot,
+        origin: Rect,
+        clip: Rect,
+        media: crate::MediaQuery,
+    ) -> Option<BoundaryData<Msg>> {
+        if self.not_kept
+            || self.overlays.len() != snap.overlays
             || self.focus_scope_start != snap.focus_scope_start
             || self.hover_watches.len() != snap.hover_watches
+            || self.unkept_lengths() != snap.unkept
+            || self.title_bar_row != snap.title_bar_row
             || self.row_keys.len() != snap.row_keys
         {
             return None;
         }
+        let rebase = |range: &std::ops::Range<usize>| {
+            range.start.saturating_sub(snap.focusables)..range.end.saturating_sub(snap.focusables)
+        };
+        let prims = self.scene.primitives()[snap.scene..].to_vec();
+        let lifted: Vec<(usize, Vec<Primitive>)> = self
+            .lifted
+            .iter()
+            .filter(|(at, _)| *at >= snap.scene)
+            .map(|(at, prims)| (at - snap.scene, prims.clone()))
+            .collect();
+        let hits = self.hits[snap.hits..].to_vec();
+        let long_presses = self.long_presses[snap.long_presses..].to_vec();
+        let scrollables = self.scrollables[snap.scrollables..].to_vec();
+        let movable = self.touch_clip.is_none()
+            && scrollables.is_empty()
+            && self.drawn.is_some_and(|drawn| well_inside(drawn, clip))
+            && hits
+                .iter()
+                .chain(&long_presses)
+                .all(|hit| hit.xform.is_none())
+            && prims
+                .iter()
+                .chain(lifted.iter().flat_map(|(_, prims)| prims))
+                .all(moves_plainly);
         Some(BoundaryData {
-            prims: self.scene.primitives()[snap.scene..].to_vec(),
-            hits: self.hits[snap.hits..].to_vec(),
-            long_presses: self.long_presses[snap.long_presses..].to_vec(),
+            origin,
+            theme: std::cell::RefCell::new(self.theme.clone()),
+            media,
+            text_scale: frus_core::text_scale(),
+            movable,
+            drawn: self.drawn,
+            prims,
+            hits,
+            long_presses,
             dismisses: self.dismisses[snap.dismisses..].to_vec(),
+            edit_actions: self.edit_actions[snap.edit_actions..].to_vec(),
+            interactives: self.interactives[snap.interactives..].to_vec(),
+            scopes: self.scopes[snap.scopes..]
+                .iter()
+                .map(|scope| Scope {
+                    range: rebase(&scope.range),
+                    ..scope.clone()
+                })
+                .collect(),
+            listeners: self.listeners[snap.listeners..]
+                .iter()
+                .map(|(range, on_key)| (rebase(range), on_key.clone()))
+                .collect(),
+            overflows: self.overflows.borrow()[snap.overflows..].to_vec(),
+            wants_animation: self.wants_animation,
+            wants_decoration: self.wants_decoration,
+            region_bar_placed: self.region_bar_placed,
             focusables: self.focusables[snap.focusables..].to_vec(),
-            scrollables: self.scrollables[snap.scrollables..].to_vec(),
+            scrollables,
             draggables: self.draggables[snap.draggables..].to_vec(),
             drag_sources: self.drag_sources[snap.drag_sources..].to_vec(),
             drop_zones: self.drop_zones[snap.drop_zones..].to_vec(),
@@ -3736,43 +4068,122 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             page_text: self.page_text[snap.page_text..].to_vec(),
             semantics: self.semantics.tail(snap.semantics),
             system_ui: self.system_ui[snap.system_ui..].to_vec(),
-            lifted: self
-                .lifted
-                .iter()
-                .filter(|(at, _)| *at >= snap.scene)
-                .map(|(at, prims)| (at - snap.scene, prims.clone()))
-                .collect(),
+            lifted,
         })
     }
 
-    /// Replays a boundary from the cache: primitives already formed (clip/owner baked in) and
-    /// interaction maps, appended as is.
-    fn splice_boundary(&mut self, data: BoundaryData<Msg>) {
+    /// Gives back what a boundary painted and registered (see [`Self::capture_since`]),
+    /// moved by `(dx, dy)` — `(0, 0)` when it is where it was. The primitives are already
+    /// formed, clip and owner baked in; a moved one keeps the clip it was painted under,
+    /// which is the clip here.
+    fn splice_boundary(&mut self, data: &BoundaryData<Msg>, (dx, dy): (f32, f32), clip: Rect) {
+        let still = dx == 0.0 && dy == 0.0;
+        let mv = |r: Rect| if still { r } else { r.translate(dx, dy) };
+        let prim = |p: &Primitive| {
+            if still {
+                p.clone()
+            } else {
+                moved_primitive(p, dx, dy, clip)
+            }
+        };
         let base = self.scene.len();
         self.lifted.extend(
             data.lifted
-                .into_iter()
-                .map(|(at, prims)| (base + at, prims)),
+                .iter()
+                .map(|(at, prims)| (base + at, prims.iter().map(prim).collect())),
         );
-        for p in data.prims {
-            self.scene.push_primitive(p);
+        for p in &data.prims {
+            self.scene.push_primitive(prim(p));
         }
-        self.hits.extend(data.hits);
-        self.long_presses.extend(data.long_presses);
-        self.dismisses.extend(data.dismisses);
-        self.focusables.extend(data.focusables);
-        self.scrollables.extend(data.scrollables);
-        self.draggables.extend(data.draggables);
-        self.drag_sources.extend(data.drag_sources);
-        self.drop_zones.extend(data.drop_zones);
-        self.inks.extend(data.inks);
-        self.pans.extend(data.pans);
-        self.pointer_listeners.extend(data.pointer_listeners);
-        self.hover_regions.extend(data.hover_regions);
-        self.text_stops.extend(data.text_stops);
-        self.page_text.extend(data.page_text);
-        self.semantics.append(data.semantics);
-        self.system_ui.extend(data.system_ui);
+        let hit = |h: &Hit<Msg>| Hit {
+            rect: mv(h.rect),
+            ..h.clone()
+        };
+        self.hits.extend(data.hits.iter().map(hit));
+        self.long_presses.extend(data.long_presses.iter().map(hit));
+        self.dismisses.extend(data.dismisses.iter().cloned());
+        self.edit_actions.extend(data.edit_actions.iter().cloned());
+        self.interactives
+            .extend(data.interactives.iter().map(|(id, r)| (*id, mv(*r))));
+        let stops = self.focusables.len();
+        let rebase = |range: &std::ops::Range<usize>| range.start + stops..range.end + stops;
+        self.scopes.extend(data.scopes.iter().map(|scope| Scope {
+            range: rebase(&scope.range),
+            ..scope.clone()
+        }));
+        self.listeners.extend(
+            data.listeners
+                .iter()
+                .map(|(range, on_key)| (rebase(range), on_key.clone())),
+        );
+        self.overflows
+            .borrow_mut()
+            .extend(data.overflows.iter().map(|o| Overflowing {
+                rect: mv(o.rect),
+                ..*o
+            }));
+        self.wants_animation |= data.wants_animation;
+        self.wants_decoration |= data.wants_decoration;
+        self.region_bar_placed = data.region_bar_placed;
+        self.focusables
+            .extend(data.focusables.iter().map(|f| Focusable {
+                rect: mv(f.rect),
+                bounds: mv(f.bounds),
+                ..*f
+            }));
+        // A moved boundary holds none (see `capture_since`): a scroll area's viewport is
+        // also its host's business.
+        self.scrollables.extend(data.scrollables.iter().cloned());
+        self.draggables
+            .extend(data.draggables.iter().map(|(id, r)| (*id, mv(*r))));
+        self.drag_sources
+            .extend(data.drag_sources.iter().map(|s| DragSource {
+                rect: mv(s.rect),
+                ..*s
+            }));
+        self.drop_zones
+            .extend(data.drop_zones.iter().map(|z| DropZone {
+                rect: mv(z.rect),
+                ..*z
+            }));
+        self.inks
+            .extend(data.inks.iter().map(|(id, r)| (*id, mv(*r))));
+        self.pans
+            .extend(data.pans.iter().map(|(id, a, b)| (*id, mv(*a), mv(*b))));
+        self.pointer_listeners.extend(
+            data.pointer_listeners
+                .iter()
+                .map(|(id, a, b)| (*id, mv(*a), mv(*b))),
+        );
+        self.hover_regions
+            .extend(data.hover_regions.iter().map(|entry| HoverEntry {
+                seen: mv(entry.seen),
+                whole: mv(entry.whole),
+                ..*entry
+            }));
+        self.text_stops
+            .extend(data.text_stops.iter().map(|stop| crate::TextStop {
+                rect: mv(stop.rect),
+                ..stop.clone()
+            }));
+        self.page_text
+            .extend(data.page_text.iter().map(|text| crate::PageText {
+                rect: mv(text.rect),
+                ..text.clone()
+            }));
+        let from = self.semantics.len();
+        self.semantics.append(data.semantics.clone());
+        if !still {
+            for rect in self.semantics.rects_from(from) {
+                *rect = rect.translate(dx, dy);
+            }
+        }
+        self.system_ui
+            .extend(data.system_ui.iter().map(|(r, style)| (mv(*r), *style)));
+        if let Some(drawn) = data.drawn {
+            let drawn = mv(drawn);
+            self.drawn = Some(self.drawn.map_or(drawn, |d| d.union(drawn)));
+        }
     }
 
     /// Lengths of every registry a [`ModalBarrier`] can withhold from, taken before its subtree
@@ -4460,6 +4871,10 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             // The layer keeps the **ambient** clip rather than its own box: an image
             // filter reaches past the pixels it came from, and cutting it at the box
             // would shave the edge off every blur.
+            //
+            // A filter may read the clock, which no fingerprint holds: the boundaries
+            // around it are painted every frame (milestone 856).
+            self.not_kept = true;
             let start = self.scene.primitives().len();
             self.walk_node(widget, id, translation, clip, rects, index);
             let group = self.split_scene(start);
@@ -4576,49 +4991,147 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
             return;
         }
 
-        // The inspector wants a full walk (it collects every node); caching only happens
-        // outside inspection.
-        if self.inspector.is_none() && widget.repaint_boundary() {
-            if let Some(count) = plain_subtree_len(widget) {
-                let start = *index;
-                let sub = &rects[start..start + count];
-                let fp = self.boundary_fingerprint(widget, id, translation, sub);
-
-                // Hit: the same generation (config) + the same fingerprint (state+geometry)
-                // ⇒ the paint would be identical. The output is cloned and replayed.
-                let hit = {
-                    let mut pc = self.runtime.paint_cache.borrow_mut();
-                    pc.get(id, fp).and_then(|(rc, any)| {
-                        any.downcast_ref::<BoundaryData<Msg>>()
-                            .map(|d| (rc, d.clone()))
-                    })
-                };
-                let drawn = sub
-                    .first()
-                    .map(|r| r.translate(translation.0, translation.1))
-                    .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
-                if let Some((rc, data)) = hit {
-                    self.runtime.paint_cache.borrow_mut().note_hit(id, drawn);
-                    self.splice_boundary(data);
-                    *index += rc;
+        // A boundary: every component (milestone 856) and every explicit repaint boundary
+        // (milestone 88). The inspector wants a full walk (it collects every node); caching
+        // only happens outside inspection.
+        if self.inspector.is_none() {
+            let lock = match widget.built_mark() {
+                Some(mark) => Some(Lock::Built(mark.get())),
+                None => widget
+                    .repaint_boundary()
+                    .then(|| Lock::Generation(self.runtime.paint_cache.borrow().generation())),
+            };
+            if let Some(lock) = lock {
+                if self.walk_boundary(widget, id, translation, clip, rects, index, lock) {
                     return;
                 }
-
-                // Miss: paints normally, capturing the subtree's output (primitives +
-                // interaction maps) for the next frame.
-                let snap = self.snapshot();
-                self.walk_node(widget, id, translation, clip, rects, index);
-                self.runtime.paint_cache.borrow_mut().note_miss(id, drawn);
-                if let Some(data) = self.capture_since(&snap) {
-                    self.runtime
-                        .paint_cache
-                        .borrow_mut()
-                        .put(id, fp, count, Box::new(data));
-                }
-                return;
             }
         }
         self.walk_node(widget, id, translation, clip, rects, index);
+    }
+
+    /// Walks a boundary (see `paintcache.rs`): gives back what its subtree painted and
+    /// registered last time when nothing it was painted from has moved, and otherwise paints
+    /// it and keeps what it painted. `false` for a subtree that is not plain, which the caller
+    /// walks as usual.
+    // The walk's own arguments, and the lock: splitting them would only pass them in two hops.
+    #[allow(clippy::too_many_arguments)]
+    // Called from the recursive walk: kept out of its frame, whose size is per tree level.
+    #[inline(never)]
+    fn walk_boundary(
+        &mut self,
+        widget: &'a dyn Widget<Msg>,
+        id: WidgetId,
+        translation: (f32, f32),
+        clip: Rect,
+        rects: &[Rect],
+        index: &mut usize,
+        lock: Lock,
+    ) -> bool {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let Some(count) = self.survey(widget, id, &mut h) else {
+            return false;
+        };
+        let start = *index;
+        let Some(sub) = rects.get(start..start + count) else {
+            return false;
+        };
+        // Its shape, from its own box: where that box is on screen is compared apart, so
+        // that a subtree that only moved can be moved rather than painted again.
+        let first = sub[0];
+        for r in sub {
+            [r.x - first.x, r.y - first.y, r.width, r.height]
+                .map(f32::to_bits)
+                .hash(&mut h);
+        }
+        self.hash_context(clip, &mut h);
+        let fingerprint = h.finish();
+        let origin = first.translate(translation.0, translation.1);
+        let media = crate::MediaQuery::of();
+
+        // Kept under the same lock and fingerprint: given back where it can be.
+        let (kept, oversize, streak) = {
+            let mut cache = self.runtime.paint_cache.borrow_mut();
+            match cache.slot(id) {
+                Some(slot) => {
+                    let same = slot.lock == lock
+                        && slot.fingerprint == fingerprint
+                        && slot.rect_count == count;
+                    (
+                        slot.data
+                            .as_ref()
+                            .filter(|_| same)
+                            .and_then(|data| data.downcast_ref::<std::rc::Rc<BoundaryData<Msg>>>())
+                            .cloned(),
+                        slot.oversize && slot.lock == lock,
+                        // How many frames in a row it has changed: unchanged since it was
+                        // last painted, it starts again from nought.
+                        if same {
+                            0
+                        } else {
+                            slot.streak.saturating_add(1)
+                        },
+                    )
+                }
+                None => (None, false, 0),
+            }
+        };
+        if let Some(data) = kept {
+            if let Some(delta) = self.place_of(&data, origin, clip, &media) {
+                self.runtime.paint_cache.borrow_mut().note_hit(id, origin);
+                self.splice_boundary(&data, delta, clip);
+                *index += count;
+                return true;
+            }
+        }
+
+        // Painted, and what it paints is kept for the frames after. What the walk
+        // accumulates is counted for this subtree alone, then added to the walk's.
+        let snap = self.snapshot();
+        let outer = (
+            std::mem::take(&mut self.wants_animation),
+            std::mem::take(&mut self.wants_decoration),
+            std::mem::take(&mut self.not_kept),
+            self.drawn.take(),
+        );
+        self.walk_node(widget, id, translation, clip, rects, index);
+        debug_assert_eq!(
+            *index,
+            start + count,
+            "a plain subtree takes its rects in the walk's order"
+        );
+        // A subtree that changes frame after frame — the ancestors of a ticking component —
+        // is not copied every frame only to be painted again the next: it is kept again
+        // once it has stood still for a frame.
+        let data = (!oversize && streak < 2)
+            .then(|| self.capture_since(&snap, origin, clip, media))
+            .flatten();
+        self.wants_animation |= outer.0;
+        self.wants_decoration |= outer.1;
+        self.not_kept |= outer.2;
+        self.drawn = match (outer.3, self.drawn) {
+            (Some(a), Some(b)) => Some(a.union(b)),
+            (a, b) => a.or(b),
+        };
+        let mut cache = self.runtime.paint_cache.borrow_mut();
+        cache.note_miss(id, origin);
+        if !oversize {
+            let size = data.as_ref().map_or(0, BoundaryData::size);
+            cache.put(
+                id,
+                Slot {
+                    lock,
+                    fingerprint,
+                    rect_count: count,
+                    data: data
+                        .map(|data| Box::new(std::rc::Rc::new(data)) as Box<dyn std::any::Any>),
+                    size,
+                    oversize: false,
+                    streak,
+                },
+            );
+        }
+        true
     }
 
     /// Deforms the region's content by its overscroll **stretch**, if it has one
@@ -4820,6 +5333,7 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         *index += 1;
         let draw_rect = rect.translate(translation.0, translation.1);
         self.inspect_enter(widget, id, draw_rect);
+        self.drawn = Some(self.drawn.map_or(draw_rect, |d| d.union(draw_rect)));
 
         let status = self.full_status(widget, id);
         if widget.continuous() {
@@ -8131,6 +8645,9 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
         area_widget: None,
         lifted: Vec::new(),
         region_bar_placed: false,
+        not_kept: false,
+        drawn: None,
+        themes_alike: Vec::new(),
         reorderables: Vec::new(),
         interactives: Vec::new(),
         overlays: Vec::new(),
@@ -8198,7 +8715,14 @@ fn build_ui_walk<'a, Msg: Clone + 'static>(
     // and freeze the caches' diagnostic counters.
     runtime.layout_cache.borrow_mut().end_frame();
     runtime.nested_layouts.borrow_mut().end_frame();
-    runtime.paint_cache.borrow_mut().end_frame();
+    // What the frame itself painted and registered sets how much the paint cache may keep.
+    let frame = builder.scene.len()
+        + builder.hits.len()
+        + builder.focusables.len()
+        + builder.semantics.len()
+        + builder.text_stops.len()
+        + builder.hover_regions.len();
+    runtime.paint_cache.borrow_mut().end_frame(frame);
 
     // Replays the outgoing subtrees, fading out, over the current scene.
     builder.scene.set_clip(Rect::UNBOUNDED);
@@ -8586,6 +9110,18 @@ pub(crate) fn build_deferred_at<Msg>(
     runtime: &Runtime,
 ) {
     fn walk<Msg>(widget: &dyn Widget<Msg>, id: WidgetId, runtime: &Runtime, theme: &Theme) {
+        let before = crate::component::builds();
+        walk_scoped(widget, id, runtime, theme);
+        // A component under which something was built has a new subtree: its mark moves, and
+        // whatever was kept of its paint is no longer its paint (milestone 856).
+        let after = crate::component::builds();
+        if after != before {
+            if let Some(mark) = widget.built_mark() {
+                mark.set(after);
+            }
+        }
+    }
+    fn walk_scoped<Msg>(widget: &dyn Widget<Msg>, id: WidgetId, runtime: &Runtime, theme: &Theme) {
         expand_scoped(widget, id, runtime, theme);
         let scoped = scoped_theme(widget, id, runtime, theme);
         let theme = scoped.as_deref().unwrap_or(theme);
