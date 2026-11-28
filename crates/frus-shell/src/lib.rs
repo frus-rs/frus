@@ -135,6 +135,8 @@ mod notification;
 mod notification_web;
 mod open_url;
 // Calling the platform yourself: JNI on Android, web-sys on the web (milestone 839).
+#[cfg(test)]
+mod overlay_scope_tests;
 pub mod platform;
 #[cfg(test)]
 mod rebuild_tests;

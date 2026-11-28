@@ -116,6 +116,37 @@ impl Scopes {
         held.extend(values);
         ScopeGuard { scopes: self, from }
     }
+
+    /// Everything in scope where the walk is now, outermost first: what an overlay declared
+    /// here takes with it, to be laid out and painted after the walk has left (milestone 854).
+    /// `None`, and nothing allocated, where nothing is in scope.
+    pub(crate) fn capture(&self) -> Option<Rc<[ScopedValue]>> {
+        let values = self.values.borrow();
+        (!values.is_empty()).then(|| values.iter().cloned().collect())
+    }
+
+    /// Makes `values` the whole of what is in scope until the returned guard drops, which puts
+    /// back what was there: an overlay is walked under the scope it was declared in, and only
+    /// that one.
+    pub(crate) fn restore(&self, values: &[ScopedValue]) -> RestoreGuard<'_> {
+        let before = std::mem::replace(&mut *self.values.borrow_mut(), values.to_vec());
+        RestoreGuard {
+            scopes: self,
+            before,
+        }
+    }
+}
+
+/// Holds a captured scope: dropping it puts back what was in scope before.
+pub(crate) struct RestoreGuard<'s> {
+    scopes: &'s Scopes,
+    before: Vec<ScopedValue>,
+}
+
+impl Drop for RestoreGuard<'_> {
+    fn drop(&mut self) {
+        *self.scopes.values.borrow_mut() = std::mem::take(&mut self.before);
+    }
 }
 
 /// Holds values in scope: dropping it puts back what was in scope before.

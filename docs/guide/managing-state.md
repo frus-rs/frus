@@ -154,6 +154,50 @@ nothing.
 `cx.runtime().states.provide(Rc::new(value))` still works: what it provides is the outermost
 scope, found when no `Scoped` above has a value of the type.
 
+## Dialogs, sheets, menus and pages
+
+An overlay sees what is in scope **where it is declared**. A dialog, a bottom sheet, a drawer, a
+popover, a hover card, a menu's rows, a dropdown's options, a search view's suggestions, an open
+container: each is declared in the tree by the page that opens it, and drawn above everything
+after the page. A component inside it finds the page's `Model` exactly as a component of the page
+does, the nearest one first, and is built again, alone, when the model changes. It also sees that
+place's theme.
+
+```rust
+use frus::{component, BuildContext, Dialog, Scoped, Text, Widget};
+
+#[derive(Default)]
+pub struct Cart {
+    pub items: u32,
+}
+
+let page = component(|cx: &BuildContext| {
+    let cart = cx.use_model(Cart::default);
+    // The dialog's lines read the page's cart: nothing is passed to them.
+    let lines = component(|cx: &BuildContext| {
+        let n = cx.select(|c: &Cart| c.items);
+        Box::new(Text::new(format!("{n} in the cart"))) as Box<dyn Widget>
+    });
+    Box::new(Scoped::new(
+        cart,
+        Dialog::new(true).child(lines).body(Text::new("The page")),
+    )) as Box<dyn Widget>
+});
+# let _ = page;
+```
+
+A **page pushed on the router** is another matter: it is not inside the page that pushed it, but
+beside it, under the router. It sees what is in scope above the router (put it there with
+`FrusApp::builder(|_, pages| Box::new(Scoped::new(session.clone(), pages)))`) and not what the
+page that pushed it put in scope. A router inside a page (a shell's branch) is inside that page:
+its pages see what that page put in scope.
+
+To take a value somewhere it is not in scope (a page pushed on the router, a snack bar, whose
+words are shown by the application's root), hand it over: wrap what is shown in
+`Scoped::new(model.clone(), ..)`, or let a button's closure capture the model. A `Model` is a
+cheap handle: every clone is the same model, and its readers are told of a change made through
+any of them.
+
 ## How far a change reaches
 
 frus keeps the tree it built and builds again only what was marked:
