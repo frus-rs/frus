@@ -22,7 +22,7 @@ row's state changes each frame, and the frame is timed in phases through the she
 frame (`Driver::costs`, and the new `Driver::layout_time`).
 
 A profile of the thousand-row frame (`perf`, release build with line tables, under WSL)
-showed no walk at all at the top. **58 % of the samples were text shaping** (`harfrust`,
+showed no walk at all at the top. **58 % of the samples were text shaping** (the shaper,
 `cosmic_text::shape`, `unicode_bidi`, called from `frus_text::measure_at`), 7 % the
 allocator, and 8 % frus's own walk and layout together. The
 rows' subtitles are cut with an ellipsis, and the cut was found by measuring the line with
