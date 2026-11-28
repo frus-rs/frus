@@ -30,6 +30,36 @@ any release may break.
   diagnostics. The repaint boundaries of milestone 88 now also keep shortcut scopes, keystroke
   listeners, edit actions and overflow bands, and see a caret blink, a drag over them and a
   colour or a radius in flight.
+- **A file tree of any size, driven from the keyboard** (J855, L-048). `FileTree` shows the open
+  part of its hierarchy in a virtualised list: only the rows in view are built, so 50,000 open
+  rows build the 15 of a 400 px window, and a frame of 10,000 open rows takes 1.4 ms instead
+  of 900 (50,000: 4.8 ms instead of 4.9 s). It takes the room on offer, or `height`/`flex`;
+  `shrink_wrap(true)` keeps a short tree as tall as its rows. The keys are a desktop tree
+  view's: Up and Down, Right into a folder after opening it, Left up to the parent after
+  closing it (swapped right to left), Home, End, Enter (`on_activate`), Space, and type-ahead
+  (`type_ahead_pause`). `multi_select(true)` with `selection` and `on_selection_change` adds
+  Ctrl-click (Cmd on an Apple keyboard), Shift-click, Shift with the arrows, Home, End and
+  Space, and Ctrl/Cmd+A; `selection_follows_focus` selects the row an arrow lands on. The tree
+  is a `Tree` node that says when it is multiselectable (`SemanticsProperties::multiselectable`,
+  on AccessKit and as `aria-multiselectable`). Underneath, two new widget hooks the frame keeps
+  for a row of a virtualised list, which the shell could not ask anything once drawn:
+  `Widget::on_row_key` answers keys with messages and a row of its list to focus, built or not
+  (`RowKey`, `RowKeyAnswer`, `RowTarget`, `Ui::row_key`, `Ui::reveal_list_item`), and
+  `Widget::on_modified_click` answers a click told the modifiers held (`ClickModifiers`,
+  `Ui::msg_for_click`). **Changed:** an unsized `FileTree` is now a scrolling window that takes
+  the room on offer rather than a column as tall as its rows; give it `shrink_wrap(true)` for
+  the old layout.
+- **An overlay sees the page's scope, and `frus mcp` serves requests side by side** (J854,
+  L-043, L-053). A component inside a dialog, a sheet, a drawer, a popover, a hover card, a
+  menu's row, a dropdown's option, a search view or an open container finds the `Model` the
+  page that declared it put in scope, the nearest one first, and is built again alone when it
+  changes; it used to find the application's, or panic with none. A page pushed on the router
+  sees what is in scope around the router, not what the page that pushed it put there. The
+  managing-state guide says how to carry a model where it is not in scope. `frus mcp` serves
+  each tool's call on its own thread: `app_status`, `get_logs` and `ping` are answered while
+  `launch_app` builds; `notifications/cancelled` stops the request it names, which is not
+  answered, and a cancelled launch ends the runs it started. A run still building is stopped
+  at once instead of after twenty seconds.
 
 - **A change lays out the path to it, not the whole tree** (J853, L-042, part of #224). A
   layout keeps, node by node, what each box measured, and the next layout of the same root

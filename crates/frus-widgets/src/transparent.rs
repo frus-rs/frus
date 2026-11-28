@@ -439,6 +439,14 @@ macro_rules! forward_transparent {
                 self.inner.on_keystroke()
             }
 
+            fn on_row_key(&self) -> Option<$crate::rowkeys::RowKeyHandler<Msg>> {
+                self.inner.on_row_key()
+            }
+
+            fn on_modified_click(&self) -> Option<$crate::rowkeys::ModifiedClick<Msg>> {
+                self.inner.on_modified_click()
+            }
+
             fn descendants_focusable(&self) -> bool {
                 self.inner.descendants_focusable()
             }

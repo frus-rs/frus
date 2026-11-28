@@ -3,7 +3,8 @@
 
 //! The display widgets screen (milestone 811): a sidebar that folds into a rail (a drawer on
 //! a narrow window), figures on cards that roll when they change, a marquee, and a file tree
-//! with a folder that loads its children when it is opened.
+//! with a folder that loads its children when it is opened and one of five thousand files,
+//! several rows selectable at once (milestone 855).
 
 use std::time::Duration;
 
@@ -27,8 +28,8 @@ pub(crate) struct DisplayState {
     round: u32,
     /// The tree's open folders.
     expanded: Vec<u64>,
-    /// The tree's selected node.
-    selected: Option<u64>,
+    /// The tree's selected nodes.
+    selected: Vec<u64>,
     /// Whether the lazy folder's children have arrived.
     loaded: bool,
 }
@@ -43,7 +44,7 @@ impl StatefulWidget for DisplayPage {
             open: MediaQuery::of().size.width >= frus_widgets::SIDEBAR_BREAKPOINT,
             round: 0,
             expanded: vec![1],
-            selected: Some(2),
+            selected: vec![2],
             loaded: false,
         }
     }
@@ -105,6 +106,12 @@ impl DisplayState {
                 ],
             ),
             assets,
+            // Enough rows to scroll through: only those in view are built.
+            FileNode::folder(
+                1_000,
+                "generated",
+                (1..=5_000).map(|i| FileNode::file(1_000 + i, format!("part_{i:04}.rs"))),
+            ),
             FileNode::file(60, "Cargo.toml"),
             FileNode::file(61, "README.md"),
         ]
@@ -177,14 +184,16 @@ impl State for DisplayState {
         let handle = cx.handle();
         let tree = FileTree::new(self.tree())
             .expanded(self.expanded.iter().copied())
-            .selected(self.selected)
+            .multi_select(true)
+            .selection(self.selected.iter().copied())
+            .height(320.0)
             .label("Project files")
             .on_toggle(move |id, open| {
                 let handle = handle.clone();
                 let state = handle.clone();
                 Callback::new(move || state.set_state(|s| s.toggle(&handle, id, open)))
             })
-            .on_select(cx.handler(|s, id: u64| s.selected = Some(id)));
+            .on_selection_change(cx.handler(|s, ids: Vec<u64>| s.selected = ids));
         let content = Flex::column()
             .gap(16.0)
             .padding(20.0)

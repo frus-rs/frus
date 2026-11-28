@@ -204,6 +204,7 @@ mod rollingdigits;
 mod rotatedbox;
 mod router;
 mod rowcolumn;
+mod rowkeys;
 mod runtime;
 mod safearea;
 mod scaffold;
@@ -473,6 +474,7 @@ pub use fab::{FabSize, FloatingActionButton};
 pub use field::{Addon, Field, FieldTheme, InputGroup, InputGroupTheme};
 pub use filetree::{
     FileNode, FileNodeKind, FileTree, FileTreeTheme, FILE_TREE_INDENT, FILE_TREE_ROW_HEIGHT,
+    FILE_TREE_TYPE_AHEAD_PAUSE,
 };
 pub use filters::{BackdropFilter, BackdropGroup, ColorFiltered, ImageFiltered, ShaderMask};
 pub use fittedbox::FittedBox;
@@ -636,6 +638,7 @@ pub use router::{
     Routes, ShellBack, ShellBranch,
 };
 pub use rowcolumn::{Column, MainAxisSize, Row, VerticalDirection};
+pub use rowkeys::{ClickModifiers, ModifiedClick, RowKey, RowKeyAnswer, RowKeyHandler, RowTarget};
 pub use runtime::{
     spring_ease, spring_step, Anim, Edit, Runtime, ScrollBallistic, ScrollState, ScrollbarFade,
     SelectionHandle, ToolbarMark, TransformValues, ValueAnim, SPRING_SUBSTEP,
@@ -761,7 +764,7 @@ pub use twopane::TwoPane;
 pub use ui::{
     build_deferred, build_ui, build_ui_inspected, collect_ids, find_by_key, find_path,
     find_sheet_by_key, find_widget, focus_changes, reorder_siblings, reorderable_owners,
-    subtree_ids, FocusDirection, Focusable, KeepVisible, Scrollable, Scrollbar, Ui,
+    subtree_ids, FocusDirection, Focusable, KeepVisible, RowKeyOutcome, Scrollable, Scrollbar, Ui,
 };
 pub use undo::{EditKind, EditSnapshot, UndoHistory, RUN_PAUSE};
 pub use visualdensity::VisualDensity;

@@ -706,6 +706,25 @@ pub trait Widget<Msg = crate::callback::Callback> {
         None
     }
 
+    /// The keys this **focus stop** answers itself while it has the focus, the frame keeping
+    /// the closure (milestone 855): what a row of a virtualised list — built for one frame
+    /// and let go — uses to take the arrows, Home, End and letters, and to send the focus
+    /// to another row of its list, built or not. See [`crate::RowKeyAnswer`]. Asked after
+    /// the application's shortcuts, before the shell's own use of the key. `None` (the
+    /// default) answers nothing.
+    fn on_row_key(&self) -> Option<crate::rowkeys::RowKeyHandler<Msg>> {
+        None
+    }
+
+    /// What a click on this target sends, told the **modifiers held** (milestone 855) —
+    /// Shift extending a selection, the platform's own modifier toggling an item. The frame
+    /// keeps the closure, so a row of a virtualised list can use it. When it answers `None`
+    /// the click sends [`Widget::on_click`]'s message as before. `None` (the default): the
+    /// modifiers change nothing.
+    fn on_modified_click(&self) -> Option<crate::rowkeys::ModifiedClick<Msg>> {
+        None
+    }
+
     /// If `true`, the widget can take keyboard focus (click or Tab).
     fn focusable(&self) -> bool {
         false
@@ -2481,6 +2500,14 @@ impl<Msg> Widget<Msg> for Box<dyn Widget<Msg>> {
         &self,
     ) -> Option<std::rc::Rc<dyn Fn(crate::shortcuts::KeyStroke) -> Option<Msg>>> {
         (**self).on_keystroke()
+    }
+
+    fn on_row_key(&self) -> Option<crate::rowkeys::RowKeyHandler<Msg>> {
+        (**self).on_row_key()
+    }
+
+    fn on_modified_click(&self) -> Option<crate::rowkeys::ModifiedClick<Msg>> {
+        (**self).on_modified_click()
     }
 
     fn descendants_focusable(&self) -> bool {

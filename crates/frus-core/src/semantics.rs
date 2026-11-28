@@ -235,6 +235,9 @@ pub struct SemanticsProperties {
     /// Where a **scrolling area** rests (milestone 848), for a reader to say how far down it
     /// is and to scroll it.
     pub scroll: Option<SemanticsScroll>,
+    /// A container whose items can be **selected several at a time** (milestone 855): a tree
+    /// or a list with multiple selection. A reader says so on entering it.
+    pub multiselectable: bool,
 }
 
 impl SemanticsProperties {
@@ -244,6 +247,12 @@ impl SemanticsProperties {
             role,
             ..Default::default()
         }
+    }
+
+    /// Says the items inside can be selected several at a time (milestone 855).
+    pub fn multiselectable(mut self, multi: bool) -> Self {
+        self.multiselectable = multi;
+        self
     }
 
     /// Sets the accessible name.
@@ -455,6 +464,7 @@ impl SemanticsProperties {
             level: self.level.or(under.level),
             position: self.position.or(under.position),
             scroll: self.scroll.or(under.scroll),
+            multiselectable: self.multiselectable || under.multiselectable,
         }
     }
 }
