@@ -8,11 +8,30 @@ any release may break.
 > frus is **pre-alpha**. From 0.2.1 the ten library crates are on crates.io (`cargo add frus`);
 > earlier releases are tagged source releases, to depend on by `path` or by git revision. For the reasoning behind any individual
 > decision, the milestone notes in [`docs/milestone-*.md`](docs/) remain the authoritative
-> record — one per step, 854 so far, each documenting the objective, the alternatives
+> record — one per step, 855 so far, each documenting the objective, the alternatives
 > weighed, and the decision.
 
 ## [Unreleased]
 
+- **A file tree of any size, driven from the keyboard** (J855, L-048). `FileTree` shows the open
+  part of its hierarchy in a virtualised list: only the rows in view are built, so 50,000 open
+  rows build the 15 of a 400 px window, and a frame of 10,000 open rows takes 1.4 ms instead
+  of 900 (50,000: 4.8 ms instead of 4.9 s). It takes the room on offer, or `height`/`flex`;
+  `shrink_wrap(true)` keeps a short tree as tall as its rows. The keys are a desktop tree
+  view's: Up and Down, Right into a folder after opening it, Left up to the parent after
+  closing it (swapped right to left), Home, End, Enter (`on_activate`), Space, and type-ahead
+  (`type_ahead_pause`). `multi_select(true)` with `selection` and `on_selection_change` adds
+  Ctrl-click (Cmd on an Apple keyboard), Shift-click, Shift with the arrows, Home, End and
+  Space, and Ctrl/Cmd+A; `selection_follows_focus` selects the row an arrow lands on. The tree
+  is a `Tree` node that says when it is multiselectable (`SemanticsProperties::multiselectable`,
+  on AccessKit and as `aria-multiselectable`). Underneath, two new widget hooks the frame keeps
+  for a row of a virtualised list, which the shell could not ask anything once drawn:
+  `Widget::on_row_key` answers keys with messages and a row of its list to focus, built or not
+  (`RowKey`, `RowKeyAnswer`, `RowTarget`, `Ui::row_key`, `Ui::reveal_list_item`), and
+  `Widget::on_modified_click` answers a click told the modifiers held (`ClickModifiers`,
+  `Ui::msg_for_click`). **Changed:** an unsized `FileTree` is now a scrolling window that takes
+  the room on offer rather than a column as tall as its rows; give it `shrink_wrap(true)` for
+  the old layout.
 - **An overlay sees the page's scope, and `frus mcp` serves requests side by side** (J854,
   L-043, L-053). A component inside a dialog, a sheet, a drawer, a popover, a hover card, a
   menu's row, a dropdown's option, a search view or an open container finds the `Model` the

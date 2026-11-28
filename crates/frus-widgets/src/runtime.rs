@@ -885,6 +885,9 @@ pub struct Runtime {
     /// The shape of each list the last frame laid out, so that a request for an item can be
     /// turned into an offset (milestone 719).
     pub(crate) list_shapes: RefCell<HashMap<WidgetId, crate::list::ListShape>>,
+    /// What each file tree keeps between keys: where a range selection starts and the
+    /// letters typed to find a row (milestone 855).
+    pub(crate) file_trees: RefCell<HashMap<WidgetId, std::rc::Rc<crate::filetree::TreeKeys>>>,
     /// The item each list was asked to bring into view, and where in the window: placed
     /// again every frame until it is there, because in a list of rows of any height the
     /// rows on the way are measured as it travels, and the place it was first counted at
