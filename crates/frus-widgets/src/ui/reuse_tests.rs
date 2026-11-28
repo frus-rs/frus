@@ -333,6 +333,130 @@ fn nested_components_keep_a_bounded_amount() {
     assert!(kept > 0);
 }
 
+thread_local! {
+    /// State outside the tree that a paint reads, changed as a controller or a clock would.
+    static SHADE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+fn shade() -> u8 {
+    SHADE.with(std::cell::Cell::get)
+}
+
+fn set_shade(value: u8) {
+    SHADE.with(|cell| cell.set(value));
+}
+
+/// Rows, and a component whose subtree is painted from [`SHADE`] by `leaf`.
+fn rows_and(count: usize, leaf: fn() -> Box<dyn Widget>) -> Flex<Callback> {
+    rows(count).child(component(move |_cx: &BuildContext| {
+        Box::new(Container::new().child(leaf())) as Box<dyn Widget>
+    }))
+}
+
+/// A canvas painted by an application closure that reads [`SHADE`].
+fn canvas() -> Box<dyn Widget> {
+    Box::new(crate::CustomPaint::new(
+        50.0,
+        20.0,
+        |scene, bounds, _theme| {
+            scene.fill_rect(bounds, frus_core::Color::rgb8(shade(), 0, 0));
+        },
+    ))
+}
+
+/// A hand-written widget painted from [`SHADE`], which says so or does not.
+struct Gauge {
+    honest: bool,
+}
+
+impl Widget for Gauge {
+    fn style(&self) -> frus_layout::Style {
+        frus_layout::Style {
+            width: frus_layout::Dimension::Length(50.0),
+            height: frus_layout::Dimension::Length(20.0),
+            ..Default::default()
+        }
+    }
+
+    fn children(&self) -> &[Box<dyn Widget>] {
+        &[]
+    }
+
+    fn paint(
+        &self,
+        bounds: Rect,
+        _status: crate::interaction::Status,
+        _theme: &Theme,
+        scene: &mut frus_core::Scene,
+    ) {
+        scene.fill_rect(bounds, frus_core::Color::rgb8(0, shade(), 0));
+    }
+
+    fn paint_source(&self) -> Option<u64> {
+        self.honest.then(|| u64::from(shade()))
+    }
+
+    fn on_click(&self) -> Option<Callback> {
+        None
+    }
+}
+
+/// A `CustomPaint`'s closure may read anything, and says nothing of it: the component holding
+/// one is painted every frame, and what it shows follows the state it reads although nothing
+/// was built.
+#[test]
+fn a_custom_paint_is_painted_every_frame() {
+    let rt = Runtime::default();
+    let theme = Theme::default();
+    set_shade(10);
+    let root = rows_and(5, canvas);
+    frame(&rt, &root, &theme);
+    frame(&rt, &root, &theme);
+    assert_eq!(
+        rt.paint_cache.borrow().last_frame_stats(),
+        (5, 1),
+        "the rows are kept, the canvas is not, though nothing changed"
+    );
+    set_shade(200);
+    let (kept, painted) = checked(&rt, &root, &theme);
+    assert_eq!((kept, painted), (5, 1));
+}
+
+/// The contract on `paint` (milestone 856): a widget painted from shared state that says so
+/// through `paint_source` is kept while its source stays and painted when it moves; one that
+/// does not say so is given back stale, which is what the checks of this file catch.
+#[test]
+fn a_paint_source_says_when_to_paint_again() {
+    let rt = Runtime::default();
+    let theme = Theme::default();
+    set_shade(10);
+    let root = rows_and(5, || Box::new(Gauge { honest: true }));
+    frame(&rt, &root, &theme);
+    let (kept, _) = checked(&rt, &root, &theme);
+    assert_eq!(kept, 6, "the source did not move: everything kept");
+    set_shade(200);
+    let (kept, painted) = checked(&rt, &root, &theme);
+    assert_eq!(
+        (kept, painted),
+        (5, 1),
+        "the source moved: the gauge is painted"
+    );
+
+    // Without `paint_source`, the same change is missed: the frame shows the old picture.
+    let rt = Runtime::default();
+    set_shade(10);
+    let root = rows_and(5, || Box::new(Gauge { honest: false }));
+    frame(&rt, &root, &theme);
+    frame(&rt, &root, &theme);
+    set_shade(200);
+    let kept = digest(&frame(&rt, &root, &theme));
+    assert_ne!(
+        kept,
+        fresh(&rt, &root, &theme),
+        "the comparison catches a stale reuse"
+    );
+}
+
 /// A row's own box after the walk: what a test taps.
 #[allow(dead_code)]
 fn box_of(ui: &Ui<Callback>, id: WidgetId) -> Option<Rect> {

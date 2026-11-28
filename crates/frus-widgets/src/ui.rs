@@ -4026,12 +4026,12 @@ impl<'a, Msg: Clone + 'static> Builder<'a, Msg> {
         self.drag_sources
             .extend(data.drag_sources.iter().map(|s| DragSource {
                 rect: mv(s.rect),
-                ..s.clone()
+                ..*s
             }));
         self.drop_zones
             .extend(data.drop_zones.iter().map(|z| DropZone {
                 rect: mv(z.rect),
-                ..z.clone()
+                ..*z
             }));
         self.inks
             .extend(data.inks.iter().map(|(id, r)| (*id, mv(*r))));

@@ -22,7 +22,10 @@ any release may break.
   flight, ink) changed. What the cache keeps is bounded to four times the frame. Cutting a
   line with an ellipsis now finds the cut by halving instead of measuring the line once per
   character dropped, which at a thousand rows kept the measurement cache too full to hold
-  anything. NUMBERS_CHANGELOG `Widget::paint` documents that a paint follows from the
+  anything. One row's state changing among a thousand `ListTile` rows costs 17 to 54 ms of
+  `build_ui` instead of 1.4 to 3.1 s on a loaded laptop, forty rows 0.6 to 1.9 ms instead of
+  2.6 to 2.9. A `CustomPaint` is painted every frame, its painter being free to read anything.
+  `Widget::paint` documents that a paint follows from the
   widget and its arguments; `PaintCache::held`, `LayoutCache::last_frame_time` are new
   diagnostics. The repaint boundaries of milestone 88 now also keep shortcut scopes, keystroke
   listeners, edit actions and overflow bands, and see a caret blink, a drag over them and a

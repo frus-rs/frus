@@ -695,18 +695,26 @@ as welcome. A real use case is the best argument for moving an entry up.
 - **Status:** partial
 - **What you hit:** A component's own state builds that component alone (milestone 822), and
   the layout that follows lays out the path from the change to its layout root, the other
-  boxes answering from what they measured a frame earlier (milestone 853). What still visits
-  every widget of the screen on such a frame: the layout fingerprint of the root that
-  changed, the building of its layout tree (cheap per node, but not free), and the walk that
-  paints and registers what can be touched, which reuses nothing unless a subtree is an
-  explicit repaint boundary and no build ran. At a thousand rows that walk is most of the
-  frame (about 260 ms of 323 on the laptop) and grows faster than the rows do. A measured
-  leaf that says nothing of what it depends on (`Widget::measure_key`), and a
+  boxes answering from what they measured a frame earlier (milestone 853), and every component
+  that was not built again gives back what it painted and registered the frame before, moved
+  by whole pixels if its place moved (milestone 856): one row changing among a thousand went
+  from over a second to tens of milliseconds on a loaded laptop. What still visits every
+  widget of the screen on such a frame: the layout fingerprint of the root that changed (now
+  the larger half of what is left), the building of its layout tree, and a cheap pass over
+  each kept component that hashes its nodes' interaction state. A component is not kept when
+  its subtree holds a scroll area, a list, a stack, a custom layout (a `Scaffold`), an
+  overlay or a continuous animation, nor at its own level when its built child is a semantics
+  description, a barrier, an opacity, a clip, a transform or a filter; a move by a fraction
+  of a pixel, or across the clip's edge, is painted again. A widget whose paint reads shared
+  state without saying so (`Widget::paint_source`) is shown as it was last painted. A
+  measured leaf that says nothing of what it depends on (`Widget::measure_key`), and a
   `LayoutBuilder`'s child, are measured every time, with every box above them.
 - **Workaround:** Keep lists virtualised (`ListView::builder`) and animations inside
-  components; give a widget that measures itself a `measure_key`.
+  components; put what changes in components of its own; give a widget that measures itself
+  a `measure_key`, and one that paints from shared state a `paint_source`.
 - **Evidence:** [#53](https://github.com/frus-rs/frus/issues/53),
-  [docs/milestone-822.md](docs/milestone-822.md), [docs/milestone-853.md](docs/milestone-853.md)
+  [docs/milestone-822.md](docs/milestone-822.md), [docs/milestone-853.md](docs/milestone-853.md),
+  [docs/milestone-856.md](docs/milestone-856.md)
 
 ### L-043 Shared state can only be global
 
